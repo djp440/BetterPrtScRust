@@ -167,12 +167,22 @@ settings-cancel = 取消
 
 ## 选区遮罩
 overlay-selected-hint = Enter 或双击选区：完成　Esc：取消
+overlay-copy-color-hint = C：复制颜色
+overlay-color-copied = 已复制颜色
+overlay-color-copy-failed = 复制失败
 overlay-record-hint = Enter 或双击选区：开始录屏　Esc：取消
+
+## 录屏控制条
+recording-toolbar-pause = 暂停
+recording-toolbar-resume = 继续
+recording-toolbar-stop = 停止
 
 ## 标注
 
 annotation-rectangle = 矩形
 annotation-arrow = 箭头
+annotation-mosaic = 马赛克
+annotation-text = 文字
 annotation-cancel = 取消
 annotation-save-as = 另存为
 annotation-auto-save = 自动存储

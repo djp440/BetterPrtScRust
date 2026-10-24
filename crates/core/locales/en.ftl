@@ -167,12 +167,22 @@ settings-cancel = Cancel
 
 ## 选区遮罩
 overlay-selected-hint = Enter or double-click the selection: done   Esc: cancel
+overlay-copy-color-hint = C: copy color
+overlay-color-copied = Color copied
+overlay-color-copy-failed = Copy failed
 overlay-record-hint = Enter or double-click the selection: start recording   Esc: cancel
+
+## Recording toolbar
+recording-toolbar-pause = Pause
+recording-toolbar-resume = Resume
+recording-toolbar-stop = Stop
 
 ## Annotation
 
 annotation-rectangle = Rectangle
 annotation-arrow = Arrow
+annotation-mosaic = Mosaic
+annotation-text = Text
 annotation-cancel = Cancel
 annotation-save-as = Save as
 annotation-auto-save = Auto-save

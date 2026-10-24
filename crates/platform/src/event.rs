@@ -20,7 +20,7 @@ pub enum PlatformEvent {
     /// 其他进程（`bps` CLI、再次启动的程序、设置界面）经 [`crate::ResidentChannel`]
     /// 转交来一条请求。
     RequestReceived(IncomingRequest),
-    /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
+    /// 用户在选区遮罩或录屏控制条（[`crate::RecordingToolbar`]）上的输入；只在它们显示期间递交。
     OverlayInput(OverlayInput),
     /// 用 [`crate::Ticker::start`] 开始的节拍到了。
     Tick,

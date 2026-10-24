@@ -52,8 +52,8 @@ use crate::notifier::{PendingClick, open_click_target};
 use crate::registry::RegistryWatch;
 use crate::ticker::WaitableTimer;
 use crate::{
-    D2dSelectionOverlay, TrayNotifier, WindowsConfigFile, WindowsHotkeys, WindowsScreenshotTool,
-    WindowsTicker,
+    D2dRecordingToolbar, D2dSelectionOverlay, TrayNotifier, WindowsConfigFile, WindowsHotkeys,
+    WindowsScreenshotTool, WindowsTicker,
 };
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
@@ -279,6 +279,11 @@ impl EventLoop {
     /// 遮罩窗口和 D3D11 / Direct2D 设备在这里就建好并预热（约几百毫秒），之后每次打开遮罩不再新建。
     pub fn selection_overlay(&self) -> D2dSelectionOverlay {
         D2dSelectionOverlay::new(self.state.events.clone())
+    }
+
+    /// 录屏控制条和区域边框；用户在控制条上的输入由本循环以 [`PlatformEvent::OverlayInput`] 递交。
+    pub fn recording_toolbar(&self) -> D2dRecordingToolbar {
+        D2dRecordingToolbar::new(self.state.events.clone())
     }
 
     /// 节拍；开始后本循环按周期递交 [`PlatformEvent::Tick`]。

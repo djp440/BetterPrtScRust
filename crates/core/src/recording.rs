@@ -11,6 +11,13 @@
 //!
 //! 产物先写进存储目录里的临时文件 `<文件名>.<扩展名>.part`，录完再改名成命名模板生成的文件名，
 //! 录制失败或放弃时删除临时文件。
+//!
+//! 录制期间区域边框外显示录屏控制条（见 [`toolbar`]）：已录时长、暂停 / 继续、停止。
+//! 暂停期间不计时、不写帧：时间轴按“已录时长”（单调时间减去暂停的时长）计算，继续之后
+//! 接着上一帧的时间戳往下排，视频里没有暂停期间的画面。暂停期间仍按节拍读取视频源，
+//! 继续时用的是此刻最新的画面。
+
+mod toolbar;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -29,6 +36,7 @@ use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::virtual_desktop_bounds;
 use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir, Texts};
+use toolbar::{Button, Controls, Toolbar};
 
 /// MP4 的默认帧率。
 const DEFAULT_MP4_FRAME_RATE: u32 = 30;
@@ -84,10 +92,16 @@ struct Active {
     frame_rate: u32,
     /// 开始录制时的单调时间。
     started: Duration,
+    /// 已经结束的各次暂停的总时长。
+    paused_total: Duration,
+    /// 正暂停着时，暂停开始的单调时间。
+    paused_at: Option<Duration>,
     /// 已经写入的帧数。
     written: u64,
     /// 视频源最近给出的一帧。
     latest: Option<Rc<dyn VideoFrame>>,
+    /// 录屏控制条；读不到显示器布局时没有。
+    controls: Option<Controls>,
 }
 
 /// 录屏的参数（热键绑定没有覆盖的项取默认值）。
@@ -194,20 +208,24 @@ impl Recording {
         matches!(self.phase, Phase::Recording(_))
     }
 
-    /// 处理用户在遮罩上的一次输入。返回 `None` 表示录屏还在进行；否则这次录屏已经结束。
+    /// 处理用户在遮罩（框选阶段）或录屏控制条（录制阶段）上的一次输入。返回 `None` 表示
+    /// 录屏还在进行；否则这次录屏已经结束。
     pub fn on_overlay_input(
         &mut self,
         platform: &mut Platform,
         input: &OverlayInput,
     ) -> Option<Result<Ending, CaptureFailure>> {
-        let Phase::Selecting { selection, .. } = &mut self.phase else {
-            return None;
+        let selection = match &mut self.phase {
+            Phase::Selecting { selection, .. } => selection,
+            Phase::Recording(_) => return self.on_toolbar_input(platform, input),
+            Phase::Ended => return None,
         };
         selection
             .snapping_mut()
             .load_controls(input, platform.window_source.as_ref());
         match selection.handle(input) {
-            Step::Continue => match self.redraw(platform) {
+            // 录屏的背景是实时画面，没有冻结帧可取色，也不显示放大镜：C 键不做事。
+            Step::Continue | Step::CopyColor(_) => match self.redraw(platform) {
                 Ok(()) => None,
                 Err(e) => {
                     platform.overlay.close();
@@ -231,6 +249,29 @@ impl Recording {
         }
     }
 
+    /// 录屏控制条上的输入：悬停高亮，点“暂停 / 继续”切换暂停，点“停止”停止并存储。
+    fn on_toolbar_input(
+        &mut self,
+        platform: &mut Platform,
+        input: &OverlayInput,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        let Phase::Recording(active) = &mut self.phase else {
+            return None;
+        };
+        let clicked = active.controls.as_mut().and_then(|c| c.handle(input));
+        match clicked {
+            Some(Button::Stop) => return Some(self.stop(platform)),
+            Some(Button::PauseResume) => match active.toggle_pause(platform.clock.monotonic()) {
+                Ok(true) => {}
+                Ok(false) => return Some(self.stop(platform)),
+                Err(e) => return Some(Err(self.abandon(platform, e))),
+            },
+            None => {}
+        }
+        active.refresh_toolbar(platform);
+        None
+    }
+
     /// 节拍到了：把到此刻为止应有的帧写进视频。录制目标消失时停止并存储已录下的内容。
     pub fn on_tick(&mut self, platform: &mut Platform) -> Option<Result<Ending, CaptureFailure>> {
         let Phase::Recording(active) = &mut self.phase else {
@@ -238,7 +279,10 @@ impl Recording {
         };
         let due = active.due(platform.clock.monotonic());
         match active.catch_up(due) {
-            Ok(true) => None,
+            Ok(true) => {
+                active.refresh_toolbar(platform);
+                None
+            }
             Ok(false) => Some(self.stop(platform)),
             Err(e) => Some(Err(self.abandon(platform, e))),
         }
@@ -310,7 +354,12 @@ impl Recording {
                 return Err(e.into());
             }
         };
-        Ok(Active {
+        let controls = platform
+            .frame_source
+            .displays()
+            .ok()
+            .map(|displays| Controls::new(Toolbar::beside(rect, &displays, self.texts)));
+        let mut active = Active {
             stream,
             writer,
             temp,
@@ -319,9 +368,14 @@ impl Recording {
             extension,
             frame_rate: settings.frame_rate,
             started: platform.clock.monotonic(),
+            paused_total: Duration::ZERO,
+            paused_at: None,
             written: 0,
             latest: None,
-        })
+            controls,
+        };
+        active.refresh_toolbar(platform);
+        Ok(active)
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {
@@ -338,10 +392,40 @@ impl Recording {
 }
 
 impl Active {
-    /// 到单调时间 `now` 为止应当已经写入的帧数：时间戳早于此刻的帧都应写入。
+    /// 到单调时间 `now` 为止的已录时长：从开始录制算起，去掉暂停的时间。
+    fn recorded(&self, now: Duration) -> Duration {
+        let paused = self.paused_total + self.paused_at.map_or(Duration::ZERO, |at| now - at);
+        now.saturating_sub(self.started).saturating_sub(paused)
+    }
+
+    /// 到单调时间 `now` 为止应当已经写入的帧数：时间戳早于此刻已录时长的帧都应写入。
     fn due(&self, now: Duration) -> u64 {
-        let elapsed = now.saturating_sub(self.started).as_nanos();
+        let elapsed = self.recorded(now).as_nanos();
         (elapsed * u128::from(self.frame_rate)).div_ceil(NANOS_PER_SECOND) as u64
+    }
+
+    /// 暂停或继续。暂停前先把到此刻为止的帧写完。返回视频源是否还在。
+    fn toggle_pause(&mut self, now: Duration) -> Result<bool, PlatformError> {
+        match self.paused_at.take() {
+            Some(at) => {
+                self.paused_total += now.saturating_sub(at);
+                Ok(true)
+            }
+            None => {
+                let alive = self.catch_up(self.due(now))?;
+                self.paused_at = Some(now);
+                Ok(alive)
+            }
+        }
+    }
+
+    /// 按此刻的已录时长和暂停状态更新录屏控制条。
+    fn refresh_toolbar(&mut self, platform: &mut Platform) {
+        let recorded = self.recorded(platform.clock.monotonic());
+        let paused = self.paused_at.is_some();
+        if let Some(controls) = self.controls.as_mut() {
+            controls.refresh(platform, recorded, paused);
+        }
     }
 
     /// 第 `index` 帧的时间戳。
@@ -352,8 +436,11 @@ impl Active {
 
     /// 把视频补到 `due` 帧，缺的帧用视频源此刻最新的画面。返回视频源是否还在
     /// （`false` 表示录制目标已经消失）；还没有收到第一帧时先不写。
+    ///
+    /// 暂停期间不写帧，但照样读取视频源：继续时手里是此刻最新的画面，而不是视频源里
+    /// 积压的、暂停期间的旧画面。
     fn catch_up(&mut self, due: u64) -> Result<bool, PlatformError> {
-        if self.written >= due {
+        if self.written >= due && self.paused_at.is_none() {
             return Ok(true);
         }
         let alive = match self.stream.latest()? {
@@ -380,6 +467,7 @@ impl Active {
         let due = self.due(platform.clock.monotonic()).max(1);
         let caught_up = self.catch_up(due);
         platform.ticker.stop();
+        platform.recording_toolbar.hide();
         let Active {
             stream,
             writer,
@@ -418,6 +506,7 @@ impl Active {
     /// 放弃这段录屏：停止节拍，关闭视频流和编码器，删除临时文件。
     fn discard(self, platform: &mut Platform) {
         platform.ticker.stop();
+        platform.recording_toolbar.hide();
         let Active {
             stream,
             writer,

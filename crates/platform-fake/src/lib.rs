@@ -5,7 +5,7 @@
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
 //! 编辑配置文件、修改系统设置、选托盘菜单、关闭桌面上的窗口、在选区遮罩上框选或取消）
 //! 并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、
-//! 开机自启登记、遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
+//! 开机自启登记、遮罩当前画的场景和画布、录屏控制条、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
 //! 检查更新发出的请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
 //! 翻译用的 HTTP 传输同样不在 `Platform` 里：用 [`FakePlatform::http_transport`] 取得，
@@ -17,8 +17,10 @@
 //! [`FakePlatform::recognition_requests`] 查看识别过哪些图像。
 //!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
-//! [`FakePlatform::press_key`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
+//! [`FakePlatform::press_key`]、[`FakePlatform::type_text`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
 //! 和真实平台“窗口过程把输入放进事件队列”的方式一致。
+//!
+//! 标注文字的字形由 [`text_mask`] 按简单规则生成（方块代替字形），测试可以据此写出期望像素。
 //!
 //! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
 //!
@@ -50,7 +52,9 @@ mod http;
 mod notifier;
 mod ocr;
 mod overlay;
+mod recording_toolbar;
 mod resident_channel;
+mod text;
 mod tray;
 mod update;
 mod video;
@@ -65,8 +69,8 @@ use bps_platform::{
     AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest, HttpResponse,
     HttpTransport, Image, Key, LatestRelease, LocalDateTime, Modifiers, Notification, OverlayInput,
     OverlayKey, OverlayScene, Platform, PlatformError, PlatformEvent, Point, PointerButton,
-    RecognitionLanguage, Rect, SaveAsOptions, StandaloneWindow, SystemLanguage, TextRecognizer,
-    TrayMenuItem,
+    RecognitionLanguage, RecordingToolbarView, Rect, SaveAsOptions, StandaloneWindow,
+    SystemLanguage, TextRecognizer, TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -74,6 +78,7 @@ pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
+pub use text::text_mask;
 pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
 pub use window_source::{FakeWindow, window_pattern};
 
@@ -88,6 +93,7 @@ use http::{FakeHttpTransport, HttpState};
 use notifier::FakeNotifier;
 use ocr::{FakeTextRecognizer, OcrState};
 use overlay::{FakeOverlay, OverlayState};
+use recording_toolbar::FakeRecordingToolbar;
 use tray::FakeTrayMenu;
 use update::{FakeUpdateService, UpdateState};
 use video::{FakeTicker, FakeVideoEncoder, FakeVideoSource, VideoState};
@@ -119,6 +125,8 @@ pub struct FakePlatform {
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
     video: Arc<Mutex<VideoState>>,
+    /// 正显示着的录屏控制条。
+    recording_toolbar: Arc<Mutex<Option<RecordingToolbarView>>>,
     dialogs: Arc<Mutex<DialogState>>,
     window_source: Arc<Mutex<WindowSourceState>>,
     ocr: Arc<Mutex<OcrState>>,
@@ -143,6 +151,7 @@ impl Default for FakePlatform {
             system: Default::default(),
             overlay: Default::default(),
             video: Default::default(),
+            recording_toolbar: Default::default(),
             dialogs: Default::default(),
             window_source: Default::default(),
             ocr: Default::default(),
@@ -421,6 +430,7 @@ impl FakePlatform {
                 state: self.video.clone(),
             }),
             ticker: Box::new(FakeTicker(self.video.clone())),
+            recording_toolbar: Box::new(FakeRecordingToolbar(self.recording_toolbar.clone())),
             file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),
             window_source: Box::new(FakeWindowSource(self.window_source.clone())),
         }
@@ -722,6 +732,50 @@ impl FakePlatform {
             key,
             modifiers: Modifiers::NONE,
         })
+    }
+
+    /// 在遮罩上打字：`text` 的每个字符依次以 [`OverlayInput::Character`] 递交，包括用输入法
+    /// 输入、确认后的中文（平台逐字递交）。只能含可打印字符，换行用 [`press_key`](Self::press_key)
+    /// 按 Enter。
+    pub fn type_text(&self, text: &str) -> Vec<PlatformEvent> {
+        text.chars()
+            .map(|c| {
+                assert!(!c.is_control(), "type_text 只能输入可打印字符");
+                self.overlay_input(OverlayInput::Character(c))
+            })
+            .collect()
+    }
+
+    /// 正显示着的录屏控制条（和区域边框）；没有显示时返回 `None`。
+    pub fn recording_toolbar(&self) -> Option<RecordingToolbarView> {
+        self.recording_toolbar.lock().unwrap().clone()
+    }
+
+    /// 模拟用户在录屏控制条上的一次输入，返回平台事件循环会递交的事件。
+    ///
+    /// 控制条没有显示时用户无法操作它，直接 panic。
+    pub fn recording_toolbar_input(&self, input: OverlayInput) -> PlatformEvent {
+        assert!(
+            self.recording_toolbar().is_some(),
+            "录屏控制条没有显示，用户无法在上面操作"
+        );
+        PlatformEvent::OverlayInput(input)
+    }
+
+    /// 在录屏控制条上单击写着 `text` 的按钮（文字所在矩形的中心）。控制条上没有这段文字时 panic。
+    pub fn click_recording_toolbar(&self, text: &str) -> Vec<PlatformEvent> {
+        let view = self.recording_toolbar().expect("录屏控制条没有显示");
+        let rect = view
+            .text_rect(text)
+            .unwrap_or_else(|| panic!("录屏控制条上没有“{text}”：{:?}", view.texts()));
+        let center = Point::new(
+            rect.x + rect.width as i32 / 2,
+            rect.y + rect.height as i32 / 2,
+        );
+        vec![
+            self.recording_toolbar_input(pressed(PointerButton::Left, center, false)),
+            self.recording_toolbar_input(released(PointerButton::Left, center)),
+        ]
     }
 
     /// 用户框选 `region` 并确定：从它左上角的像素拖到右下角的像素，再按 Enter。

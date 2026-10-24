@@ -34,11 +34,12 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::Ime::{HIMC, ImmAssociateContextEx};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DestroyWindow, GWLP_USERDATA, HWND_TOPMOST, RegisterClassExW,
     SWP_NOACTIVATE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowDisplayAffinity,
-    SetWindowLongPtrW, SetWindowPos, WDA_EXCLUDEFROMCAPTURE, WNDCLASSEXW,
+    SetWindowLongPtrW, SetWindowPos, WDA_EXCLUDEFROMCAPTURE, WNDCLASSEXW, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
@@ -62,13 +63,20 @@ pub(super) struct LiveWindow {
     _composition_target: IDCompositionTarget,
     _visual: IDCompositionVisual,
     bounds: Rect,
+    /// 显示时抢前台、取得键盘焦点（框选遮罩）；否则不激活（录屏控制条）。
+    activate: bool,
     /// 已经显示出来了（第一次 `render` 之后）。
     shown: Cell<bool>,
 }
 
 impl LiveWindow {
     /// 创建覆盖 `bounds`（虚拟桌面物理像素）的透明遮罩窗口，cloak 状态，还不显示。
-    pub fn new(gpu: &Gpu, bounds: Rect, queue: EventQueue) -> Result<Self, PlatformError> {
+    pub fn new(
+        gpu: &Gpu,
+        bounds: Rect,
+        queue: EventQueue,
+        activate: bool,
+    ) -> Result<Self, PlatformError> {
         unsafe {
             let module = GetModuleHandleW(None).map_err(|e| win_error("读取模块句柄失败", e))?;
             let class = WNDCLASSEXW {
@@ -82,8 +90,12 @@ impl LiveWindow {
             if RegisterClassExW(&class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
                 return Err(PlatformError::new("注册实时遮罩窗口类失败"));
             }
+            let mut ex_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+            if !activate {
+                ex_style |= WS_EX_NOACTIVATE;
+            }
             let hwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+                ex_style,
                 CLASS_NAME,
                 w!("BetterPrtSc 录屏选区"),
                 WS_POPUP,
@@ -100,12 +112,15 @@ impl LiveWindow {
             cloak(hwnd, true);
             // 低于 Windows 10 2004 时不支持，遮罩仍可用（录屏开始前遮罩已关闭）。
             let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            // 实时遮罩不接受文字输入：关掉输入法，打字不会弹出输入法的窗口。
+            let _ = ImmAssociateContextEx(hwnd, HIMC::default(), 0);
             let shared = Rc::new(Shared {
                 queue,
                 origin: Cell::new(Point::new(bounds.x, bounds.y)),
                 cursor: Cell::new(OverlayCursor::Crosshair),
                 active: Cell::new(false),
                 stale: Cell::new(false),
+                high_surrogate: Cell::new(None),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::as_ptr(&shared) as isize);
             // 从这里起出错时由 Drop 销毁窗口。
@@ -182,6 +197,7 @@ impl LiveWindow {
                 _composition_target: composition_target,
                 _visual: visual,
                 bounds,
+                activate,
                 shown: Cell::new(false),
             })
         }
@@ -224,8 +240,10 @@ impl LiveWindow {
                 let _ = DwmFlush();
                 self.shared.active.set(true);
                 cloak(self.hwnd, false);
-                let _ = SetForegroundWindow(self.hwnd);
-                let _ = SetFocus(Some(self.hwnd));
+                if self.activate {
+                    let _ = SetForegroundWindow(self.hwnd);
+                    let _ = SetFocus(Some(self.hwnd));
+                }
             }
             apply_cursor(self.shared.cursor.get());
             self.shown.set(true);

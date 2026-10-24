@@ -105,10 +105,13 @@ impl WindowSelection {
                     return WindowStep::Confirmed(window.clone());
                 }
             }
+            // 窗口模式不接受文字输入。
             OverlayInput::PointerPressed {
                 button: PointerButton::Right,
                 ..
-            } => {}
+            }
+            | OverlayInput::KeyPressed { .. }
+            | OverlayInput::Character(_) => {}
         }
         WindowStep::Continue
     }
@@ -156,6 +159,7 @@ impl WindowSelection {
         OverlayScene {
             items,
             cursor: OverlayCursor::Arrow,
+            text_caret: None,
         }
     }
 

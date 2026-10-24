@@ -13,11 +13,13 @@
 mod draw;
 mod gpu;
 mod live;
+mod text;
+mod toolbar;
 mod window;
 
 use bps_platform::{
     Backdrop, Color, Corner, Display, DisplayId, FrameSource, Image, Label, OverlayItem,
-    OverlayScene, PlatformError, Point, Rect, SelectionOverlay,
+    OverlayScene, PlatformError, Point, Rect, SelectionOverlay, TextMask,
 };
 
 use crate::event_loop::EventQueue;
@@ -27,6 +29,7 @@ use gpu::{FrozenDisplay, Gpu};
 use live::LiveWindow;
 use window::OverlayWindow;
 
+pub use toolbar::D2dRecordingToolbar;
 pub(crate) use window::visible_overlay_window;
 
 /// 选区遮罩。由 [`crate::EventLoop::selection_overlay`] 创建，必须在事件循环的线程上使用。
@@ -96,14 +99,16 @@ impl D2dSelectionOverlay {
         overlay
     }
 
-    /// 建好设备和窗口，真实拍一次冻结帧并在隐藏的窗口上画两帧（第二帧含文字）。
+    /// 建好设备和窗口，真实拍一次冻结帧并在隐藏的窗口上画两帧（第二帧含文字），
+    /// 再栅格化一段标注文字。
     fn prewarm(&mut self) -> Result<(), PlatformError> {
         let resources = Resources::create(&self.queue)?;
         let frozen = resources.gpu.freeze()?;
         let warm_up = warm_up_scene(&frozen);
         let drawn = resources
             .draw(&frozen, None, &OverlayScene::default())
-            .and_then(|()| resources.draw(&frozen, None, &warm_up));
+            .and_then(|()| resources.draw(&frozen, None, &warm_up))
+            .and_then(|()| text::rasterize(&resources.gpu, "标注 Aa", 22).map(drop));
         drop(frozen);
         resources.gpu.release_frames();
         drawn?;
@@ -136,7 +141,7 @@ impl D2dSelectionOverlay {
             .ok_or_else(|| PlatformError::new("没有可用的显示器"))?;
         let queue = self.queue.clone();
         let resources = self.ensure_resources()?;
-        let live = LiveWindow::new(&resources.gpu, bounds, queue)?;
+        let live = LiveWindow::new(&resources.gpu, bounds, queue, true)?;
         self.session = Some(Session {
             frozen: Vec::new(),
             live: Some(live),
@@ -157,6 +162,25 @@ impl D2dSelectionOverlay {
         self.broken = true;
         let resources = self.ensure_resources()?;
         resources.gpu.freeze()
+    }
+}
+
+impl D2dSelectionOverlay {
+    /// 遮罩打开期间冻结帧中的一块显示器。
+    fn frozen_display(
+        &self,
+        display: DisplayId,
+    ) -> Result<(&Resources, &FrozenDisplay), PlatformError> {
+        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
+        else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        let frozen = session
+            .frozen
+            .iter()
+            .find(|f| f.display.id == display)
+            .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))?;
+        Ok((resources, frozen))
     }
 }
 
@@ -191,6 +215,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
         }
         let window = &resources.window;
         window.set_cursor(scene.cursor);
+        window.set_text_caret(scene.text_caret);
         let result = (|| {
             if !session.shown {
                 window.place_cloaked()?;
@@ -209,16 +234,13 @@ impl SelectionOverlay for D2dSelectionOverlay {
     }
 
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError> {
-        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
-        else {
-            return Err(PlatformError::new("选区遮罩没有打开"));
-        };
-        let frozen = session
-            .frozen
-            .iter()
-            .find(|f| f.display.id == display)
-            .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))?;
+        let (resources, frozen) = self.frozen_display(display)?;
         resources.gpu.read_back(frozen)
+    }
+
+    fn frozen_pixels(&self, display: DisplayId, area: Rect) -> Result<Image, PlatformError> {
+        let (resources, frozen) = self.frozen_display(display)?;
+        resources.gpu.read_area(frozen, area)
     }
 
     fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError> {
@@ -253,6 +275,13 @@ impl SelectionOverlay for D2dSelectionOverlay {
         resources
             .gpu
             .update_canvas(&canvas.bitmap, left, top, patch)
+    }
+
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
+        let (Some(resources), Some(_)) = (self.resources.as_ref(), self.session.as_ref()) else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        text::rasterize(&resources.gpu, text, font_size)
     }
 
     fn close(&mut self) {

@@ -12,7 +12,7 @@ use bps_platform::{
     PointerButton, Rect,
 };
 use windows::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, ID2D1Bitmap1,
@@ -28,16 +28,23 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::Graphics::Gdi::ValidateRect;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::Ime::{
+    CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, HIMC, IACE_DEFAULT,
+    ImmAssociateContextEx, ImmGetContext, ImmNotifyIME, ImmReleaseContext, ImmSetCandidateWindow,
+    ImmSetCompositionWindow, NI_COMPOSITIONSTR,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_CONTROL,
-    VK_ESCAPE, VK_LWIN, VK_MENU, VK_RETURN, VK_RWIN, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_BACK, VK_C,
+    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN,
+    VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
-    GetWindowLongPtrW, HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, LoadCursorW, RegisterClassExW,
-    SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    GetWindowLongPtrW, HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_IBEAM, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, LoadCursorW, RegisterClassExW, SW_HIDE,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, WM_CHAR, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
     WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP,
     WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -72,6 +79,8 @@ pub(super) struct Shared {
     pub active: Cell<bool>,
     /// 显示器布局变了，窗口和交换链需要重建。
     pub stale: Cell<bool>,
+    /// `WM_CHAR` 递交的 UTF-16 高位代理项，等低位代理项到了再拼成一个字符。
+    pub high_surrogate: Cell<Option<u16>>,
 }
 
 pub(crate) struct OverlayWindow {
@@ -81,6 +90,8 @@ pub(crate) struct OverlayWindow {
     /// 交换链后台缓冲区上的 D2D 渲染目标。
     pub target: ID2D1Bitmap1,
     bounds: Rect,
+    /// 正在输入文字时的插入点（虚拟桌面物理像素）；`None` 时输入法关闭。
+    text_caret: Cell<Option<Rect>>,
 }
 
 impl OverlayWindow {
@@ -116,12 +127,15 @@ impl OverlayWindow {
             )
             .map_err(|e| win_error("创建遮罩窗口失败", e))?;
             cloak(hwnd, true);
+            // 平时不接受文字输入：关掉输入法，打字不会弹出输入法的窗口。
+            let _ = ImmAssociateContextEx(hwnd, HIMC::default(), 0);
             let shared = Rc::new(Shared {
                 queue,
                 origin: Cell::new(Point::new(bounds.x, bounds.y)),
                 cursor: Cell::new(OverlayCursor::Crosshair),
                 active: Cell::new(false),
                 stale: Cell::new(false),
+                high_surrogate: Cell::new(None),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::as_ptr(&shared) as isize);
             // 从这里起出错时由 Drop 销毁窗口。
@@ -171,6 +185,7 @@ impl OverlayWindow {
                 swap_chain,
                 target,
                 bounds,
+                text_caret: Cell::new(None),
             })
         }
     }
@@ -188,6 +203,60 @@ impl OverlayWindow {
     pub fn set_cursor(&self, cursor: OverlayCursor) {
         if self.shared.cursor.replace(cursor) != cursor && self.shared.active.get() {
             apply_cursor(cursor);
+        }
+    }
+
+    /// 开始、继续或结束文字输入：`Some` 时打开输入法，把组字窗口放在插入点、候选窗口避开
+    /// 插入点所在的那一行；`None` 时取消没完成的组字并关闭输入法。
+    pub fn set_text_caret(&self, caret: Option<Rect>) {
+        if self.text_caret.replace(caret) == caret {
+            return;
+        }
+        let hwnd = self.hwnd;
+        unsafe {
+            let Some(caret) = caret else {
+                let context = ImmGetContext(hwnd);
+                if !context.is_invalid() {
+                    let _ = ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+                    let _ = ImmReleaseContext(hwnd, context);
+                }
+                let _ = ImmAssociateContextEx(hwnd, HIMC::default(), 0);
+                return;
+            };
+            let _ = ImmAssociateContextEx(hwnd, HIMC::default(), IACE_DEFAULT);
+            let context = ImmGetContext(hwnd);
+            if context.is_invalid() {
+                return;
+            }
+            let left = caret.x - self.bounds.x;
+            let top = caret.y - self.bounds.y;
+            let line = RECT {
+                left,
+                top,
+                right: left + caret.width as i32,
+                bottom: top + caret.height as i32,
+            };
+            let _ = ImmSetCompositionWindow(
+                context,
+                &COMPOSITIONFORM {
+                    dwStyle: CFS_POINT,
+                    ptCurrentPos: POINT { x: left, y: top },
+                    rcArea: RECT::default(),
+                },
+            );
+            let _ = ImmSetCandidateWindow(
+                context,
+                &CANDIDATEFORM {
+                    dwIndex: 0,
+                    dwStyle: CFS_EXCLUDE,
+                    ptCurrentPos: POINT {
+                        x: left,
+                        y: line.bottom,
+                    },
+                    rcArea: line,
+                },
+            );
+            let _ = ImmReleaseContext(hwnd, context);
         }
     }
 
@@ -229,9 +298,11 @@ impl OverlayWindow {
         apply_cursor(self.shared.cursor.get());
     }
 
-    /// 隐藏窗口（不销毁），停止递交输入。
+    /// 隐藏窗口（不销毁），停止递交输入，关闭输入法。
     pub fn hide(&self) {
         self.shared.active.set(false);
+        self.shared.high_surrogate.set(None);
+        self.set_text_caret(None);
         VISIBLE.with(|v| v.set(None));
         unsafe {
             if GetCapture() == self.hwnd {
@@ -283,6 +354,12 @@ pub(super) fn apply_cursor(cursor: OverlayCursor) {
     let id = match cursor {
         OverlayCursor::Crosshair => IDC_CROSS,
         OverlayCursor::Arrow => IDC_ARROW,
+        OverlayCursor::ResizeEw => IDC_SIZEWE,
+        OverlayCursor::ResizeNs => IDC_SIZENS,
+        OverlayCursor::ResizeNwse => IDC_SIZENWSE,
+        OverlayCursor::ResizeNesw => IDC_SIZENESW,
+        OverlayCursor::Move => IDC_SIZEALL,
+        OverlayCursor::IBeam => IDC_IBEAM,
     };
     unsafe {
         if let Ok(cursor) = LoadCursorW(None, id) {
@@ -365,6 +442,11 @@ pub(super) unsafe extern "system" fn window_proc(
             }),
             None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         },
+        // 键盘直接输入和输入法确认的文字（DefWindowProc 把 WM_IME_CHAR 转成 WM_CHAR）。
+        WM_CHAR => match character(&shared.high_surrogate, wparam.0 as u16) {
+            Some(c) if !c.is_control() => input(OverlayInput::Character(c)),
+            _ => LRESULT(0),
+        },
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             apply_cursor(shared.cursor.get());
             LRESULT(1)
@@ -392,7 +474,32 @@ fn key(wparam: WPARAM) -> Option<OverlayKey> {
     match VIRTUAL_KEY(wparam.0 as u16) {
         VK_ESCAPE => Some(OverlayKey::Escape),
         VK_RETURN => Some(OverlayKey::Enter),
+        VK_LEFT => Some(OverlayKey::Left),
+        VK_RIGHT => Some(OverlayKey::Right),
+        VK_UP => Some(OverlayKey::Up),
+        VK_DOWN => Some(OverlayKey::Down),
+        VK_C => Some(OverlayKey::C),
+        VK_BACK => Some(OverlayKey::Backspace),
         _ => None,
+    }
+}
+
+/// `WM_CHAR` 递交的一个 UTF-16 代码单元：高位代理项先存起来，与随后的低位代理项拼成一个
+/// 字符；落单的代理项丢弃。
+fn character(high_surrogate: &Cell<Option<u16>>, unit: u16) -> Option<char> {
+    match unit {
+        0xD800..=0xDBFF => {
+            high_surrogate.set(Some(unit));
+            None
+        }
+        0xDC00..=0xDFFF => {
+            let high = high_surrogate.take()?;
+            char::decode_utf16([high, unit]).next()?.ok()
+        }
+        _ => {
+            high_surrogate.set(None);
+            char::from_u32(u32::from(unit))
+        }
     }
 }
 

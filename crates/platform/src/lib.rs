@@ -25,9 +25,11 @@ mod language;
 mod notifier;
 mod ocr;
 mod overlay;
+mod recording_toolbar;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
+mod text;
 mod tray;
 mod update;
 mod video;
@@ -56,9 +58,11 @@ pub use overlay::{
     Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
     OverlayScene, PointerButton, SelectionOverlay,
 };
+pub use recording_toolbar::{RecordingToolbar, RecordingToolbarView, RegionBorder};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
+pub use text::TextMask;
 pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
 pub use update::{LatestRelease, UpdateService};
 pub use video::{
@@ -108,6 +112,8 @@ pub struct Platform {
     pub video_encoder: Box<dyn VideoEncoder>,
     /// 节拍：录屏期间按帧率递交 [`PlatformEvent::Tick`]。
     pub ticker: Box<dyn Ticker>,
+    /// 录屏期间的录屏控制条和区域边框；控制条上的输入以 [`PlatformEvent::OverlayInput`] 递交。
+    pub recording_toolbar: Box<dyn RecordingToolbar>,
     /// 文件对话框（另存为）。
     pub file_dialog: Box<dyn FileDialog>,
     /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。

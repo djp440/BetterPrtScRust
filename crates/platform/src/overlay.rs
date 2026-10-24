@@ -5,7 +5,7 @@
 //! [`PlatformEvent::OverlayInput`](crate::PlatformEvent::OverlayInput) 递交回来。
 //! 所有坐标都是虚拟桌面物理像素，与 [`crate::FrameSource`] 一致。
 
-use crate::{Display, DisplayId, Image, Modifiers, PlatformError, Point, Rect};
+use crate::{Display, DisplayId, Image, Modifiers, PlatformError, Point, Rect, TextMask};
 
 /// 遮罩底下显示什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,22 @@ pub trait SelectionOverlay {
     /// 冻结帧中一块显示器的画面，尺寸等于它 `bounds` 的物理像素尺寸。只读取已拍下的冻结帧。
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError>;
 
+    /// 冻结帧中一块显示器画面的一小块（例如放大镜要显示的像素）。`area` 是这块显示器画面内的
+    /// 像素坐标（画面左上角为 (0, 0)），必须整个落在画面内。只读取已拍下的冻结帧。
+    ///
+    /// 默认实现取出整幅画面再裁剪；能只读取这一小块的平台应当覆盖它（放大镜每移动一次指针
+    /// 都会读取）。
+    fn frozen_pixels(&self, display: DisplayId, area: Rect) -> Result<Image, PlatformError> {
+        let image = self.frozen_image(display)?;
+        image.crop(area).ok_or_else(|| {
+            PlatformError::new(format!(
+                "{area:?} 超出了 {}x{} 的冻结帧画面",
+                image.width(),
+                image.height()
+            ))
+        })
+    }
+
     /// 在遮罩上 `area`（虚拟桌面物理像素）处显示画布，内容是 `image`（尺寸必须等于 `area`）；
     /// 替换已有的画布。
     ///
@@ -51,6 +67,11 @@ pub trait SelectionOverlay {
     /// 在下一次 [`render`](Self::render) 时显示。
     fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError>;
 
+    /// 用平台的字体把 `text` 排版并栅格化成覆盖率蒙版：字号 `font_size`（物理像素），
+    /// 灰度抗锯齿，遇到换行符换行、不自动换行。标注里的文字用它：遮罩画布上和最终截图里的
+    /// 文字都来自同一个蒙版（ADR 0006）。遮罩打开期间可用。
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError>;
+
     /// 隐藏遮罩并释放冻结帧和画布；没有打开时什么也不做。
     fn close(&mut self);
 }
@@ -62,6 +83,10 @@ pub struct OverlayScene {
     pub items: Vec<OverlayItem>,
     /// 鼠标指针在遮罩上的形状。
     pub cursor: OverlayCursor,
+    /// 正在输入文字时插入点的位置（虚拟桌面物理像素）。`Some` 时遮罩接受文字输入：平台打开
+    /// 输入法、把输入法的组字和候选窗口放在插入点旁边，输入的文字以 [`OverlayInput::Character`]
+    /// 递交；`None` 时关闭输入法。插入点本身由 `core` 画在 `items` 里。
+    pub text_caret: Option<Rect>,
 }
 
 impl OverlayScene {
@@ -151,6 +176,18 @@ pub enum OverlayCursor {
     #[default]
     Crosshair,
     Arrow,
+    /// 左右调整大小（↔）。
+    ResizeEw,
+    /// 上下调整大小（↕）。
+    ResizeNs,
+    /// 沿左上—右下对角线调整大小（↖↘）。
+    ResizeNwse,
+    /// 沿右上—左下对角线调整大小（↗↙）。
+    ResizeNesw,
+    /// 移动（四向箭头）。
+    Move,
+    /// 文字输入（I 形）。
+    IBeam,
 }
 
 /// 用户在遮罩上的输入，坐标为虚拟桌面物理像素。
@@ -177,6 +214,9 @@ pub enum OverlayInput {
         key: OverlayKey,
         modifiers: Modifiers,
     },
+    /// 输入了一个字符：键盘直接输入的或输入法确认的文字，逐字递交。只递交可打印字符；
+    /// 回车、退格等以 [`OverlayInput::KeyPressed`] 递交。
+    Character(char),
     /// 平台不得不中断这次遮罩，例如显示器布局变了、冻结帧已经失效。
     Interrupted,
 }
@@ -192,4 +232,12 @@ pub enum PointerButton {
 pub enum OverlayKey {
     Escape,
     Enter,
+    /// 方向键（按住时随系统的按键重复多次递交）。
+    Left,
+    Right,
+    Up,
+    Down,
+    /// 字母键 C（与大小写、输入法无关）。
+    C,
+    Backspace,
 }
