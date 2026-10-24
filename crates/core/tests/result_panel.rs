@@ -199,3 +199,16 @@ fn full_width_punctuation_inside_numbers_and_latin_words_becomes_half_width() {
 
     assert_eq!(panel.text(), "版本2.0\nVersion 2.0，好。");
 }
+
+#[test]
+fn middle_dot_takes_no_spaces_around_it() {
+    // Windows 的中文 OCR 也会把“2.0”识别成“2”“·”“0”；间隔号本身（如外国人名）两边也不加空格。
+    let fake = chinese_and_english().with_recognized_text(
+        "zh-Hans-CN",
+        &[&["版", "本", "2", "·", "0"], &["Michael", "·", "Jackson"]],
+    );
+
+    let panel = open_and_recognize(&fake);
+
+    assert_eq!(panel.text(), "版本2·0\nMichael·Jackson");
+}

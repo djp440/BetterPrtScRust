@@ -137,13 +137,16 @@ impl eframe::App for ResultPanelApp {
         self.receive_outcomes();
         let texts = self.texts;
 
-        egui::Panel::top("recognition")
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                ui.add_space(6.0);
-                self.recognition_bar(ui, texts);
-                ui.add_space(4.0);
-            });
+        // 没有可用的识别语言（没装 OCR 语言包、或查询失败）时没有可选的，不显示这一栏。
+        if !self.panel.languages().is_empty() {
+            egui::Panel::top("recognition")
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    ui.add_space(6.0);
+                    self.recognition_bar(ui, texts);
+                    ui.add_space(4.0);
+                });
+        }
         egui::Panel::bottom("actions")
             .show_separator_line(true)
             .show(ui, |ui| {
@@ -151,16 +154,26 @@ impl eframe::App for ResultPanelApp {
                 self.actions_bar(ui, texts);
                 ui.add_space(4.0);
             });
-        egui::CentralPanel::default().show(ui, |ui| match self.panel.status() {
-            RecognitionStatus::NoLanguagePack => self.no_language_pack(ui, texts),
-            _ => self.text_area(ui, texts),
+        egui::CentralPanel::default().show(ui, |ui| {
+            if self.panel.status() == &RecognitionStatus::NoLanguagePack {
+                self.no_language_pack(ui, texts);
+                return;
+            }
+            // 失败原因可能很长，放在文本框上方、可以折行。
+            if let RecognitionStatus::Failed(error) = self.panel.status() {
+                let message = texts.format("result-panel-failed", &[("error", error)]);
+                let message = RichText::new(message).color(ui.visuals().error_fg_color);
+                ui.add(egui::Label::new(message).wrap());
+                ui.add_space(6.0);
+            }
+            self.text_area(ui, texts);
         });
     }
 }
 
 // 各部分界面。
 impl ResultPanelApp {
-    /// 识别语言（可切换）与识别状态。
+    /// 识别语言（可切换）与识别进度。
     fn recognition_bar(&mut self, ui: &mut egui::Ui, texts: &Texts) {
         let mut chosen = None;
         ui.horizontal(|ui| {
@@ -171,18 +184,16 @@ impl ResultPanelApp {
                 .and_then(|tag| self.panel.languages().iter().find(|l| l.tag == tag))
                 .map(|l| l.name.clone())
                 .unwrap_or_default();
-            ui.add_enabled_ui(!self.panel.languages().is_empty(), |ui| {
-                egui::ComboBox::from_id_salt("recognition-language")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for language in self.panel.languages() {
-                            let selected = self.panel.language() == Some(language.tag.as_str());
-                            if ui.selectable_label(selected, &language.name).clicked() {
-                                chosen = Some(language.tag.clone());
-                            }
+            egui::ComboBox::from_id_salt("recognition-language")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for language in self.panel.languages() {
+                        let selected = self.panel.language() == Some(language.tag.as_str());
+                        if ui.selectable_label(selected, &language.name).clicked() {
+                            chosen = Some(language.tag.clone());
                         }
-                    });
-            });
+                    }
+                });
             match self.panel.status() {
                 RecognitionStatus::Recognizing => {
                     ui.spinner();
@@ -194,11 +205,8 @@ impl ResultPanelApp {
                 RecognitionStatus::Recognized => {
                     ui.label(RichText::new(texts.get("result-panel-recognized")).weak());
                 }
-                RecognitionStatus::Failed(error) => {
-                    let text = texts.format("result-panel-failed", &[("error", error)]);
-                    ui.label(RichText::new(text).color(ui.visuals().error_fg_color));
-                }
-                RecognitionStatus::NoLanguagePack => {}
+                // 失败原因显示在文本框上方。
+                RecognitionStatus::Failed(_) | RecognitionStatus::NoLanguagePack => {}
             }
         });
         if let Some(tag) = chosen {
@@ -226,6 +234,10 @@ impl ResultPanelApp {
                 );
                 if std::mem::take(&mut self.focus_text) {
                     response.request_focus();
+                }
+                // 改过的文字还没复制：“已复制”的提示不再成立。
+                if response.changed() {
+                    self.notice = None;
                 }
             });
     }
