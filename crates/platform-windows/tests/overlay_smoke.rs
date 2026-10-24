@@ -8,12 +8,14 @@ use std::time::{Duration, Instant};
 
 use bps_platform::{
     Backdrop, Color, FrameSource, OverlayInput, OverlayItem, OverlayKey, OverlayScene,
-    PlatformEvent, Point, PointerButton, SelectionOverlay,
+    PlatformEvent, Point, PointerButton, Rect, SelectionOverlay,
 };
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    VK_C, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
     PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
@@ -122,6 +124,29 @@ fn selection_overlay_shows_frozen_frame_and_delivers_input() {
             "{escape:?}"
         );
 
+        // 方向键和 C 键（放大镜复制颜色）也要递交。
+        for vk in [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_C] {
+            unsafe {
+                PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(vk.0 as usize), LPARAM(0)).unwrap();
+            }
+        }
+        for want in [
+            OverlayKey::Left,
+            OverlayKey::Right,
+            OverlayKey::Up,
+            OverlayKey::Down,
+            OverlayKey::C,
+        ] {
+            let got = event_loop.wait_event(Duration::from_secs(2));
+            assert!(
+                matches!(
+                    got,
+                    Some(PlatformEvent::OverlayInput(OverlayInput::KeyPressed { key, .. })) if key == want
+                ),
+                "应递交 {want:?}：{got:?}"
+            );
+        }
+
         for display in &displays {
             let image = overlay.frozen_image(display.id).unwrap();
             assert_eq!(
@@ -130,6 +155,27 @@ fn selection_overlay_shows_frozen_frame_and_delivers_input() {
             );
             let opaque = image.rgba().chunks_exact(4).all(|p| p[3] == 255);
             assert!(opaque, "冻结帧应不透明");
+            // 放大镜读的一小块与整幅画面里对应的那一块完全一致（含右下角）。
+            let (w, h) = (display.bounds.width, display.bounds.height);
+            for area in [
+                Rect::new(37, 21, 15, 15),
+                Rect::new(w as i32 - 15, h as i32 - 15, 15, 15),
+            ] {
+                let started = Instant::now();
+                let pixels = overlay.frozen_pixels(display.id, area).unwrap();
+                let elapsed = started.elapsed();
+                assert!(
+                    pixels == image.crop(area).unwrap(),
+                    "{area:?} 的像素应与冻结帧一致"
+                );
+                eprintln!("读取冻结帧 {area:?}：{elapsed:?}");
+            }
+            assert!(
+                overlay
+                    .frozen_pixels(display.id, Rect::new(w as i32 - 5, 0, 15, 15))
+                    .is_err(),
+                "超出画面应报错"
+            );
         }
         overlay.close();
         assert!(

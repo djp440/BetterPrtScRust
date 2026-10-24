@@ -167,6 +167,9 @@ settings-cancel = 取消
 
 ## 选区遮罩
 overlay-selected-hint = Enter 或双击选区：完成　Esc：取消
+overlay-copy-color-hint = C：复制颜色
+overlay-color-copied = 已复制颜色
+overlay-color-copy-failed = 复制失败
 overlay-record-hint = Enter 或双击选区：开始录屏　Esc：取消
 
 ## 标注

@@ -49,6 +49,7 @@ mod forward;
 mod i18n;
 mod instance;
 mod location;
+mod magnifier;
 mod output;
 mod recording;
 mod region;

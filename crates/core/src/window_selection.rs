@@ -108,7 +108,8 @@ impl WindowSelection {
             OverlayInput::PointerPressed {
                 button: PointerButton::Right,
                 ..
-            } => {}
+            }
+            | OverlayInput::KeyPressed { .. } => {}
         }
         WindowStep::Continue
     }
