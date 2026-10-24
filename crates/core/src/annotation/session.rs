@@ -8,7 +8,9 @@
 //!   底图，遮罩的画布开始显示合成后的截图，此后所有输入都由标注处理。
 //! - 点“复制”“自动存储”“另存为”结束（[`Response::Finish`]）；点“取消”或按 Esc 取消。
 //!
-//! 标注的坐标是截图的像素坐标：屏幕坐标减去区域左上角。
+//! 标注的坐标是截图的像素坐标：屏幕坐标减去区域左上角。比屏幕还高的长截屏缩小显示在区域里
+//! （[`Annotator::lock_image`]），屏幕坐标再按缩小比例换算；屏幕上显示的是把标注按同样比例
+//! 缩小后画在缩小的截图上，最终截图仍按原尺寸合成。
 
 use bps_platform::{
     Color, Display, Image, OverlayCursor, OverlayInput, OverlayKey, OverlayScene, Platform,
@@ -18,6 +20,7 @@ use bps_platform::{
 use super::toolbar::{Button, Tool, Toolbar};
 use super::{Annotation, AnnotationDocument, Stroke, compose_area};
 use crate::Texts;
+use crate::downscale::downscale;
 use crate::region::frozen_region;
 use crate::selection::between;
 
@@ -64,14 +67,24 @@ pub(crate) struct Annotator {
 
 /// 锁定的区域、它的截图和上面的标注。
 struct Canvas {
+    /// 截图显示在屏幕上的范围。
     region: Rect,
-    /// 区域的截图（标注的底图），从冻结帧取出。
+    /// 截图（标注的底图），通常从冻结帧取出。
     base: Image,
+    /// 截图缩小显示时屏幕上的样子；按原尺寸显示时为 `None`。
+    view: Option<View>,
     document: AnnotationDocument,
     /// 正在拖拽画出的标注（截图坐标）。
     draft: Option<Draft>,
-    /// 遮罩画布上正显示着的标注；画布还没显示时为 `None`。
+    /// 遮罩画布上正显示着的标注（屏幕上的尺寸）；画布还没显示时为 `None`。
     shown: Option<Vec<Annotation>>,
+}
+
+/// 缩小显示的截图：屏幕像素 / 截图像素的比例，以及缩小后的底图。
+struct View {
+    scale_x: f64,
+    scale_y: f64,
+    base: Image,
 }
 
 #[derive(Clone, Copy)]
@@ -121,10 +134,48 @@ impl Canvas {
     fn to_image(&self, point: Point) -> Point {
         let right = self.region.x + self.region.width as i32 - 1;
         let bottom = self.region.y + self.region.height as i32 - 1;
-        Point::new(
+        let local = Point::new(
             point.x.clamp(self.region.x, right) - self.region.x,
             point.y.clamp(self.region.y, bottom) - self.region.y,
+        );
+        let Some(view) = &self.view else {
+            return local;
+        };
+        let unscale = |v: i32, scale: f64, size: u32| {
+            (((f64::from(v) + 0.5) / scale) as i32).clamp(0, size as i32 - 1)
+        };
+        Point::new(
+            unscale(local.x, view.scale_x, self.base.width()),
+            unscale(local.y, view.scale_y, self.base.height()),
         )
+    }
+
+    /// 屏幕上的线宽 → 截图上的线宽：截图缩小显示时线宽相应放大，屏幕上看起来仍是 `stroke`。
+    fn to_image_stroke(&self, stroke: Stroke) -> Stroke {
+        let Some(view) = &self.view else {
+            return stroke;
+        };
+        let scale = (view.scale_x + view.scale_y) / 2.0;
+        Stroke {
+            width: ((f64::from(stroke.width) / scale).round() as u32).max(1),
+            ..stroke
+        }
+    }
+
+    /// 屏幕上要显示的标注：按截图显示的比例缩放。
+    fn displayed(&self, annotations: Vec<Annotation>) -> Vec<Annotation> {
+        match &self.view {
+            Some(view) => annotations
+                .iter()
+                .map(|a| a.scaled(view.scale_x, view.scale_y))
+                .collect(),
+            None => annotations,
+        }
+    }
+
+    /// 屏幕上显示的底图。
+    fn shown_base(&self) -> &Image {
+        self.view.as_ref().map_or(&self.base, |view| &view.base)
     }
 }
 
@@ -208,6 +259,7 @@ impl Annotator {
                         let stroke = self.stroke_at(position);
                         if let Some(canvas) = self.canvas.as_mut() {
                             let start = canvas.to_image(position);
+                            let stroke = canvas.to_image_stroke(stroke);
                             canvas.draft = Some(Draft {
                                 tool,
                                 start,
@@ -279,15 +331,32 @@ impl Annotator {
     /// 锁定区域：从冻结帧取出它的截图作为标注的底图。已经锁定时什么也不做。
     pub fn lock(&mut self, platform: &Platform, region: Rect) -> Result<(), PlatformError> {
         if self.canvas.is_none() {
-            self.canvas = Some(Canvas {
-                region,
-                base: frozen_region(platform, &self.displays, region)?,
-                document: AnnotationDocument::new(),
-                draft: None,
-                shown: None,
-            });
+            let base = frozen_region(platform, &self.displays, region)?;
+            self.lock_image(region, base);
         }
         Ok(())
+    }
+
+    /// 在 `region` 里标注 `image`（例如拼接好的长截屏）：尺寸不同时把截图缩小显示在
+    /// `region` 里。已经锁定时什么也不做。
+    pub fn lock_image(&mut self, region: Rect, image: Image) {
+        if self.canvas.is_some() {
+            return;
+        }
+        let view =
+            ((region.width, region.height) != (image.width(), image.height())).then(|| View {
+                scale_x: f64::from(region.width) / f64::from(image.width().max(1)),
+                scale_y: f64::from(region.height) / f64::from(image.height().max(1)),
+                base: downscale(&image, region.width, region.height),
+            });
+        self.canvas = Some(Canvas {
+            region,
+            base: image,
+            view,
+            document: AnnotationDocument::new(),
+            draft: None,
+            shown: None,
+        });
     }
 
     /// 贴着 `region` 的工具条，让开选区边框（宽度与选区状态机画的一致：按区域左上角所在
@@ -323,9 +392,10 @@ impl Annotator {
         let Some(canvas) = self.canvas.as_mut() else {
             return Ok(false);
         };
-        let current = canvas.annotations();
+        let current = canvas.displayed(canvas.annotations());
+        let base = canvas.shown_base();
         let Some(shown) = canvas.shown.as_ref() else {
-            let image = compose_area(&current, &canvas.base, full(&canvas.base));
+            let image = compose_area(&current, base, full(base));
             overlay.show_canvas(canvas.region, &image)?;
             canvas.shown = Some(current);
             return Ok(true);
@@ -345,11 +415,11 @@ impl Annotator {
             .flat_map(Annotation::footprint)
             .collect();
         for area in dirty {
-            let patch = compose_area(&current, &canvas.base, area);
+            let patch = compose_area(&current, base, area);
             if patch.width() == 0 || patch.height() == 0 {
                 continue;
             }
-            let Some(area) = area.intersection(full(&canvas.base)) else {
+            let Some(area) = area.intersection(full(base)) else {
                 continue;
             };
             let at = Point::new(canvas.region.x + area.x, canvas.region.y + area.y);

@@ -7,6 +7,8 @@
 //! 按钮宽度由 `core` 按文字估算（平台只负责把文字居中画在按钮里），这样命中测试不依赖平台
 //! 的文字排版。扩展点：在 [`ENTRIES`] 里加按钮（#13 的颜色、线宽），在 [`Button`] 加变体，
 //! 按钮文字放进两份 FTL。
+//!
+//! 布局和绘制对按钮的种类是通用的（[`ToolbarButton`]）：长截屏的“开始 / 完成”条也用它。
 
 use bps_platform::{Color, Display, OverlayItem, Point, Rect};
 
@@ -33,8 +35,13 @@ pub(crate) enum Button {
     Copy,
 }
 
-impl Button {
+/// 工具条上的一种按钮。
+pub(crate) trait ToolbarButton: Copy + PartialEq {
     /// 按钮文字在文本资源里的消息。
+    fn message(self) -> &'static str;
+}
+
+impl ToolbarButton for Button {
     fn message(self) -> &'static str {
         match self {
             Button::Tool(Tool::Rectangle) => "annotation-rectangle",
@@ -47,14 +54,15 @@ impl Button {
     }
 }
 
+/// 工具条上从左到右的一项。
 #[derive(Clone, Copy)]
-enum Entry {
-    Button(Button),
+pub(crate) enum Entry<B> {
+    Button(B),
     Separator,
 }
 
 /// 工具条从左到右的内容：工具 | 取消、结束方式（最常用的“复制”在最右边）。
-const ENTRIES: [Entry; 7] = [
+const ENTRIES: [Entry<Button>; 7] = [
     Entry::Button(Button::Tool(Tool::Rectangle)),
     Entry::Button(Button::Tool(Tool::Arrow)),
     Entry::Separator,
@@ -83,18 +91,37 @@ const ACTIVE: Color = Color::rgba(30, 144, 255, 255);
 const TEXT: Color = Color::rgba(255, 255, 255, 255);
 
 /// 一次布局好的工具条。
-pub(crate) struct Toolbar {
+pub(crate) struct Toolbar<B = Button> {
     bounds: Rect,
     /// 按钮、位置和文字。
-    buttons: Vec<(Button, Rect, String)>,
+    buttons: Vec<(B, Rect, String)>,
     separators: Vec<Rect>,
     font_size: f32,
     border: u32,
 }
 
-impl Toolbar {
-    /// 贴着 `region`（外侧有宽 `frame` 的边框）的工具条，按钮文字用 `texts` 的语言。
+impl Toolbar<Button> {
+    /// 贴着 `region`（外侧有宽 `frame` 的边框）的标注工具条，按钮文字用 `texts` 的语言。
     pub fn beside(region: Rect, frame: u32, displays: &[Display], texts: &Texts) -> Self {
+        Self::with_entries(&ENTRIES, region, frame, displays, texts)
+    }
+
+    /// 画工具条的遮罩元素，从下往上；选中的工具高亮。
+    pub fn items(&self, active: Option<Tool>, hovered: Option<Button>) -> Vec<OverlayItem> {
+        self.items_with(active.map(Button::Tool), hovered)
+    }
+}
+
+impl<B: ToolbarButton> Toolbar<B> {
+    /// 由 `entries` 组成、贴着 `region`（外侧有宽 `frame` 的边框）的工具条，按钮文字用
+    /// `texts` 的语言。
+    pub fn with_entries(
+        entries: &[Entry<B>],
+        region: Rect,
+        frame: u32,
+        displays: &[Display],
+        texts: &Texts,
+    ) -> Self {
         let corner = Point::new(
             region.x + region.width as i32 - 1,
             region.y + region.height as i32 - 1,
@@ -118,7 +145,7 @@ impl Toolbar {
         let mut x = padding;
         let mut buttons = Vec::new();
         let mut separators = Vec::new();
-        for (index, entry) in ENTRIES.iter().enumerate() {
+        for (index, entry) in entries.iter().enumerate() {
             if index > 0 {
                 x += px(BUTTON_GAP);
             }
@@ -161,21 +188,26 @@ impl Toolbar {
         }
     }
 
+    /// 工具条占据的范围。
+    pub fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
     /// `point` 是否在工具条上（包括按钮之间的空隙）。
     pub fn contains(&self, point: Point) -> bool {
         self.bounds.contains(point)
     }
 
     /// `point` 处的按钮。
-    pub fn button_at(&self, point: Point) -> Option<Button> {
+    pub fn button_at(&self, point: Point) -> Option<B> {
         self.buttons
             .iter()
             .find(|(_, rect, _)| rect.contains(point))
             .map(|(button, ..)| *button)
     }
 
-    /// 画工具条的遮罩元素，从下往上。
-    pub fn items(&self, active: Option<Tool>, hovered: Option<Button>) -> Vec<OverlayItem> {
+    /// 画工具条的遮罩元素，从下往上；`active` 按选中状态高亮，`hovered` 按悬停高亮。
+    pub fn items_with(&self, active: Option<B>, hovered: Option<B>) -> Vec<OverlayItem> {
         let mut items = vec![
             OverlayItem::Fill {
                 rect: self.bounds,
@@ -193,7 +225,7 @@ impl Toolbar {
         }));
         for (button, rect, label) in &self.buttons {
             let (button, rect) = (*button, *rect);
-            let highlight = if active.is_some_and(|tool| button == Button::Tool(tool)) {
+            let highlight = if active == Some(button) {
                 Some(ACTIVE)
             } else if hovered == Some(button) {
                 Some(HOVER)

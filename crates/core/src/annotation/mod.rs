@@ -13,7 +13,7 @@
 pub(crate) mod finish;
 mod raster;
 pub(crate) mod session;
-mod toolbar;
+pub(crate) mod toolbar;
 
 use bps_platform::{Color, Image, Point, Rect};
 
@@ -61,6 +61,48 @@ impl Annotation {
         match *self {
             Annotation::Rectangle { rect, stroke } => rectangle_strips(rect, stroke.width),
             Annotation::Arrow { .. } => vec![self.bounds()],
+        }
+    }
+
+    /// 按比例缩放后的标注（横向 `scale_x`、纵向 `scale_y` 倍，线宽按两者的平均值缩放，
+    /// 至少 1 像素）：截图缩小显示时，屏幕上画的就是它。
+    pub(crate) fn scaled(&self, scale_x: f64, scale_y: f64) -> Annotation {
+        let point = |p: Point| {
+            Point::new(
+                (f64::from(p.x) * scale_x).round() as i32,
+                (f64::from(p.y) * scale_y).round() as i32,
+            )
+        };
+        let stroke = |s: Stroke| Stroke {
+            width: ((f64::from(s.width.max(1)) * (scale_x + scale_y) / 2.0).round() as u32).max(1),
+            ..s
+        };
+        match *self {
+            Annotation::Rectangle { rect, stroke: s } => {
+                let from = point(Point::new(rect.x, rect.y));
+                let to = point(Point::new(
+                    rect.x + rect.width as i32,
+                    rect.y + rect.height as i32,
+                ));
+                Annotation::Rectangle {
+                    rect: Rect::new(
+                        from.x,
+                        from.y,
+                        (to.x - from.x).max(1) as u32,
+                        (to.y - from.y).max(1) as u32,
+                    ),
+                    stroke: stroke(s),
+                }
+            }
+            Annotation::Arrow {
+                from,
+                to,
+                stroke: s,
+            } => Annotation::Arrow {
+                from: point(from),
+                to: point(to),
+                stroke: stroke(s),
+            },
         }
     }
 

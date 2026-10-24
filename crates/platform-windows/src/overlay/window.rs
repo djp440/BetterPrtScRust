@@ -26,7 +26,9 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISurface,
     IDXGISwapChain1,
 };
-use windows::Win32::Graphics::Gdi::ValidateRect;
+use windows::Win32::Graphics::Gdi::{
+    CombineRgn, CreateRectRgn, DeleteObject, HGDIOBJ, RGN_DIFF, SetWindowRgn, ValidateRect,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_CONTROL,
@@ -35,11 +37,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
     GetWindowLongPtrW, HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, LoadCursorW, RegisterClassExW,
-    SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
-    WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetForegroundWindow,
+    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
+    WDA_NONE, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDBLCLK,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -185,6 +188,41 @@ impl OverlayWindow {
         self.shared.stale.get()
     }
 
+    /// 让 `area`（虚拟桌面物理像素）透过窗口：用窗口区域把这块挖空，底下的桌面直接露出来、
+    /// 鼠标事件也落到底下的窗口；同时让窗口不出现在屏幕捕获里。`None` 恢复整个窗口。
+    pub fn set_pass_through(&self, area: Option<Rect>) -> Result<(), PlatformError> {
+        unsafe {
+            let Some(area) = area else {
+                SetWindowRgn(self.hwnd, None, true);
+                let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);
+                return Ok(());
+            };
+            let bounds = self.bounds;
+            let whole = CreateRectRgn(0, 0, bounds.width as i32, bounds.height as i32);
+            let left = area.x - bounds.x;
+            let top = area.y - bounds.y;
+            let hole = CreateRectRgn(
+                left,
+                top,
+                left + area.width as i32,
+                top + area.height as i32,
+            );
+            let combined = CombineRgn(Some(whole), Some(whole), Some(hole), RGN_DIFF);
+            let _ = DeleteObject(HGDIOBJ(hole.0));
+            if combined.0 == 0 {
+                let _ = DeleteObject(HGDIOBJ(whole.0));
+                return Err(PlatformError::new("计算遮罩透过范围失败"));
+            }
+            // 成功后区域归系统所有。
+            if SetWindowRgn(self.hwnd, Some(whole), true) == 0 {
+                let _ = DeleteObject(HGDIOBJ(whole.0));
+                return Err(PlatformError::new("设置遮罩透过范围失败"));
+            }
+            SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE)
+                .map_err(|e| win_error("设置遮罩不被捕获失败", e))
+        }
+    }
+
     pub fn set_cursor(&self, cursor: OverlayCursor) {
         if self.shared.cursor.replace(cursor) != cursor && self.shared.active.get() {
             apply_cursor(cursor);
@@ -237,6 +275,8 @@ impl OverlayWindow {
             if GetCapture() == self.hwnd {
                 let _ = ReleaseCapture();
             }
+            SetWindowRgn(self.hwnd, None, false);
+            let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);
             cloak(self.hwnd, true);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }

@@ -24,6 +24,8 @@ pub enum PlatformEvent {
     OverlayInput(OverlayInput),
     /// 用 [`crate::Ticker::start`] 开始的节拍到了。
     Tick,
+    /// [`crate::RegionSampler`] 采到了新的画面，用 [`crate::RegionSampler::take_sample`] 取出。
+    RegionSampled,
     /// 用户选中了托盘菜单（[`crate::TrayMenu`]）里的一项。
     TrayMenuItemSelected(TrayMenuItemId),
     /// [`crate::UpdateService::request_latest_release`] 的查询结果；

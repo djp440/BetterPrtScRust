@@ -53,6 +53,7 @@ mod notifier;
 mod overlay;
 mod pipe;
 mod pixels;
+mod region_sampler;
 mod registry;
 mod screenshot_tool;
 mod shell;
@@ -78,6 +79,7 @@ pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
 pub use overlay::D2dSelectionOverlay;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
+pub use region_sampler::WgcRegionSampler;
 pub use screenshot_tool::WindowsScreenshotTool;
 pub use shell::{
     allow_any_process_to_set_foreground, open_with_default_program, pick_folder,
@@ -120,5 +122,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         ticker: Box::new(event_loop.ticker()),
         file_dialog: Box::new(WindowsFileDialog::new()),
         window_source: Box::new(WgcWindowSource::new()),
+        region_sampler: Box::new(WgcRegionSampler::new(event_loop.ticker())),
     }
 }

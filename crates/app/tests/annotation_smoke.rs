@@ -58,6 +58,9 @@ impl SelectionOverlay for RecordingOverlay {
     fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError> {
         self.inner.update_canvas(at, patch)
     }
+    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError> {
+        self.inner.set_pass_through(area)
+    }
     fn close(&mut self) {
         *self.scene.borrow_mut() = None;
         self.inner.close();
@@ -384,6 +387,9 @@ impl SelectionOverlay for NoOverlay {
         unreachable!()
     }
     fn update_canvas(&mut self, _: Point, _: &Image) -> Result<(), PlatformError> {
+        unreachable!()
+    }
+    fn set_pass_through(&mut self, _: Option<Rect>) -> Result<(), PlatformError> {
         unreachable!()
     }
     fn close(&mut self) {}

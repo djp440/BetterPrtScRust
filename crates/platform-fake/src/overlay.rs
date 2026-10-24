@@ -19,6 +19,8 @@ pub(crate) struct OverlayState {
     canvas: Option<(Rect, Image)>,
     /// 最近一次 `render` 时的画布，即用户看到的画布。
     shown_canvas: Option<(Rect, Image)>,
+    /// 透过遮罩的范围（这里的鼠标操作交给底下的窗口）。
+    pub pass_through: Option<Rect>,
 }
 
 impl OverlayState {
@@ -30,6 +32,11 @@ impl OverlayState {
     /// 遮罩是否正显示在屏幕上（打开并且至少画过一次）。
     pub fn visible_scene(&self) -> Option<&OverlayScene> {
         self.scene.as_ref().filter(|_| self.open)
+    }
+
+    /// 遮罩打开时透过遮罩的范围。
+    pub fn visible_pass_through(&self) -> Option<Rect> {
+        self.pass_through.filter(|_| self.open)
     }
 
     /// 用户正看到的画布（最近一次 `render` 时的画布）。
@@ -66,6 +73,7 @@ impl SelectionOverlay for FakeOverlay {
         };
         state.backdrop = Some(backdrop);
         state.open = true;
+        state.pass_through = None;
         state.scene = None;
         state.canvas = None;
         state.shown_canvas = None;
@@ -134,9 +142,19 @@ impl SelectionOverlay for FakeOverlay {
         Ok(())
     }
 
+    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError> {
+        let mut state = self.state.lock().unwrap();
+        if !state.open {
+            return Err(PlatformError::new("假遮罩没有打开"));
+        }
+        state.pass_through = area;
+        Ok(())
+    }
+
     fn close(&mut self) {
         let mut state = self.state.lock().unwrap();
         state.open = false;
+        state.pass_through = None;
         state.scene = None;
         state.frozen.clear();
         state.backdrop = None;

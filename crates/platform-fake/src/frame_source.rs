@@ -115,6 +115,32 @@ impl FrameState {
     }
 }
 
+impl FrameState {
+    /// 此刻桌面上 `region` 范围的画面：从各显示器当前的画面裁剪拼接，没有显示器覆盖的部分透明。
+    pub fn live_region(&self, region: Rect) -> Image {
+        let mut pixels = vec![0; region.width as usize * region.height as usize * 4];
+        for display in &self.displays {
+            let Some(part) = display.bounds.intersection(region) else {
+                continue;
+            };
+            for y in 0..part.height {
+                for x in 0..part.width {
+                    let (px, py) = (part.x + x as i32, part.y + y as i32);
+                    let pixel = display.image.pixel(
+                        (px - display.bounds.x) as u32,
+                        (py - display.bounds.y) as u32,
+                    );
+                    let i = (((py - region.y) as usize) * region.width as usize
+                        + (px - region.x) as usize)
+                        * 4;
+                    pixels[i..i + 4].copy_from_slice(&pixel);
+                }
+            }
+        }
+        Image::from_rgba(region.width, region.height, pixels)
+    }
+}
+
 pub(crate) struct FakeFrameSource(pub Arc<Mutex<FrameState>>);
 
 fn id_of(index: usize) -> DisplayId {

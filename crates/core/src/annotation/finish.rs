@@ -4,11 +4,11 @@
 //! 除标注外还有复制或自动存储时，无论选哪种结束方式它们也一并执行（例如绑定了“标注 +
 //! 自动存储”，点“复制”时既复制也自动存储，剪贴板因此附带存下的文件）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use bps_platform::{FileType, Notification, Platform, SaveAsOptions};
+use bps_platform::{FileType, LocalDateTime, Notification, Platform, Rect, SaveAsOptions};
 
-use super::session::Finish;
+use super::session::{Annotator, Finish};
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
 use crate::{CaptureRequest, CoreError, OutputFormat, PostCaptureAction, Texts, action, encode};
@@ -23,7 +23,7 @@ const SAVE_AS_FORMATS: [(OutputFormat, &str, &[&str]); 4] = [
 
 /// 另存为对话框的初始内容：文件名按命名模板生成，类型默认是输出格式，
 /// 目录默认是自动存储目录。
-pub(crate) fn save_as_options(
+fn save_as_options(
     platform: &Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,
@@ -52,8 +52,57 @@ pub(crate) fn save_as_options(
     }
 }
 
+/// 用户在标注工具条上选择了结束方式：取得合成了标注的截图（`region` 是标注所在的区域），
+/// 另存为时先弹出对话框（遮罩还在），然后关闭遮罩，按结束方式输出。
+///
+/// 用户在对话框里取消时返回 `None`：遮罩不关，回到标注。
+pub(crate) fn conclude(
+    platform: &mut Platform,
+    annotator: &Annotator,
+    region: Rect,
+    request: &CaptureRequest,
+    captured_at: LocalDateTime,
+    finish: Finish,
+    texts: &Texts,
+) -> Option<Result<(), CaptureFailure>> {
+    let image = match annotator.final_image(platform, region) {
+        Ok(image) => image,
+        Err(e) => {
+            platform.overlay.close();
+            return Some(Err(CaptureFailure::before_actions(e)));
+        }
+    };
+    let screenshot = Screenshot {
+        image,
+        mode: request.mode,
+        captured_at,
+        window_title: None,
+    };
+    let mut save_as: Option<PathBuf> = None;
+    if finish == Finish::SaveAs {
+        let options = save_as_options(platform, &screenshot, request, texts);
+        match platform.file_dialog.save_as(&options) {
+            Ok(Some(path)) => save_as = Some(path),
+            Ok(None) => return None,
+            Err(e) => {
+                platform.overlay.close();
+                return Some(Err(CaptureFailure::before_actions(e)));
+            }
+        }
+    }
+    platform.overlay.close();
+    Some(run(
+        platform,
+        &screenshot,
+        request,
+        finish,
+        save_as.as_deref(),
+        texts,
+    ))
+}
+
 /// 按结束方式输出标注好的截图。另存为时 `save_as` 是用户在对话框里选的路径。
-pub(crate) fn run(
+fn run(
     platform: &mut Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,

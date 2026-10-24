@@ -7,8 +7,6 @@
 //! 截后动作包含标注时，输入先交给标注（`annotation::session::Annotator`：工具条、画标注、
 //! 选择结束方式），标注不处理的再交给选区状态机；捕获以用户选择的结束方式结束。
 
-use std::path::PathBuf;
-
 use bps_platform::{
     Backdrop, Display, Image, IncomingRequest, LocalDateTime, OverlayInput, OverlayScene, Platform,
     PlatformError, Point, Rect,
@@ -175,43 +173,18 @@ impl RegionCapture {
         let region = annotator
             .locked_region()
             .or_else(|| self.selection.selected())?;
-        let image = match annotator.final_image(platform, region) {
-            Ok(image) => image,
-            Err(e) => {
-                platform.overlay.close();
-                return Some(Err(CaptureFailure::before_actions(e)));
-            }
-        };
-        let screenshot = Screenshot {
-            image,
-            mode: self.request.mode,
-            captured_at: self.captured_at,
-            window_title: None,
-        };
-        let mut save_as: Option<PathBuf> = None;
-        if finish == Finish::SaveAs {
-            let options = finish::save_as_options(platform, &screenshot, &self.request, self.texts);
-            match platform.file_dialog.save_as(&options) {
-                Ok(Some(path)) => save_as = Some(path),
-                Ok(None) => return self.keep_going(platform),
-                Err(e) => {
-                    platform.overlay.close();
-                    return Some(Err(CaptureFailure::before_actions(e)));
-                }
-            }
+        match finish::conclude(
+            platform,
+            annotator,
+            region,
+            &self.request,
+            self.captured_at,
+            finish,
+            self.texts,
+        ) {
+            None => self.keep_going(platform),
+            Some(result) => Some(result.map(|()| Ending::Captured)),
         }
-        platform.overlay.close();
-        Some(
-            finish::run(
-                platform,
-                &screenshot,
-                &self.request,
-                finish,
-                save_as.as_deref(),
-                self.texts,
-            )
-            .map(|()| Ending::Captured),
-        )
     }
 
     /// 从冻结帧裁剪拼接出 `region` 的截图，关闭遮罩，再执行截后动作。

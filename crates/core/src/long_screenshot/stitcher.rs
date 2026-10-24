@@ -134,6 +134,11 @@ impl LongScreenshot {
         Image::from_rgba(self.width, self.height, self.pixels.clone())
     }
 
+    /// 拼接结果的全部像素（RGBA，行从上到下）。
+    pub(crate) fn rgba(&self) -> &[u8] {
+        &self.pixels
+    }
+
     /// 拼接结束，取出长截屏。
     pub fn into_image(self) -> Image {
         Image::from_rgba(self.width, self.height, self.pixels)

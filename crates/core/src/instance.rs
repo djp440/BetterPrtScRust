@@ -5,6 +5,7 @@ use bps_platform::{
 };
 
 use crate::capture::CaptureFailure;
+use crate::long_screenshot::LongScreenshotCapture;
 use crate::recording::{self, Recording};
 use crate::region::{Ending, RegionCapture};
 use crate::window::WindowCapture;
@@ -62,6 +63,8 @@ pub struct ResidentInstance {
     recording: Option<Recording>,
     /// 进行中的窗口捕获。
     window_capture: Option<WindowCapture>,
+    /// 进行中的长截屏。
+    long_screenshot: Option<LongScreenshotCapture>,
 }
 
 /// 命令执行到哪一步了。
@@ -93,6 +96,7 @@ impl ResidentInstance {
             region_capture: None,
             recording: None,
             window_capture: None,
+            long_screenshot: None,
         }
     }
 
@@ -319,7 +323,8 @@ impl ResidentInstance {
             | PlatformEvent::PrintScreenKeySettingChanged
             | PlatformEvent::LatestReleaseFetched(_)
             | PlatformEvent::OverlayInput(_)
-            | PlatformEvent::Tick => None,
+            | PlatformEvent::Tick
+            | PlatformEvent::RegionSampled => None,
             PlatformEvent::RequestReceived(request) => {
                 Request::decode(request.message()).and_then(|r| self.command_for_request(&r))
             }
@@ -339,7 +344,14 @@ impl ResidentInstance {
             }
             PlatformEvent::RequestReceived(request) => return self.serve(request),
             PlatformEvent::OverlayInput(input) => return self.on_overlay_input(&input),
-            PlatformEvent::Tick => return self.advance_recording(Recording::on_tick),
+            PlatformEvent::Tick => {
+                // 节拍同时驱动录屏和长截屏的采样（两者不会同时进行）。
+                if self.long_screenshot.is_some() {
+                    return self.on_region_sampled();
+                }
+                return self.advance_recording(Recording::on_tick);
+            }
+            PlatformEvent::RegionSampled => return self.on_region_sampled(),
             PlatformEvent::LatestReleaseFetched(result) => {
                 self.latest_release_fetched(result);
                 return Ok(Flow::Continue);
@@ -408,6 +420,8 @@ impl ResidentInstance {
                     recording.requester = Some(incoming);
                 } else if let Some(capture) = self.window_capture.as_mut() {
                     capture.requester = Some(incoming);
+                } else if let Some(capture) = self.long_screenshot.as_mut() {
+                    capture.requester = Some(incoming);
                 }
                 Ok(Flow::Continue)
             }
@@ -471,7 +485,10 @@ impl ResidentInstance {
                 notified: true,
             });
         }
-        if self.region_capture.is_some() || self.window_capture.is_some() {
+        if self.region_capture.is_some()
+            || self.window_capture.is_some()
+            || self.long_screenshot.is_some()
+        {
             // 遮罩正显示着，用户看得到这次捕获还没结束，热键触发时不再通知。
             return Err(CaptureFailure {
                 error: CoreError::CaptureInProgress,
@@ -479,12 +496,18 @@ impl ResidentInstance {
             });
         }
         ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
-        // 要标注的捕获不论什么模式都在选区遮罩上进行。
         let texts = self.texts();
         if request.actions.contains(&PostCaptureAction::Record) {
             let recording = Recording::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.recording = Some(recording);
+            return Ok(Progress::Pending);
+        }
+        // 长截屏不论什么模式都先在选区遮罩上框选区域，之后的截后动作（含标注）由它负责。
+        if request.actions.contains(&PostCaptureAction::LongScreenshot) {
+            let capture = LongScreenshotCapture::start(&mut self.platform, request.clone(), texts)
+                .map_err(CaptureFailure::before_actions)?;
+            self.long_screenshot = Some(capture);
             return Ok(Progress::Pending);
         }
         if request.mode == CaptureMode::Region
@@ -543,6 +566,12 @@ impl ResidentInstance {
                 recording.on_overlay_input(platform, input)
             });
         }
+        if let Some(capture) = self.long_screenshot.as_mut() {
+            let Some(ending) = capture.handle(&mut self.platform, input) else {
+                return Ok(Flow::Continue);
+            };
+            return self.end_long_screenshot(ending);
+        }
         if let Some(capture) = self.window_capture.as_mut() {
             let Some(ending) = capture.handle(&mut self.platform, input) else {
                 return Ok(Flow::Continue);
@@ -561,6 +590,28 @@ impl ResidentInstance {
         };
         let requester = self
             .region_capture
+            .take()
+            .and_then(|capture| capture.requester);
+        self.end_overlay_capture(requester, ending)
+    }
+
+    /// 长截屏期间平台采到了新画面：交给进行中的长截屏（高度到达上限时它会自动结束）。
+    fn on_region_sampled(&mut self) -> Result<Flow, CoreError> {
+        let Some(capture) = self.long_screenshot.as_mut() else {
+            return Ok(Flow::Continue);
+        };
+        let Some(ending) = capture.on_sample(&mut self.platform) else {
+            return Ok(Flow::Continue);
+        };
+        self.end_long_screenshot(ending)
+    }
+
+    fn end_long_screenshot(
+        &mut self,
+        ending: Result<Ending, CaptureFailure>,
+    ) -> Result<Flow, CoreError> {
+        let requester = self
+            .long_screenshot
             .take()
             .and_then(|capture| capture.requester);
         self.end_overlay_capture(requester, ending)
@@ -620,12 +671,20 @@ impl ResidentInstance {
         self.advance_recording(|recording, platform| Some(recording.stop(platform)))
     }
 
-    /// 放弃进行中的区域或窗口捕获：关闭遮罩，等待中的请求收到“已取消”。
+    /// 放弃进行中的区域、窗口捕获或长截屏：停止采样、关闭遮罩，等待中的请求收到“已取消”。
     fn abandon_region_capture(&mut self) {
-        let requester = match (self.region_capture.take(), self.window_capture.take()) {
-            (Some(capture), _) => Some(capture.requester),
-            (None, Some(capture)) => Some(capture.requester),
-            (None, None) => None,
+        let requester = match (
+            self.region_capture.take(),
+            self.window_capture.take(),
+            self.long_screenshot.take(),
+        ) {
+            (Some(capture), ..) => Some(capture.requester),
+            (None, Some(capture), _) => Some(capture.requester),
+            (None, None, Some(mut capture)) => {
+                capture.abandon(&mut self.platform);
+                Some(capture.requester)
+            }
+            (None, None, None) => None,
         };
         if let Some(requester) = requester {
             self.platform.overlay.close();

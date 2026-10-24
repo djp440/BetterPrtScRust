@@ -42,6 +42,7 @@ mod capture;
 mod cli;
 mod command;
 mod config;
+mod downscale;
 mod encode;
 mod error;
 mod filename;

@@ -178,3 +178,13 @@ annotation-auto-save = Auto-save
 annotation-copy = Copy
 save-as-file-type = { $format } image
 notification-save-as-failed-title = Could not save the screenshot
+
+## Long screenshot
+
+long-screenshot-start = Start
+long-screenshot-finish = Done
+long-screenshot-cancel = Cancel
+long-screenshot-size = Stitched { $width } × { $height }
+long-screenshot-lost = Scrolled too fast, scroll back a little
+notification-long-screenshot-full-title = Long screenshot reached the height limit
+notification-long-screenshot-full-body = Long screenshots are at most { $limit } pixels tall; stitching stopped automatically.

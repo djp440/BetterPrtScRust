@@ -255,6 +255,17 @@ impl SelectionOverlay for D2dSelectionOverlay {
             .update_canvas(&canvas.bitmap, left, top, patch)
     }
 
+    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError> {
+        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
+        else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        if session.live.is_some() {
+            return Err(PlatformError::new("实时画面上的遮罩本来就是透明的"));
+        }
+        resources.window.set_pass_through(area)
+    }
+
     fn close(&mut self) {
         let Some(session) = self.session.take() else {
             return;

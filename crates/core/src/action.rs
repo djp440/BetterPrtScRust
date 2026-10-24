@@ -23,10 +23,11 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
             | PostCaptureAction::AutoSave
             | PostCaptureAction::Record
             | PostCaptureAction::Annotate
+            | PostCaptureAction::LongScreenshot
     )
 }
 
-/// 对截图执行截后动作（标注在此之前已由区域捕获处理，这里忽略它）。
+/// 对截图执行截后动作（标注、长截屏在此之前已由区域捕获、长截屏会话处理，这里忽略它们）。
 ///
 /// 复制到剪贴板和自动存储共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
 /// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。

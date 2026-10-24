@@ -178,3 +178,13 @@ annotation-auto-save = 自动存储
 annotation-copy = 复制
 save-as-file-type = { $format } 图像
 notification-save-as-failed-title = 另存为失败
+
+## 长截屏
+
+long-screenshot-start = 开始
+long-screenshot-finish = 完成
+long-screenshot-cancel = 取消
+long-screenshot-size = 已拼接 { $width } × { $height }
+long-screenshot-lost = 滚动太快，请往回滚一点
+notification-long-screenshot-full-title = 长截屏已到达高度上限
+notification-long-screenshot-full-body = 长截屏最高 { $limit } 像素，已自动停止拼接。

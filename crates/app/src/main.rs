@@ -172,7 +172,10 @@ mod resident {
             let started = Instant::now();
             let description = format!("{event:?}");
             // 遮罩上的鼠标移动等输入很密集，只在出错时输出。
-            let quiet = matches!(event, PlatformEvent::OverlayInput(_));
+            let quiet = matches!(
+                event,
+                PlatformEvent::OverlayInput(_) | PlatformEvent::RegionSampled
+            );
             match instance.handle(event) {
                 Ok(Flow::Continue) => {
                     if !quiet {
