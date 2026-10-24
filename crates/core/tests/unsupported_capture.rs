@@ -1,70 +1,13 @@
-//! 配置能表达后续 ticket 才实现的截后动作；执行到它们时明确报告“暂不支持”，
-//! 不崩溃、不产生任何产物。
+//! 所有截后动作都已实现后，只剩“默认绑定要么能跑、要么明确报告暂不支持”这一条兜底。
 
-use bps_core::{
-    CaptureMode, CaptureRequest, Command, CoreError, Flow, PostCaptureAction, ResidentInstance,
-};
-use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
+use bps_core::{CoreError, Flow, ResidentInstance};
+use bps_platform::{Point, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
 
 fn desktop() -> FakePlatform {
     FakePlatform::new()
         .with_display(FakeDisplay::new(Rect::new(0, 0, 32, 24)).primary())
         .with_cursor_at(Point::new(5, 5))
-}
-
-#[test]
-fn unimplemented_action_rejects_whole_capture_before_earlier_actions_run() {
-    let fake = desktop();
-    let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
-
-    let result = instance.execute(Command::Capture(CaptureRequest::new(
-        CaptureMode::Display,
-        vec![
-            PostCaptureAction::CopyToClipboard,
-            PostCaptureAction::Translate,
-        ],
-    )));
-
-    assert_eq!(
-        result,
-        Err(CoreError::UnsupportedAction(PostCaptureAction::Translate))
-    );
-    assert!(fake.clipboard().is_empty(), "不应只执行了一半的截后动作");
-}
-
-#[test]
-fn pressing_unimplemented_binding_notifies_unsupported_and_keeps_running() {
-    let fake = desktop().with_config_file(
-        r#"
-[[bindings]]
-hotkey = "Ctrl+F9"
-mode = "region"
-actions = ["translate"]
-"#,
-    );
-    let mut instance = ResidentInstance::start(fake.platform());
-
-    let translate = fake
-        .press(Hotkey::new(Modifiers::CTRL, Key::F(9)))
-        .expect("配置的绑定应注册 Ctrl+F9");
-    let result = instance.handle(translate);
-
-    // “区域 + 翻译”：翻译还没实现，在打开选区遮罩之前就整体拒绝。
-    assert_eq!(
-        result,
-        Err(CoreError::UnsupportedAction(PostCaptureAction::Translate))
-    );
-    let notifications = fake.notifications();
-    assert_eq!(notifications.len(), 1, "{notifications:?}");
-    assert_eq!(notifications[0].title, "暂不支持");
-    assert_eq!(notifications[0].body, "暂不支持“翻译”截后动作");
-    assert!(!fake.overlay_visible(), "不应打开选区遮罩");
-    assert!(fake.clipboard().is_empty());
-    assert_eq!(
-        instance.handle(bps_platform::PlatformEvent::ExitRequested),
-        Ok(Flow::Exit)
-    );
 }
 
 #[test]
