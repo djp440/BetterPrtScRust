@@ -12,7 +12,7 @@ use bps_platform::{
     PointerButton, Rect,
 };
 use windows::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, ID2D1Bitmap1,
@@ -34,14 +34,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-    IDC_SIZENWSE, IDC_SIZEWE, LoadCursorW, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
+    GetWindowLongPtrW, HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW,
+    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, LoadCursorW, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE,
     SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDBLCLK,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -65,15 +65,15 @@ pub(crate) fn visible_overlay_window() -> Option<HWND> {
 }
 
 /// 窗口过程与 [`OverlayWindow`] 共享的状态；窗口过程会被同步重入，所以只用 `Cell`。
-struct Shared {
-    queue: EventQueue,
+pub(super) struct Shared {
+    pub queue: EventQueue,
     /// 窗口左上角在虚拟桌面中的位置：客户区坐标 + `origin` = 虚拟桌面坐标。
-    origin: Cell<Point>,
-    cursor: Cell<OverlayCursor>,
+    pub origin: Cell<Point>,
+    pub cursor: Cell<OverlayCursor>,
     /// 遮罩正显示着；只在这期间递交用户输入。
-    active: Cell<bool>,
+    pub active: Cell<bool>,
     /// 显示器布局变了，窗口和交换链需要重建。
-    stale: Cell<bool>,
+    pub stale: Cell<bool>,
 }
 
 pub(crate) struct OverlayWindow {
@@ -262,7 +262,7 @@ impl Drop for OverlayWindow {
 }
 
 /// 创建过程中出错时销毁已建好的窗口。
-struct PartialWindow(HWND);
+pub(super) struct PartialWindow(pub HWND);
 
 impl Drop for PartialWindow {
     fn drop(&mut self) {
@@ -273,7 +273,7 @@ impl Drop for PartialWindow {
     }
 }
 
-fn cloak(hwnd: HWND, on: bool) {
+pub(super) fn cloak(hwnd: HWND, on: bool) {
     let value = BOOL::from(on);
     unsafe {
         let _ = DwmSetWindowAttribute(
@@ -285,7 +285,7 @@ fn cloak(hwnd: HWND, on: bool) {
     }
 }
 
-fn apply_cursor(cursor: OverlayCursor) {
+pub(super) fn apply_cursor(cursor: OverlayCursor) {
     let id = match cursor {
         OverlayCursor::Crosshair => IDC_CROSS,
         OverlayCursor::Arrow => IDC_ARROW,
@@ -302,7 +302,7 @@ fn apply_cursor(cursor: OverlayCursor) {
     }
 }
 
-unsafe extern "system" fn window_proc(
+pub(super) unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -357,6 +357,18 @@ unsafe extern "system" fn window_proc(
         WM_RBUTTONDOWN => pressed(PointerButton::Right, false),
         WM_RBUTTONDBLCLK => pressed(PointerButton::Right, true),
         WM_RBUTTONUP => released(PointerButton::Right),
+        // 修饰键按下或松开时指针没动，也在原位置递交一次移动：依赖修饰键的交互（如按住 Ctrl
+        // 临时不吸附）不必等用户再动鼠标就能更新。按住不放时的自动重复不递交。
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP if is_modifier(wparam) => {
+            let repeat = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN) && lparam.0 & (1 << 30) != 0;
+            if !repeat && let Some(position) = cursor_position() {
+                input(OverlayInput::PointerMoved {
+                    position,
+                    modifiers: modifiers(),
+                });
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         WM_KEYDOWN | WM_SYSKEYDOWN => match key(wparam) {
             Some(key) => input(OverlayInput::KeyPressed {
                 key,
@@ -398,6 +410,20 @@ fn key(wparam: WPARAM) -> Option<OverlayKey> {
         VK_C => Some(OverlayKey::C),
         _ => None,
     }
+}
+
+fn is_modifier(wparam: WPARAM) -> bool {
+    matches!(
+        VIRTUAL_KEY(wparam.0 as u16),
+        VK_CONTROL | VK_MENU | VK_SHIFT | VK_LWIN | VK_RWIN
+    )
+}
+
+/// 光标此刻在虚拟桌面上的位置（物理像素：进程是 PMv2 DPI 感知的）。
+fn cursor_position() -> Option<Point> {
+    let mut point = POINT::default();
+    unsafe { GetCursorPos(&mut point) }.ok()?;
+    Some(Point::new(point.x, point.y))
 }
 
 fn modifiers() -> Modifiers {

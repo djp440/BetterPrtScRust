@@ -14,6 +14,7 @@
 //! - 还没有选区、拖拽框选、拖动手柄时显示放大镜（[`RegionSelection::magnifier_focus`]），
 //!   这时按 C 复制放大镜对准的像素的颜色值（[`Step::CopyColor`]）。
 //! - 选区锁定（[`RegionSelection::lock`]，开始标注）后不再显示手柄和放大镜。
+//! - 拖拽时选区的边吸附到附近窗口、控件的边缘，按住 Ctrl 临时不吸附（见 [`crate::snap`]）。
 //!
 //! 扩展点（后续 ticket）：在 [`State`] 里加状态或字段，在 [`RegionSelection::handle`] 里处理
 //! 新输入，在 [`RegionSelection::scene`] 里按层追加绘制元素。调整选区的几何计算在 `adjust`
@@ -24,6 +25,7 @@ use bps_platform::{
     OverlayScene, Point, PointerButton, Rect,
 };
 
+use crate::snap::{DragEnd, SNAP_DISTANCE, Snapping};
 use crate::stitch::virtual_desktop_bounds;
 
 mod adjust;
@@ -92,6 +94,8 @@ pub(crate) struct RegionSelection {
     pointer: Option<Point>,
     /// 选区已锁定（开始标注），不再显示手柄和放大镜。
     locked: bool,
+    /// 拖拽框选时选区的边吸附到窗口、控件的边缘；默认没有目标，不吸附。
+    snapping: Snapping,
 }
 
 impl RegionSelection {
@@ -105,6 +109,7 @@ impl RegionSelection {
             selected_hint: Some(selected_hint),
             pointer: None,
             locked: false,
+            snapping: Snapping::default(),
         })
     }
 
@@ -112,6 +117,12 @@ impl RegionSelection {
     /// 这里不再收到输入。
     pub fn lock(&mut self) {
         self.locked = true;
+    }
+
+    /// 拖拽框选时，选区的边按 `snapping` 吸附。
+    pub fn with_snapping(mut self, snapping: Snapping) -> Self {
+        self.snapping = snapping;
+        self
     }
 
     /// 一开始就已框好 `region`（例如显示器模式下直接标注整块显示器）。
@@ -126,6 +137,11 @@ impl RegionSelection {
         self
     }
 
+    /// 框选时的吸附，供持有平台的一方补充吸附目标。
+    pub fn snapping_mut(&mut self) -> &mut Snapping {
+        &mut self.snapping
+    }
+
     /// 已经框好、等待确定的选区；还没有选区或正在拖拽时为 `None`。
     pub fn selected(&self) -> Option<Rect> {
         match self.state {
@@ -137,6 +153,7 @@ impl RegionSelection {
     /// 处理一次用户输入。
     pub fn handle(&mut self, input: &OverlayInput) -> Step {
         use OverlayInput::*;
+        self.snapping.observe(input);
         if let PointerMoved { position, .. }
         | PointerPressed { position, .. }
         | PointerReleased { position, .. } = *input
@@ -274,7 +291,7 @@ impl RegionSelection {
                 self.state = if current == anchor {
                     previous.map_or(State::Idle, State::Selected)
                 } else {
-                    State::Selected(between(anchor, current))
+                    State::Selected(self.dragged(anchor, current))
                 };
             }
             (
@@ -302,7 +319,7 @@ impl RegionSelection {
             State::Idle => None,
             State::Dragging {
                 anchor, current, ..
-            } => Some(between(anchor, current)),
+            } => Some(self.dragged(anchor, current)),
             State::Selected(region) => Some(region),
             State::Adjusting {
                 original,
@@ -454,6 +471,14 @@ impl RegionSelection {
             .or_else(|| self.displays.iter().find(|d| d.is_primary))
             .or_else(|| self.displays.first())
             .map_or(1.0, |d| d.scale_factor)
+    }
+
+    /// 从 `anchor` 拖到 `current` 框出的选区，边缘按吸附规则对齐。
+    fn dragged(&self, anchor: Point, current: Point) -> Rect {
+        let end = |point: Point| {
+            DragEnd::new(point, (SNAP_DISTANCE * self.scale_at(point)).round() as i32)
+        };
+        self.snapping.region(self.bounds, end(anchor), end(current))
     }
 
     /// 把指针位置限制在虚拟桌面范围内。
