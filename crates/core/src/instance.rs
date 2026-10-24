@@ -440,8 +440,7 @@ impl ResidentInstance {
         }
         let screenshot = capture::capture(&self.platform, request.mode)
             .map_err(CaptureFailure::before_actions)?;
-        action::run(&mut self.platform, &screenshot, request, texts)
-            .map_err(|error| CaptureFailure::in_actions(error, request))?;
+        action::run(&mut self.platform, screenshot, request, texts)?;
         Ok(Progress::Done(Flow::Continue))
     }
 

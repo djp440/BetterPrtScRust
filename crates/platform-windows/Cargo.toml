@@ -15,6 +15,13 @@ serde_json.workspace = true
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [
+    # 文字识别（Windows.Media.Ocr），只在结果面板子进程里用。
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Security_Cryptography",
+    "Storage_Streams",
     "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Globalization",

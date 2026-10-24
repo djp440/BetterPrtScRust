@@ -21,6 +21,7 @@ mod hotkey;
 mod image;
 mod language;
 mod notifier;
+mod ocr;
 mod overlay;
 mod request;
 mod resident_channel;
@@ -44,6 +45,7 @@ pub use hotkey::{
 pub use image::Image;
 pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use ocr::{RecognitionLanguage, RecognizedLine, TextRecognizer};
 pub use overlay::{
     Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
     OverlayScene, PointerButton, SelectionOverlay,

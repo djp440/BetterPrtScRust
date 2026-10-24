@@ -1,7 +1,8 @@
 //! `bps-platform` 能力 trait 的 Windows 实现（ADR 0002），尽量薄。
 //!
 //! - [`DxgiFrameSource`]：显示器布局 + 鼠标位置 + DXGI Desktop Duplication 截图
-//! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `JFIF` / `CF_DIB` / `CF_HDROP` 等
+//! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `JFIF` / `CF_DIB` / `CF_HDROP` 等；
+//!   [`read_clipboard_text`] / [`write_clipboard_text`]：界面子进程的文本框读写剪贴板文字
 //! - [`WindowsHotkeys`]：`RegisterHotKey`，按下时由 [`EventLoop`] 递交 `PlatformEvent`
 //! - [`WindowsFileSystem`]：“图片”文件夹位置 + 不覆盖已有文件的写盘
 //! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
@@ -14,7 +15,9 @@
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
-//! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面
+//! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面；
+//!   [`read_screenshot`]：结果面板子进程读取常驻实例经标准输入交来的截图
+//! - [`WindowsTextRecognizer`]：文字识别（`Windows.Media.Ocr`，本机识别，只在结果面板子进程里用）
 //! - [`WindowsSystemLanguage`]：系统界面语言
 //! - [`GitHubReleases`]：检查更新（WinHTTP 查询 GitHub Releases，只在用户开启时使用）
 //! - [`map_system_font`]：给界面子进程只读映射系统字体；[`open_with_default_program`]、
@@ -43,6 +46,7 @@ mod frame_source;
 mod hotkeys;
 mod language;
 mod notifier;
+mod ocr;
 mod overlay;
 mod pipe;
 mod pixels;
@@ -53,8 +57,10 @@ mod token;
 mod update;
 
 pub use autostart::WindowsAutostart;
-pub use child_windows::{ChildProcessWindows, window_argument};
-pub use clipboard::WindowsClipboard;
+pub use child_windows::{
+    ChildProcessWindows, RESULT_PANEL_ARGUMENT, SETTINGS_ARGUMENT, read_screenshot, window_argument,
+};
+pub use clipboard::{WindowsClipboard, read_clipboard_text, write_clipboard_text};
 pub use clock::WindowsClock;
 pub use config_file::WindowsConfigFile;
 pub use event_loop::{EventLoop, EventSender, WindowsTrayMenu};
@@ -64,6 +70,7 @@ pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
+pub use ocr::WindowsTextRecognizer;
 pub use overlay::D2dSelectionOverlay;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 pub use screenshot_tool::WindowsScreenshotTool;

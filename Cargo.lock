@@ -287,6 +287,7 @@ version = "0.1.0"
 dependencies = [
  "bps-core",
  "bps-platform",
+ "bps-platform-windows",
  "eframe",
 ]
 
