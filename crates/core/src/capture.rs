@@ -18,6 +18,9 @@ pub(crate) fn capture(
             let image = frames.capture_display(display.id)?;
             Ok(Screenshot { image })
         }
+        CaptureMode::VirtualDesktop | CaptureMode::Region | CaptureMode::Window => {
+            Err(CoreError::UnsupportedCaptureMode(mode))
+        }
     }
 }
 

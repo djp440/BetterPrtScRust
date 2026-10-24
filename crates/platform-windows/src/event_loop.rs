@@ -3,10 +3,12 @@
 //! 热键（`WM_HOTKEY`）、托盘菜单、关闭请求都在窗口过程里转换成 [`PlatformEvent`]
 //! 放进队列，由 [`EventLoop::run`] 在窗口过程之外逐个交给处理函数，
 //! 因此处理函数里执行耗时的捕获不会重入窗口过程。
+//! 其他线程（命名管道等）经 [`EventSender`] 投递事件，同样进入这个队列。
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ops::ControlFlow;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use bps_platform::{HotkeyId, Image, PlatformError, PlatformEvent};
@@ -39,6 +41,8 @@ use crate::error::win_error;
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
 /// 托盘图标回调消息。
 const WM_TRAY: u32 = WM_APP + 1;
+/// 其他线程经 [`EventSender`] 投递了事件，唤醒消息循环去取。
+const WM_SENT_EVENT: u32 = WM_APP + 2;
 const TRAY_ICON_ID: u32 = 1;
 const MENU_EXIT: usize = 1;
 
@@ -47,13 +51,35 @@ pub struct EventLoop {
     hwnd: HWND,
     /// 窗口过程通过 `GWLP_USERDATA` 访问它，所以放在堆上保证地址不变。
     state: Box<WindowState>,
+    sender: mpsc::Sender<PlatformEvent>,
 }
 
 struct WindowState {
     events: RefCell<VecDeque<PlatformEvent>>,
+    /// 其他线程投递的事件，收到 `WM_SENT_EVENT` 时移进 `events`。
+    sent: mpsc::Receiver<PlatformEvent>,
     tray: RefCell<Option<TrayIcon>>,
     /// 资源管理器重启后广播的消息，收到时重新添加托盘图标。
     taskbar_created: u32,
+}
+
+/// 从其他线程向 [`EventLoop`] 投递事件的句柄，可以克隆、跨线程传递。
+#[derive(Clone)]
+pub struct EventSender {
+    /// 隐藏窗口的句柄；`HWND` 不是 `Send`，所以存成整数。
+    hwnd: isize,
+    events: mpsc::Sender<PlatformEvent>,
+}
+
+impl EventSender {
+    /// 投递一个事件并唤醒消息循环。事件循环已经结束时把事件原样退回。
+    pub fn send(&self, event: PlatformEvent) -> Result<(), PlatformEvent> {
+        self.events.send(event).map_err(|e| e.0)?;
+        let hwnd = HWND(self.hwnd as *mut _);
+        // 窗口已销毁时投递失败：事件随事件循环一起丢弃，请求方会收到“没有回复”。
+        let _ = unsafe { PostMessageW(Some(hwnd), WM_SENT_EVENT, WPARAM(0), LPARAM(0)) };
+        Ok(())
+    }
 }
 
 impl WindowState {
@@ -96,13 +122,27 @@ impl EventLoop {
                 None,
             )
             .map_err(|e| win_error("创建隐藏窗口失败", e))?;
+            let (sender, sent) = mpsc::channel();
             let state = Box::new(WindowState {
                 events: RefCell::new(VecDeque::new()),
+                sent,
                 tray: RefCell::new(None),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize);
-            Ok(Self { hwnd, state })
+            Ok(Self {
+                hwnd,
+                state,
+                sender,
+            })
+        }
+    }
+
+    /// 供其他线程向本循环投递事件的句柄。
+    pub fn sender(&self) -> EventSender {
+        EventSender {
+            hwnd: self.hwnd.0 as isize,
+            events: self.sender.clone(),
         }
     }
 
@@ -210,6 +250,12 @@ unsafe extern "system" fn window_proc(
             }
             WM_CLOSE => {
                 state.push(PlatformEvent::ExitRequested);
+                return LRESULT(0);
+            }
+            WM_SENT_EVENT => {
+                while let Ok(event) = state.sent.try_recv() {
+                    state.push(event);
+                }
                 return LRESULT(0);
             }
             m if m != 0 && m == state.taskbar_created => {

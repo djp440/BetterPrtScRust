@@ -15,6 +15,8 @@ mod frame_source;
 mod geometry;
 mod hotkey;
 mod image;
+mod request;
+mod resident_channel;
 
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use error::PlatformError;
@@ -23,6 +25,8 @@ pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
 pub use image::Image;
+pub use request::IncomingRequest;
+pub use resident_channel::{ChannelError, ResidentChannel};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
