@@ -48,7 +48,7 @@ $WM_HOTKEY = 0x0312
 $WM_RBUTTONUP = 0x0205
 $WM_TRAY = 0x8000 + 1   # WM_APP + 1，见 platform-windows 的 event_loop.rs
 $VK_RETURN = 0x0D
-$VK_DOWN = 0x28
+$VK_UP = 0x26
 # 第 1 条热键绑定的标识（热键标识 = 绑定下标 + 1）。
 $FirstBinding = 1
 
@@ -66,7 +66,8 @@ function Exit-ViaTrayMenu([IntPtr]$hwnd) {
     if ($menu -eq [IntPtr]::Zero) { throw '托盘菜单没有弹出' }
     '托盘菜单已弹出，选择“退出”'
     Start-Sleep -Milliseconds 500
-    [BpsSmokeUser32]::PostMessageW($menu, $WM_KEYDOWN, [IntPtr]$VK_DOWN, [IntPtr]::Zero) | Out-Null
+    # “退出”是菜单的最后一项（前面是“设置”）：没有选中项时按上箭头选中最后一项。
+    [BpsSmokeUser32]::PostMessageW($menu, $WM_KEYDOWN, [IntPtr]$VK_UP, [IntPtr]::Zero) | Out-Null
     [BpsSmokeUser32]::PostMessageW($menu, $WM_KEYDOWN, [IntPtr]$VK_RETURN, [IntPtr]::Zero) | Out-Null
 }
 

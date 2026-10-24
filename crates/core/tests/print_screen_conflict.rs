@@ -134,7 +134,7 @@ fn print_screen_taken_by_another_program_gets_the_ordinary_failure_notice() {
     assert_eq!(notifications[0].title, "热键注册失败");
     assert!(matches!(
         instance.registration_failures()[0].error,
-        RegistrationError::Platform(_)
+        RegistrationError::TakenByOtherProgram
     ));
 }
 
@@ -183,6 +183,6 @@ fn still_taken_after_setting_change_reports_the_other_program() {
     );
     assert!(matches!(
         instance.registration_failures()[0].error,
-        RegistrationError::Platform(_)
+        RegistrationError::TakenByOtherProgram
     ));
 }

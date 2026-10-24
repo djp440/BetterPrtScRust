@@ -69,11 +69,11 @@ pub fn window_pattern(width: u32, height: u32) -> Image {
 
 /// 假桌面上的窗口，按添加顺序排列（后添加的在上层）。已关闭的窗口留空位，标识不复用。
 #[derive(Default)]
-pub(crate) struct WindowState {
+pub(crate) struct WindowSourceState {
     pub windows: Vec<Option<FakeWindow>>,
 }
 
-impl WindowState {
+impl WindowSourceState {
     fn open_windows(&self) -> impl Iterator<Item = (WindowId, &FakeWindow)> {
         self.windows
             .iter()
@@ -94,7 +94,7 @@ pub(crate) fn id_of(index: usize) -> WindowId {
     WindowId(index as u64 + 1)
 }
 
-pub(crate) struct FakeWindowSource(pub Arc<Mutex<WindowState>>);
+pub(crate) struct FakeWindowSource(pub Arc<Mutex<WindowSourceState>>);
 
 impl WindowSource for FakeWindowSource {
     fn layout(&self) -> Result<WindowLayout, PlatformError> {

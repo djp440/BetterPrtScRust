@@ -35,13 +35,17 @@ mod encode;
 mod error;
 mod filename;
 mod forward;
+mod i18n;
 mod instance;
 mod location;
 mod output;
 mod region;
 mod request;
 mod selection;
+mod settings;
+mod status;
 mod stitch;
+mod update;
 mod window;
 mod window_selection;
 
@@ -58,8 +62,12 @@ pub use filename::{
     DEFAULT_FILENAME_TEMPLATE, FilenameFields, FilenameTemplate, FilenameTemplateError,
 };
 pub use forward::{ForwardError, WhenNotRunning, forward};
+pub use i18n::{Language, Locale, Texts, UnknownLanguage};
 pub use instance::{ResidentInstance, StartOptions};
 pub use location::{DataLocation, PORTABLE_MARKER};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{Reply, Request};
+pub use settings::{BindingSettings, Settings, SettingsDocument, SettingsProblem};
+pub use status::{BindingFailure, ResidentStatus, UpdateStatus};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};
+pub use update::VERSION;

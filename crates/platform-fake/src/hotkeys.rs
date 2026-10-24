@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use bps_platform::{GlobalHotkeys, Hotkey, HotkeyId, PlatformError};
+use bps_platform::{GlobalHotkeys, Hotkey, HotkeyId, PlatformError, RegisterHotkeyError};
 
 #[derive(Default)]
 pub(crate) struct HotkeyState {
@@ -26,16 +26,16 @@ impl HotkeyState {
 pub(crate) struct FakeHotkeys(pub Arc<Mutex<HotkeyState>>);
 
 impl GlobalHotkeys for FakeHotkeys {
-    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), PlatformError> {
+    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), RegisterHotkeyError> {
         let mut state = self.0.lock().unwrap();
         if state.registered.iter().any(|(i, _)| *i == id) {
-            return Err(PlatformError::new(format!("热键标识 {id:?} 已被使用")));
+            return Err(PlatformError::new(format!("热键标识 {id:?} 已被使用")).into());
         }
         if state.occupied.contains(&hotkey) {
-            return Err(PlatformError::new("已被其他程序占用"));
+            return Err(RegisterHotkeyError::TakenByOtherProgram);
         }
         if state.id_of(hotkey).is_some() {
-            return Err(PlatformError::new(format!("热键 {hotkey:?} 已被注册")));
+            return Err(PlatformError::new(format!("热键 {hotkey:?} 已被注册")).into());
         }
         state.registered.push((id, hotkey));
         Ok(())

@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::OutputOptions;
+use crate::{Locale, OutputOptions, Texts};
 
 /// 交给常驻实例执行的命令，是 `core` 的唯一入口。
 ///
@@ -9,9 +9,10 @@ use crate::OutputOptions;
 pub enum Command {
     /// 按捕获模式捕获一次，然后依次执行截后动作。
     Capture(CaptureRequest),
-    /// 用户再次启动了程序：激活已在运行的常驻实例。
-    /// 目前常驻实例只有托盘图标、没有可显示的界面，所以什么也不做；有了设置界面后改为打开它。
+    /// 用户再次启动了程序：激活已在运行的常驻实例，即打开设置界面。
     Activate,
+    /// 打开设置界面（托盘菜单“设置”）；已经打开时把它带到前台。
+    OpenSettings,
     /// 注销热键并结束常驻实例。
     Exit,
 }
@@ -71,13 +72,36 @@ pub enum CaptureMode {
 }
 
 impl CaptureMode {
-    /// 术语表里的中文名称，用于给人看的消息。
-    pub fn label(self) -> &'static str {
+    /// 全部捕获模式，按术语表的顺序排列。
+    pub const ALL: [CaptureMode; 4] = [
+        CaptureMode::Display,
+        CaptureMode::VirtualDesktop,
+        CaptureMode::Region,
+        CaptureMode::Window,
+    ];
+
+    /// 术语表里的中文名称，用于 CLI 和日志。
+    pub fn label(self) -> String {
+        self.localized_label(Texts::of(Locale::ZhCn))
+    }
+
+    /// 界面上显示的名称。
+    pub fn localized_label(self, texts: &Texts) -> String {
+        texts.get(match self {
+            CaptureMode::Display => "mode-display",
+            CaptureMode::VirtualDesktop => "mode-virtual-desktop",
+            CaptureMode::Region => "mode-region",
+            CaptureMode::Window => "mode-window",
+        })
+    }
+
+    /// 配置文件里的写法。
+    pub fn config_name(self) -> &'static str {
         match self {
-            CaptureMode::Display => "显示器",
-            CaptureMode::VirtualDesktop => "虚拟桌面",
-            CaptureMode::Region => "区域",
-            CaptureMode::Window => "窗口",
+            CaptureMode::Display => "display",
+            CaptureMode::VirtualDesktop => "virtual_desktop",
+            CaptureMode::Region => "region",
+            CaptureMode::Window => "window",
         }
     }
 }
@@ -106,16 +130,45 @@ pub enum PostCaptureAction {
 }
 
 impl PostCaptureAction {
-    /// 术语表里的中文名称，用于给人看的消息。
-    pub fn label(self) -> &'static str {
+    /// 全部截后动作，按术语表的顺序排列。
+    pub const ALL: [PostCaptureAction; 7] = [
+        PostCaptureAction::CopyToClipboard,
+        PostCaptureAction::AutoSave,
+        PostCaptureAction::Annotate,
+        PostCaptureAction::Record,
+        PostCaptureAction::LongScreenshot,
+        PostCaptureAction::Ocr,
+        PostCaptureAction::Translate,
+    ];
+
+    /// 术语表里的中文名称，用于 CLI 和日志。
+    pub fn label(self) -> String {
+        self.localized_label(Texts::of(Locale::ZhCn))
+    }
+
+    /// 界面上显示的名称。
+    pub fn localized_label(self, texts: &Texts) -> String {
+        texts.get(match self {
+            PostCaptureAction::CopyToClipboard => "action-copy-to-clipboard",
+            PostCaptureAction::AutoSave => "action-auto-save",
+            PostCaptureAction::Annotate => "action-annotate",
+            PostCaptureAction::Record => "action-record",
+            PostCaptureAction::LongScreenshot => "action-long-screenshot",
+            PostCaptureAction::Ocr => "action-ocr",
+            PostCaptureAction::Translate => "action-translate",
+        })
+    }
+
+    /// 配置文件里的写法。
+    pub fn config_name(self) -> &'static str {
         match self {
-            PostCaptureAction::CopyToClipboard => "复制到剪贴板",
-            PostCaptureAction::AutoSave => "自动存储",
-            PostCaptureAction::Annotate => "标注",
-            PostCaptureAction::Record => "录屏",
-            PostCaptureAction::LongScreenshot => "长截屏",
-            PostCaptureAction::Ocr => "OCR",
-            PostCaptureAction::Translate => "翻译",
+            PostCaptureAction::CopyToClipboard => "copy_to_clipboard",
+            PostCaptureAction::AutoSave => "auto_save",
+            PostCaptureAction::Annotate => "annotate",
+            PostCaptureAction::Record => "record",
+            PostCaptureAction::LongScreenshot => "long_screenshot",
+            PostCaptureAction::Ocr => "ocr",
+            PostCaptureAction::Translate => "translate",
         }
     }
 }

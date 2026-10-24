@@ -8,7 +8,8 @@ use crate::capture::Screenshot;
 use crate::filename::FilenameFields;
 use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::{
-    CaptureRequest, CoreError, OutputFormat, OutputOptions, PostCaptureAction, SaveDir, encode,
+    CaptureRequest, CoreError, OutputFormat, OutputOptions, PostCaptureAction, SaveDir, Texts,
+    encode,
 };
 
 /// 同名文件最多尝试到 `-N` 的 N。
@@ -26,11 +27,12 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
 ///
 /// 复制到剪贴板和自动存储共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
 /// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。
-/// 自动存储的结果（成功或失败）都会发通知。
+/// 自动存储的结果（成功或失败）都会发通知，通知文字用 `texts` 的语言。
 pub(crate) fn run(
     platform: &mut Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,
+    texts: &Texts,
 ) -> Result<(), CoreError> {
     let copy = request
         .actions
@@ -50,22 +52,22 @@ pub(crate) fn run(
         Ok(())
     };
     if let Some(saved) = &saved {
-        notify_auto_save(platform, saved);
+        notify_auto_save(platform, saved, texts);
     }
     saved.transpose()?;
     copied
 }
 
-fn notify_auto_save(platform: &Platform, saved: &Result<PathBuf, CoreError>) {
+fn notify_auto_save(platform: &Platform, saved: &Result<PathBuf, CoreError>, texts: &Texts) {
     let notification = match saved {
         Ok(path) => Notification {
-            title: "截图已保存".to_owned(),
+            title: texts.get("notification-saved-title"),
             body: path.display().to_string(),
             on_click: Some(NotificationClick::OpenFile(path.clone())),
         },
         Err(error) => Notification {
-            title: "自动存储失败".to_owned(),
-            body: error.to_string(),
+            title: texts.get("notification-save-failed-title"),
+            body: error.localized(texts),
             on_click: None,
         },
     };

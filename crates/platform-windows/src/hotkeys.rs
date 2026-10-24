@@ -1,6 +1,8 @@
 //! 全局热键：`RegisterHotKey` 绑定到事件循环的隐藏窗口，按下时收到 `WM_HOTKEY`。
 
-use bps_platform::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, PlatformError};
+use bps_platform::{
+    GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, PlatformError, RegisterHotkeyError,
+};
 use windows::Win32::Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, HWND};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
@@ -25,15 +27,15 @@ impl WindowsHotkeys {
 }
 
 impl GlobalHotkeys for WindowsHotkeys {
-    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), PlatformError> {
+    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), RegisterHotkeyError> {
         let vk = virtual_key(hotkey.key)?;
         let modifiers = modifier_flags(hotkey.modifiers) | MOD_NOREPEAT;
         unsafe { RegisterHotKey(Some(self.hwnd), native_id(id)?, modifiers, u32::from(vk.0)) }
             .map_err(|e| {
                 if e.code() == ERROR_HOTKEY_ALREADY_REGISTERED.to_hresult() {
-                    PlatformError::new("已被其他程序占用")
+                    RegisterHotkeyError::TakenByOtherProgram
                 } else {
-                    win_error(&format!("注册热键 {hotkey} 失败"), e)
+                    win_error(&format!("注册热键 {hotkey} 失败"), e).into()
                 }
             })?;
         self.registered.push(id);

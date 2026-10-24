@@ -14,7 +14,7 @@ use std::str::FromStr;
 
 use bps_platform::LocalDateTime;
 
-use crate::CaptureMode;
+use crate::{CaptureMode, Locale, Texts};
 // `{mode}` 的取值与 CLI 里的捕获模式名称一致（display、virtual-desktop、region、window）。
 use crate::request::mode_name;
 
@@ -78,21 +78,22 @@ pub enum FilenameTemplateError {
     UnknownPlaceholder(String),
 }
 
+impl FilenameTemplateError {
+    /// 用 `texts` 的语言说明错误。
+    pub fn localized(&self, texts: &Texts) -> String {
+        match self {
+            FilenameTemplateError::UnclosedPlaceholder => texts.get("template-unclosed"),
+            FilenameTemplateError::UnmatchedClosingBrace => texts.get("template-unmatched-closing"),
+            FilenameTemplateError::UnknownPlaceholder(name) => {
+                texts.format("template-unknown-placeholder", &[("name", name)])
+            }
+        }
+    }
+}
+
 impl fmt::Display for FilenameTemplateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FilenameTemplateError::UnclosedPlaceholder => {
-                f.write_str("命名模板中的 { 没有对应的 }")
-            }
-            FilenameTemplateError::UnmatchedClosingBrace => {
-                f.write_str("命名模板中有单独的 }，字面的花括号请写成 {{ 或 }}")
-            }
-            FilenameTemplateError::UnknownPlaceholder(name) => write!(
-                f,
-                "命名模板中有无法识别的占位符 {{{name}}}；可用 {{mode}}、{{window_title}} \
-                 或由 yyyy、yy、MM、M、dd、d、HH、H、mm、m、ss、s、fff 组成的日期时间格式"
-            ),
-        }
+        f.write_str(&self.localized(Texts::of(Locale::ZhCn)))
     }
 }
 

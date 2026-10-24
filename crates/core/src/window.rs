@@ -14,7 +14,7 @@ use bps_platform::{
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::region::Ending;
 use crate::window_selection::{WindowSelection, WindowStep};
-use crate::{CaptureMode, CaptureRequest, CoreError, action};
+use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
 /// 进行中的窗口捕获。
 pub(crate) struct WindowCapture {
@@ -24,15 +24,21 @@ pub(crate) struct WindowCapture {
     selection: WindowSelection,
     /// 遮罩上当前画着的场景；场景没变时不重画。
     drawn: Option<OverlayScene>,
+    /// 开始捕获时的界面语言：截后动作的通知用它。
+    texts: &'static Texts,
     /// 经 CLI 转交来、等捕获结束再回复的请求。
     pub requester: Option<IncomingRequest>,
 }
 
 impl WindowCapture {
-    /// 取得此刻的窗口布局、拍下冻结帧并显示选区遮罩。
-    pub fn start(platform: &mut Platform, request: CaptureRequest) -> Result<Self, CoreError> {
+    /// 取得此刻的窗口布局、拍下冻结帧并显示选区遮罩；截后动作的通知用 `texts` 的语言。
+    pub fn start(
+        platform: &mut Platform,
+        request: CaptureRequest,
+        texts: &'static Texts,
+    ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
-        let layout = platform.windows.layout()?;
+        let layout = platform.window_source.layout()?;
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
         // 遮罩一出现就高亮光标下的窗口；读不到光标位置时等第一次移动。
         let cursor = platform.frame_source.cursor_position().ok();
@@ -45,6 +51,7 @@ impl WindowCapture {
             captured_at,
             selection,
             drawn: None,
+            texts,
             requester: None,
         };
         if let Err(e) = capture.redraw(platform) {
@@ -86,7 +93,7 @@ impl WindowCapture {
     ) -> Result<(), CaptureFailure> {
         platform.overlay.close();
         let image = platform
-            .windows
+            .window_source
             .capture_window(window.id)
             .map_err(CaptureFailure::before_actions)?;
         let screenshot = Screenshot {
@@ -95,7 +102,7 @@ impl WindowCapture {
             captured_at: self.captured_at,
             window_title: Some(window.title.clone()),
         };
-        action::run(platform, &screenshot, &self.request)
+        action::run(platform, &screenshot, &self.request, self.texts)
             .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 
