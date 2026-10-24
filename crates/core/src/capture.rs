@@ -19,6 +19,14 @@ pub(crate) struct CaptureFailure {
 }
 
 impl CaptureFailure {
+    /// 已经就这次失败通知过用户（或用户看得到原因）：热键触发时不再重复通知。
+    pub fn already_notified(error: impl Into<CoreError>) -> Self {
+        Self {
+            error: error.into(),
+            notified: true,
+        }
+    }
+
     /// 截后动作之前（捕获本身）的失败：还没有通知过用户。
     pub fn before_actions(error: impl Into<CoreError>) -> Self {
         Self {

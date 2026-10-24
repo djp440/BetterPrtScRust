@@ -382,12 +382,8 @@ impl ResidentInstance {
             return;
         }
         let texts = self.texts();
-        let title = match failure.error {
-            CoreError::RecordingInProgress { .. } => "notification-recording-in-progress-title",
-            _ => "notification-capture-failed-title",
-        };
         self.platform.notifier.notify(Notification {
-            title: texts.get(title),
+            title: texts.get(failure.error.notification_title()),
             body: failure.error.localized(texts),
             on_click: None,
         });
@@ -458,10 +454,7 @@ impl ResidentInstance {
                 // 再按一次开始录屏的热键：停止录制。录屏的结果已经回复给发起录屏的请求或通知过用户。
                 return match self.stop_recording() {
                     Ok(flow) => Ok(Progress::Done(flow)),
-                    Err(error) => Err(CaptureFailure {
-                        error,
-                        notified: true,
-                    }),
+                    Err(error) => Err(CaptureFailure::already_notified(error)),
                 };
             }
             if recording.is_recording() {
@@ -477,20 +470,18 @@ impl ResidentInstance {
                 ));
             }
             // 还在框选，遮罩正显示着，热键触发时不再通知。
-            return Err(CaptureFailure {
-                error: CoreError::CaptureInProgress,
-                notified: true,
-            });
+            return Err(CaptureFailure::already_notified(
+                CoreError::CaptureInProgress,
+            ));
         }
         if self.region_capture.is_some()
             || self.window_capture.is_some()
             || self.long_screenshot.is_some()
         {
             // 遮罩正显示着，用户看得到这次捕获还没结束，热键触发时不再通知。
-            return Err(CaptureFailure {
-                error: CoreError::CaptureInProgress,
-                notified: true,
-            });
+            return Err(CaptureFailure::already_notified(
+                CoreError::CaptureInProgress,
+            ));
         }
         let texts = self.texts();
         if request.actions.contains(&PostCaptureAction::Record) {

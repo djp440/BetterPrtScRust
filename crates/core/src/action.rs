@@ -38,10 +38,7 @@ pub(crate) fn run(
         || request.actions.contains(&PostCaptureAction::Translate))
         && let Err(error) = open_result_panel(platform, screenshot.image.clone(), texts)
     {
-        failure.get_or_insert(CaptureFailure {
-            error,
-            notified: true,
-        });
+        failure.get_or_insert(CaptureFailure::already_notified(error));
     }
     failure.map_or(Ok(()), Err)
 }

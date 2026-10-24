@@ -130,7 +130,8 @@ impl Texts {
             FluentResource::try_new(locale.source().to_owned()).unwrap_or_else(|(_, errors)| {
                 panic!("{} 的文本资源有语法错误：{errors:?}", locale.tag())
             });
-        let id: LanguageIdentifier = locale.tag().parse().expect("语言标识有效");
+        // 标签是内置的常量；万一解析失败也不影响取文本，用默认语言标识。
+        let id: LanguageIdentifier = locale.tag().parse().unwrap_or_default();
         let mut bundle = FluentBundle::new_concurrent(vec![id]);
         // 不插入 Unicode 隔离符：托盘气泡和菜单会把它们显示成方块。
         bundle.set_use_isolating(false);

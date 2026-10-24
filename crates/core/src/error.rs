@@ -29,6 +29,14 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    /// 热键触发的捕获因此失败时，通知标题的文本消息标识。
+    pub(crate) fn notification_title(&self) -> &'static str {
+        match self {
+            CoreError::RecordingInProgress { .. } => "notification-recording-in-progress-title",
+            _ => "notification-capture-failed-title",
+        }
+    }
+
     /// 用 `texts` 的语言说明失败原因。
     pub fn localized(&self, texts: &Texts) -> String {
         match self {

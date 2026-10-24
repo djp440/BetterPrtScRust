@@ -156,10 +156,7 @@ fn run(
     });
     let ran = action::run(platform, screenshot, &effective, texts);
     match saved_as {
-        Some(Err(error)) => Err(CaptureFailure {
-            error,
-            notified: true,
-        }),
+        Some(Err(error)) => Err(CaptureFailure::already_notified(error)),
         _ => ran,
     }
 }

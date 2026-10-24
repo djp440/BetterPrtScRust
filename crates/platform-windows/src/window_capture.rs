@@ -21,7 +21,6 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Graphics::SizeInt32;
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -42,7 +41,8 @@ use crate::error::win_error;
 pub(crate) struct WindowCaptureSession {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    item: GraphicsCaptureItem,
+    /// 持有捕获项，让它的 Closed 事件处理程序一直有效。
+    _item: GraphicsCaptureItem,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     /// 帧池每放进一帧就收到一次通知。
@@ -124,21 +124,13 @@ impl WindowCaptureSession {
             Ok(Self {
                 device,
                 context,
-                item,
+                _item: item,
                 pool,
                 session,
                 arrived,
                 closed,
             })
         }
-    }
-
-    /// 被捕获窗口当前的尺寸（物理像素）。窗口录屏可以据此在窗口改变大小后重建帧池。
-    #[allow(dead_code)]
-    pub fn item_size(&self) -> Result<SizeInt32, PlatformError> {
-        self.item
-            .Size()
-            .map_err(|e| win_error("读取窗口尺寸失败", e))
     }
 
     /// 窗口已关闭，不会再有新帧。
