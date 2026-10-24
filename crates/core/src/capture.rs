@@ -31,7 +31,12 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
             let displays = frames.displays()?;
             let bounds = stitch::virtual_desktop_bounds(&displays).ok_or(CoreError::NoDisplay)?;
             let image = stitch::capture_displays(frames, &displays, bounds)?;
-            Ok(Screenshot { image })
+            Ok(Screenshot {
+                image,
+                mode,
+                captured_at,
+                window_title: None,
+            })
         }
         CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
     }

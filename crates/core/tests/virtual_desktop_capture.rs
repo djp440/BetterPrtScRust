@@ -14,10 +14,10 @@ use bps_platform_fake::{FakeDisplay, FakePlatform, desktop_pattern};
 const GAP: [u8; 4] = [0, 0, 0, 0];
 
 fn copy_virtual_desktop_capture() -> Command {
-    Command::Capture(CaptureRequest {
-        mode: CaptureMode::VirtualDesktop,
-        actions: vec![PostCaptureAction::CopyToClipboard],
-    })
+    Command::Capture(CaptureRequest::new(
+        CaptureMode::VirtualDesktop,
+        vec![PostCaptureAction::CopyToClipboard],
+    ))
 }
 
 fn platform_with(displays: &[FakeDisplay]) -> FakePlatform {
@@ -109,10 +109,10 @@ fn hotkey_binding_with_virtual_desktop_mode_copies_virtual_desktop() {
     let hotkey = Hotkey::new(Modifiers::CTRL.with(Modifiers::SHIFT), Key::F(12));
     let binding = HotkeyBinding {
         hotkey,
-        capture: CaptureRequest {
-            mode: CaptureMode::VirtualDesktop,
-            actions: vec![PostCaptureAction::CopyToClipboard],
-        },
+        capture: CaptureRequest::new(
+            CaptureMode::VirtualDesktop,
+            vec![PostCaptureAction::CopyToClipboard],
+        ),
     };
     let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     assert!(instance.register_hotkeys().is_empty());
