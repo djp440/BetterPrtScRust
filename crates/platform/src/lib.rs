@@ -9,20 +9,24 @@
 //! 然后分别在 `platform-windows` 和 `platform-fake` 里实现。
 
 mod clipboard;
+mod config_file;
 mod error;
 mod event;
 mod frame_source;
 mod geometry;
 mod hotkey;
 mod image;
+mod notifier;
 
 pub use clipboard::{Clipboard, ClipboardItem};
+pub use config_file::ConfigFile;
 pub use error::PlatformError;
 pub use event::PlatformEvent;
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
-pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
+pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError};
 pub use image::Image;
+pub use notifier::{Notification, NotificationClick, Notifier};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -34,4 +38,8 @@ pub struct Platform {
     pub clipboard: Box<dyn Clipboard>,
     /// 全局热键的注册与注销；按下事件经平台事件循环以 [`PlatformEvent`] 递交。
     pub hotkeys: Box<dyn GlobalHotkeys>,
+    /// 通知（Windows 上是托盘气泡）。
+    pub notifier: Box<dyn Notifier>,
+    /// 配置文件的读写与变更监视；变更经平台事件循环以 [`PlatformEvent`] 递交。
+    pub config_file: Box<dyn ConfigFile>,
 }

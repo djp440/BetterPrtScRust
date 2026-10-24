@@ -5,7 +5,9 @@
 
 use std::time::{Duration, Instant};
 
-use bps_platform::{FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, PlatformEvent};
+use bps_platform::{
+    ConfigFile, FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, PlatformEvent,
+};
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
@@ -67,6 +69,53 @@ fn registered_hotkey_press_is_delivered_by_event_loop() {
     hotkeys.unregister(id).unwrap();
 
     assert_eq!(event, Some(PlatformEvent::HotkeyPressed(id)));
+}
+
+#[test]
+#[ignore = "真机冒烟：在临时目录读写配置文件并监视外部修改"]
+fn config_file_change_is_delivered_by_event_loop() {
+    let dir = std::env::temp_dir().join(format!("bps-config-smoke-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let event_loop = EventLoop::new().unwrap();
+    let mut config = event_loop.config_file(dir.join("config.toml"));
+
+    assert_eq!(config.read().unwrap(), None, "文件不存在时应返回 None");
+    config
+        .write(
+            "# 第一版
+",
+        )
+        .unwrap();
+    config.watch().unwrap();
+    assert_eq!(event_loop.wait_event(Duration::from_millis(600)), None);
+
+    // 模拟外部编辑器：连续写两次，应合并成一个事件。
+    std::fs::write(dir.join("config.toml"), "# 第二").unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "# 第二版
+",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let event = event_loop.wait_event(Duration::from_secs(3));
+    eprintln!("配置文件变更在 {:?} 后递交", started.elapsed());
+    let duplicate = event_loop.wait_event(Duration::from_millis(600));
+    let text = config.read().unwrap();
+    // 先关闭目录变更通知句柄，否则删不掉目录。
+    drop(config);
+    drop(event_loop);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(event, Some(PlatformEvent::ConfigFileChanged));
+    assert_eq!(duplicate, None, "连续的写入应合并成一个事件");
+    assert_eq!(
+        text.as_deref(),
+        Some(
+            "# 第二版
+"
+        )
+    );
 }
 
 /// 依次按下 `keys`，再逆序松开。

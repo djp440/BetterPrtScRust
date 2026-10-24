@@ -23,6 +23,8 @@ bps-platform-fake = { path = "crates/platform-fake" }
 bps-platform-windows = { path = "crates/platform-windows" }
 
 png = { version = "0.18", default-features = false }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 windows = { version = "0.62", default-features = false }
 
 [profile.release]

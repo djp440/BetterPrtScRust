@@ -7,6 +7,11 @@ pub(crate) struct Screenshot {
     pub image: Image,
 }
 
+/// 这个捕获模式是否已经实现。实现新的捕获模式时在这里登记。
+pub(crate) fn is_implemented(mode: CaptureMode) -> bool {
+    matches!(mode, CaptureMode::Display)
+}
+
 /// 按捕获模式从帧源取得截图。
 pub(crate) fn capture(
     frames: &dyn FrameSource,
@@ -18,6 +23,7 @@ pub(crate) fn capture(
             let image = frames.capture_display(display.id)?;
             Ok(Screenshot { image })
         }
+        unsupported => Err(CoreError::UnsupportedCaptureMode(unsupported)),
     }
 }
 

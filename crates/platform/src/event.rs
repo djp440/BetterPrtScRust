@@ -9,4 +9,6 @@ pub enum PlatformEvent {
     HotkeyPressed(HotkeyId),
     /// 用户或系统要求常驻实例退出，例如点击了托盘菜单的“退出”。
     ExitRequested,
+    /// 用 [`crate::ConfigFile::watch`] 监视的配置文件被外部修改、替换或删除。
+    ConfigFileChanged,
 }

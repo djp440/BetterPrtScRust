@@ -1,70 +1,152 @@
-use bps_platform::{HotkeyId, Platform, PlatformEvent};
+use bps_platform::{HotkeyId, Notification, NotificationClick, Platform, PlatformEvent};
 
-use crate::binding::HotkeyRegistrationFailure;
-use crate::{Command, CoreError, Flow, HotkeyBinding, action, capture};
+use crate::{
+    CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow, HotkeyBinding,
+    HotkeyRegistrationFailure, RegistrationError, action, capture,
+};
 
-/// 常驻实例的核心：持有平台能力和热键绑定，把触发事件转换成命令并执行。
+/// 常驻实例的核心：持有平台能力和配置，把触发事件转换成命令并执行。
 ///
-/// 宿主（`app` 里的平台事件循环）把 [`PlatformEvent`] 交给 [`handle`](Self::handle)，
-/// 在返回 [`Flow::Exit`] 时退出循环。
+/// 宿主（`app` 里的平台事件循环）用 [`start`](Self::start) 创建它，把
+/// [`PlatformEvent`] 交给 [`handle`](Self::handle)，在返回 [`Flow::Exit`] 时退出循环。
 pub struct ResidentInstance {
     platform: Platform,
-    bindings: Vec<HotkeyBinding>,
-    /// 已成功注册的热键，下标与 `bindings` 对应。
+    config: Config,
+    /// 已成功注册的热键。
     registered: Vec<HotkeyId>,
+    /// 最近一次注册热键时失败的绑定。
+    failures: Vec<HotkeyRegistrationFailure>,
 }
 
 impl ResidentInstance {
+    /// 用给定的热键绑定创建常驻实例，不读写配置文件、不注册热键。
     pub fn new(platform: Platform, bindings: Vec<HotkeyBinding>) -> Self {
         Self {
             platform,
-            bindings,
+            config: Config::with_bindings(bindings),
             registered: Vec::new(),
+            failures: Vec::new(),
         }
     }
 
-    /// 为每条热键绑定注册全局热键，返回注册失败的绑定；失败的绑定不影响其他绑定。
-    #[must_use = "热键注册失败不能静默忽略"]
-    pub fn register_hotkeys(&mut self) -> Vec<HotkeyRegistrationFailure> {
-        let mut failures = Vec::new();
-        for (index, binding) in self.bindings.iter().enumerate() {
-            let id = hotkey_id(index);
-            match self.platform.hotkeys.register(id, binding.hotkey) {
-                Ok(()) => self.registered.push(id),
-                Err(error) => failures.push(HotkeyRegistrationFailure {
-                    binding: binding.clone(),
-                    error,
-                }),
-            }
+    /// 启动常驻实例：读取配置文件（不存在时写入默认配置），注册热键，并开始监视配置文件。
+    ///
+    /// 不会失败：配置文件有错误、热键注册失败等问题都通过通知告诉用户，
+    /// 有问题的部分用默认值代替或跳过。
+    pub fn start(platform: Platform) -> Self {
+        let mut instance = Self::new(platform, Vec::new());
+        instance.config = instance.load_config_at_startup();
+        let _ = instance.register_hotkeys();
+        if let Err(e) = instance.platform.config_file.watch() {
+            instance.notify_with_config_link(
+                "无法监视配置文件",
+                format!("修改配置文件后需要重启 BetterPrtSc 才能生效。{e}"),
+            );
         }
-        failures
+        instance
+    }
+
+    /// 当前生效的配置。
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// 最近一次注册热键时失败的绑定，供设置界面把它们标红。
+    pub fn registration_failures(&self) -> &[HotkeyRegistrationFailure] {
+        &self.failures
+    }
+
+    /// 按当前配置（重新）注册全部热键，返回注册失败的绑定。
+    ///
+    /// 失败的绑定不影响其他绑定；有失败时发出一条通知，并可用
+    /// [`registration_failures`](Self::registration_failures) 查询。
+    pub fn register_hotkeys(&mut self) -> &[HotkeyRegistrationFailure] {
+        self.unregister_hotkeys();
+        self.failures.clear();
+        let bindings = &self.config.bindings;
+        for (index, binding) in bindings.iter().enumerate() {
+            let error = match bindings[..index]
+                .iter()
+                .position(|earlier| earlier.hotkey == binding.hotkey)
+            {
+                Some(first) => RegistrationError::DuplicateOf(first),
+                None => match self
+                    .platform
+                    .hotkeys
+                    .register(hotkey_id(index), binding.hotkey)
+                {
+                    Ok(()) => {
+                        self.registered.push(hotkey_id(index));
+                        continue;
+                    }
+                    Err(e) => RegistrationError::Platform(e),
+                },
+            };
+            self.failures.push(HotkeyRegistrationFailure {
+                index,
+                binding: binding.clone(),
+                error,
+            });
+        }
+        if !self.failures.is_empty() {
+            let body = self
+                .failures
+                .iter()
+                .map(|f| format!("{}：{}", f.binding.hotkey, f.error))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.notify_with_config_link("热键注册失败", body);
+        }
+        &self.failures
     }
 
     /// 把平台事件转换成命令；与任何绑定都无关的事件返回 `None`。
     pub fn command_for(&self, event: PlatformEvent) -> Option<Command> {
         match event {
             PlatformEvent::HotkeyPressed(id) => self
+                .config
                 .bindings
                 .iter()
                 .enumerate()
                 .find(|(index, _)| hotkey_id(*index) == id)
                 .map(|(_, binding)| Command::Capture(binding.capture.clone())),
             PlatformEvent::ExitRequested => Some(Command::Exit),
+            PlatformEvent::ConfigFileChanged => None,
         }
     }
 
-    /// 处理一个平台事件：转换成命令后执行。
+    /// 处理一个平台事件：配置文件变更时重新加载配置，其余事件转换成命令后执行。
     pub fn handle(&mut self, event: PlatformEvent) -> Result<Flow, CoreError> {
-        match self.command_for(event) {
-            Some(command) => self.execute(command),
-            None => Ok(Flow::Continue),
+        if event == PlatformEvent::ConfigFileChanged {
+            self.reload_config();
+            return Ok(Flow::Continue);
         }
+        let Some(command) = self.command_for(event) else {
+            return Ok(Flow::Continue);
+        };
+        // 热键和托盘触发的命令没有别的反馈渠道，失败时用通知告诉用户。
+        let result = self.execute(command);
+        if let Err(e) = &result {
+            let title = match e {
+                CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+                    "暂不支持"
+                }
+                _ => "捕获失败",
+            };
+            self.platform.notifier.notify(Notification {
+                title: title.to_owned(),
+                body: e.to_string(),
+                on_click: None,
+            });
+        }
+        result
     }
 
     /// 执行一条命令。
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match command {
             Command::Capture(request) => {
+                ensure_implemented(&request)?;
                 let screenshot =
                     capture::capture(self.platform.frame_source.as_ref(), request.mode)?;
                 action::run(&mut self.platform, &screenshot, &request.actions)?;
@@ -77,12 +159,101 @@ impl ResidentInstance {
         }
     }
 
+    /// 启动时读取配置文件；文件不存在时写入默认配置。出错时通知用户并使用默认配置。
+    fn load_config_at_startup(&mut self) -> Config {
+        match self.platform.config_file.read() {
+            Ok(None) => {
+                if let Err(e) = self.platform.config_file.write(DEFAULT_CONFIG) {
+                    self.notify_with_config_link(
+                        "无法写入配置文件",
+                        format!("本次使用默认配置。{e}"),
+                    );
+                }
+                Config::default()
+            }
+            Ok(Some(text)) => match Config::parse(&text) {
+                Ok(config) => config,
+                Err(e) => {
+                    self.notify_with_config_link(
+                        "配置文件有错误",
+                        format!("本次暂时使用默认配置。{e}"),
+                    );
+                    Config::default()
+                }
+            },
+            Err(e) => {
+                self.notify_with_config_link(
+                    "无法读取配置文件",
+                    format!("本次暂时使用默认配置。{e}"),
+                );
+                Config::default()
+            }
+        }
+    }
+
+    /// 配置文件被外部修改后重新加载并重新注册热键。
+    ///
+    /// 内容等价（例如只改了注释，或编辑器原样保存）时什么都不做，不会重复通知。
+    fn reload_config(&mut self) {
+        let text = match self.platform.config_file.read() {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                return self.notify_with_config_link(
+                    "配置文件已被删除",
+                    "继续使用当前的配置；重启 BetterPrtSc 后会重新生成默认配置。".to_owned(),
+                );
+            }
+            Err(e) => {
+                return self.notify_with_config_link(
+                    "无法读取配置文件",
+                    format!("继续使用上一次有效的配置。{e}"),
+                );
+            }
+        };
+        match Config::parse(&text) {
+            Ok(config) if config == self.config => {}
+            Ok(config) => {
+                self.config = config;
+                let _ = self.register_hotkeys();
+            }
+            Err(e) => self.notify_with_config_link(
+                "配置文件有错误",
+                format!("继续使用上一次有效的配置。{e}"),
+            ),
+        }
+    }
+
+    /// 发出一条点击后打开配置文件的通知。
+    fn notify_with_config_link(&self, title: &str, body: String) {
+        let path = self.platform.config_file.path().to_path_buf();
+        self.platform.notifier.notify(Notification {
+            title: title.to_owned(),
+            body,
+            on_click: Some(NotificationClick::OpenFile(path)),
+        });
+    }
+
     /// 注销所有已注册的热键。尽力而为：某个热键注销失败不影响其他热键，
     /// 进程退出时系统也会回收它们。
     fn unregister_hotkeys(&mut self) {
         for id in self.registered.drain(..) {
             let _ = self.platform.hotkeys.unregister(id);
         }
+    }
+}
+
+/// 尚未实现的捕获模式或截后动作在捕获开始之前就拒绝整个请求，不产生任何产物。
+fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
+    if !capture::is_implemented(request.mode) {
+        return Err(CoreError::UnsupportedCaptureMode(request.mode));
+    }
+    match request
+        .actions
+        .iter()
+        .find(|a| !action::is_implemented(**a))
+    {
+        Some(action) => Err(CoreError::UnsupportedAction(*action)),
+        None => Ok(()),
     }
 }
 

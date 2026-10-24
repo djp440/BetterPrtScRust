@@ -3,6 +3,8 @@
 //! - [`DxgiFrameSource`]：显示器布局 + 鼠标位置 + DXGI Desktop Duplication 截图
 //! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `CF_DIB`
 //! - [`WindowsHotkeys`]：`RegisterHotKey`，按下时由 [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WindowsNotifier`]：托盘图标的气泡通知，点击时打开文件或文件夹
+//! - [`WindowsConfigFile`]：配置文件读写，所在目录变化时由 [`EventLoop`] 递交 `PlatformEvent`
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标
 //!
 //! 进程必须是 Per-Monitor V2 DPI 感知，坐标和图像才是物理像素，见 [`dpi`]。
@@ -12,26 +14,34 @@
 #![cfg(windows)]
 
 mod clipboard;
+mod config_file;
 mod display_config;
 pub mod dpi;
 mod error;
 mod event_loop;
 mod frame_source;
 mod hotkeys;
+mod notifier;
 mod pixels;
 
 pub use clipboard::WindowsClipboard;
+pub use config_file::WindowsConfigFile;
 pub use event_loop::EventLoop;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
+pub use notifier::WindowsNotifier;
+
+use std::path::PathBuf;
 
 use bps_platform::Platform;
 
-/// 以 `event_loop` 的隐藏窗口为宿主，创建整套 Windows 平台能力。
-pub fn platform(event_loop: &EventLoop) -> Platform {
+/// 以 `event_loop` 的隐藏窗口为宿主，创建整套 Windows 平台能力；配置文件位于 `config_file`。
+pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
     Platform {
         frame_source: Box::new(DxgiFrameSource::new()),
         clipboard: Box::new(WindowsClipboard::new(Some(event_loop))),
         hotkeys: Box::new(event_loop.hotkeys()),
+        notifier: Box::new(event_loop.notifier()),
+        config_file: Box::new(event_loop.config_file(config_file)),
     }
 }

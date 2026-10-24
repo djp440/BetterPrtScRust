@@ -1,6 +1,6 @@
 [package]
 name = "bps-core"
-description = "BetterPrtSc 平台无关的核心逻辑：命令、捕获流程、截后动作"
+description = "BetterPrtSc 平台无关的核心逻辑：命令、捕获流程、截后动作、配置"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 bps-platform.workspace = true
 png.workspace = true
+serde.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 bps-platform-fake.workspace = true

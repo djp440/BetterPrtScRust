@@ -1,46 +1,58 @@
 //! 常驻实例的宿主：隐藏窗口 + 消息循环 + 托盘图标。
 //!
-//! 热键（`WM_HOTKEY`）、托盘菜单、关闭请求都在窗口过程里转换成 [`PlatformEvent`]
+//! 热键（`WM_HOTKEY`）、托盘菜单、关闭请求、配置文件变更都转换成 [`PlatformEvent`]
 //! 放进队列，由 [`EventLoop::run`] 在窗口过程之外逐个交给处理函数，
 //! 因此处理函数里执行耗时的捕获不会重入窗口过程。
+//!
+//! 配置文件的监视不另开线程：循环用 `MsgWaitForMultipleObjectsEx` 同时等待消息和
+//! 目录变更通知句柄，目录有变化后用定时器合并短时间内的多次变化，再递交事件。
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ops::ControlFlow;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use bps_platform::{HotkeyId, Image, PlatformError, PlatformEvent};
+use bps_platform::{HotkeyId, Image, NotificationClick, PlatformError, PlatformEvent};
 use windows::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
+    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WAIT_OBJECT_0,
+    WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
     DeleteObject,
 };
+use windows::Win32::Storage::FileSystem::FindNextChangeNotification;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyMenu, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW,
-    GetWindowLongPtrW, HICON, ICONINFO, MF_STRING, MSG, MsgWaitForMultipleObjects, PM_REMOVE,
-    PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_HOTKEY, WM_LBUTTONUP, WM_NULL,
-    WM_RBUTTONUP, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    DestroyMenu, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetWindowLongPtrW,
+    HICON, ICONINFO, KillTimer, MF_STRING, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+    PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_QUIT,
+    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
-use crate::WindowsHotkeys;
+use crate::config_file::ChangeNotification;
 use crate::error::win_error;
+use crate::{WindowsConfigFile, WindowsHotkeys, WindowsNotifier, notifier};
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
 /// 托盘图标回调消息。
 const WM_TRAY: u32 = WM_APP + 1;
-const TRAY_ICON_ID: u32 = 1;
+pub(crate) const TRAY_ICON_ID: u32 = 1;
 const MENU_EXIT: usize = 1;
+/// 配置文件所在目录变化后，等这么久没有新的变化才递交事件。
+const CONFIG_SETTLE_TIMER: usize = 1;
+const CONFIG_SETTLE_DELAY_MS: u32 = 300;
 
 /// 常驻实例的消息循环。一个线程只应创建一个。
 pub struct EventLoop {
@@ -54,6 +66,16 @@ struct WindowState {
     tray: RefCell<Option<TrayIcon>>,
     /// 资源管理器重启后广播的消息，收到时重新添加托盘图标。
     taskbar_created: u32,
+    shared: Rc<Shared>,
+}
+
+/// 事件循环与它创建的平台能力对象（通知、配置文件）共享的状态。
+#[derive(Default)]
+pub(crate) struct Shared {
+    /// 最近一条托盘通知被点击时要执行的操作。
+    pub balloon_click: RefCell<Option<NotificationClick>>,
+    /// 配置文件所在目录的变更通知。
+    pub config_watch: RefCell<Option<ChangeNotification>>,
 }
 
 impl WindowState {
@@ -100,6 +122,7 @@ impl EventLoop {
                 events: RefCell::new(VecDeque::new()),
                 tray: RefCell::new(None),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+                shared: Rc::default(),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize);
             Ok(Self { hwnd, state })
@@ -124,26 +147,30 @@ impl EventLoop {
         WindowsHotkeys::new(self.hwnd)
     }
 
+    /// 通过本循环的托盘图标发通知；需要先 [`show_tray_icon`](Self::show_tray_icon)。
+    pub fn notifier(&self) -> WindowsNotifier {
+        WindowsNotifier::new(self.hwnd, self.state.shared.clone())
+    }
+
+    /// 位于 `path` 的配置文件；开始监视后，本循环递交 [`PlatformEvent::ConfigFileChanged`]。
+    pub fn config_file(&self, path: PathBuf) -> WindowsConfigFile {
+        WindowsConfigFile::new(path, self.state.shared.clone())
+    }
+
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
     /// 运行消息循环，把每个事件交给 `handler`，直到它返回 `Break`。
     pub fn run(&self, mut handler: impl FnMut(PlatformEvent) -> ControlFlow<()>) {
-        let mut msg = MSG::default();
         loop {
             while let Some(event) = self.state.pop() {
                 if handler(event).is_break() {
                     return;
                 }
             }
-            let result = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-            if result.0 == 0 || result.0 == -1 {
+            if !self.pump(None) {
                 return;
-            }
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
             }
         }
     }
@@ -151,25 +178,59 @@ impl EventLoop {
     /// 处理消息直到出现一个事件或超时，供冒烟测试使用。
     pub fn wait_event(&self, timeout: Duration) -> Option<PlatformEvent> {
         let deadline = Instant::now() + timeout;
-        let mut msg = MSG::default();
         loop {
-            unsafe {
-                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
             if let Some(event) = self.state.pop() {
                 return Some(event);
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            if remaining.is_zero() || !self.pump(Some(remaining)) {
                 return None;
             }
+        }
+    }
+
+    /// 等到有消息或配置目录变化（或超时），然后处理掉它们；收到 `WM_QUIT` 时返回 `false`。
+    fn pump(&self, timeout: Option<Duration>) -> bool {
+        let watch: Option<HANDLE> = self
+            .state
+            .shared
+            .config_watch
+            .borrow()
+            .as_ref()
+            .map(|w| w.0);
+        let handles: Vec<HANDLE> = watch.into_iter().collect();
+        // INFINITE 是 u32::MAX；有限的等待时间不能恰好等于它。
+        let millis = timeout.map_or(u32::MAX, |t| {
+            t.as_millis().min(u128::from(u32::MAX - 1)) as u32
+        });
+        let woken = unsafe {
+            MsgWaitForMultipleObjectsEx(Some(&handles), millis, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+        };
+        if let Some(handle) = watch
+            && woken == WAIT_OBJECT_0
+        {
+            // 重新布防，再用定时器合并编辑器保存时的连续多次变化。
+            let _ = unsafe { FindNextChangeNotification(handle) };
             unsafe {
-                MsgWaitForMultipleObjects(None, false, remaining.as_millis() as u32, QS_ALLINPUT);
+                SetTimer(
+                    Some(self.hwnd),
+                    CONFIG_SETTLE_TIMER,
+                    CONFIG_SETTLE_DELAY_MS,
+                    None,
+                )
+            };
+        }
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            if msg.message == WM_QUIT {
+                return false;
+            }
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
         }
+        true
     }
 }
 
@@ -205,7 +266,17 @@ unsafe extern "system" fn window_proc(
                     && show_tray_menu(hwnd) == Some(MENU_EXIT)
                 {
                     state.push(PlatformEvent::ExitRequested);
+                } else if mouse == NIN_BALLOONUSERCLICK {
+                    let click = state.shared.balloon_click.borrow_mut().take();
+                    if let Some(click) = click {
+                        notifier::open(hwnd, click);
+                    }
                 }
+                return LRESULT(0);
+            }
+            WM_TIMER if wparam.0 == CONFIG_SETTLE_TIMER => {
+                let _ = unsafe { KillTimer(Some(hwnd), CONFIG_SETTLE_TIMER) };
+                state.push(PlatformEvent::ConfigFileChanged);
                 return LRESULT(0);
             }
             WM_CLOSE => {

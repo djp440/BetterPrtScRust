@@ -6,7 +6,7 @@
 //! 不由被测代码推导。
 
 use bps_core::{
-    CaptureMode, CaptureRequest, Command, PostCaptureAction, ResidentInstance, default_bindings,
+    CaptureMode, CaptureRequest, Command, HotkeyBinding, PostCaptureAction, ResidentInstance,
 };
 use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
@@ -20,11 +20,11 @@ fn scaled_display() -> FakeDisplay {
     FakeDisplay::new(Rect::new(64, -10, 96, 54)).scale_factor(1.5)
 }
 
-fn copy_display_capture() -> Command {
-    Command::Capture(CaptureRequest {
-        mode: CaptureMode::Display,
-        actions: vec![PostCaptureAction::CopyToClipboard],
-    })
+fn copy_display_capture() -> CaptureRequest {
+    CaptureRequest::new(
+        CaptureMode::Display,
+        vec![PostCaptureAction::CopyToClipboard],
+    )
 }
 
 #[test]
@@ -36,7 +36,9 @@ fn display_capture_copies_display_under_cursor_to_clipboard_as_png_and_dib() {
         .with_cursor_at(Point::new(100, 20));
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
-    instance.execute(copy_display_capture()).unwrap();
+    instance
+        .execute(Command::Capture(copy_display_capture()))
+        .unwrap();
 
     let clipboard = fake.clipboard();
     assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
@@ -48,18 +50,21 @@ fn display_capture_copies_display_under_cursor_to_clipboard_as_png_and_dib() {
 }
 
 #[test]
-fn shift_print_screen_copies_display_under_cursor_with_default_bindings() {
+fn hotkey_bound_to_display_capture_copies_display_under_cursor() {
     let expected = primary_display().image().clone();
     let fake = FakePlatform::new()
         .with_display(primary_display())
         .with_display(scaled_display())
         .with_cursor_at(Point::new(10, 10));
-    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    let shift_print_screen = Hotkey::new(Modifiers::SHIFT, Key::PrintScreen);
+    let binding = HotkeyBinding {
+        hotkey: shift_print_screen,
+        capture: copy_display_capture(),
+    };
+    let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     assert!(instance.register_hotkeys().is_empty());
 
-    let event = fake
-        .press(Hotkey::new(Modifiers::SHIFT, Key::PrintScreen))
-        .expect("默认绑定应注册 Shift+PrtSc");
+    let event = fake.press(shift_print_screen).expect("绑定的热键应已注册");
     instance.handle(event).unwrap();
 
     let clipboard = fake.clipboard();

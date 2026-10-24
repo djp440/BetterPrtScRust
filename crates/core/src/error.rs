@@ -2,6 +2,8 @@ use std::fmt;
 
 use bps_platform::PlatformError;
 
+use crate::{CaptureMode, PostCaptureAction};
+
 /// 执行命令失败的原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
@@ -11,6 +13,10 @@ pub enum CoreError {
     NoDisplay,
     /// 截图编码失败。
     Encode(String),
+    /// 这个捕获模式尚未实现；捕获没有开始，不产生任何产物。
+    UnsupportedCaptureMode(CaptureMode),
+    /// 这个截后动作尚未实现；捕获没有开始，不产生任何产物。
+    UnsupportedAction(PostCaptureAction),
 }
 
 impl fmt::Display for CoreError {
@@ -19,6 +25,8 @@ impl fmt::Display for CoreError {
             CoreError::Platform(e) => write!(f, "平台调用失败：{e}"),
             CoreError::NoDisplay => f.write_str("没有可用的显示器"),
             CoreError::Encode(e) => write!(f, "截图编码失败：{e}"),
+            CoreError::UnsupportedCaptureMode(mode) => write!(f, "暂不支持“{mode}”捕获模式"),
+            CoreError::UnsupportedAction(action) => write!(f, "暂不支持“{action}”截后动作"),
         }
     }
 }
