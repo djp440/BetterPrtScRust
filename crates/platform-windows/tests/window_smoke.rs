@@ -1,7 +1,8 @@
 //! 窗口枚举与 Windows.Graphics.Capture 窗口截图的真机冒烟，默认忽略。
 //!
 //! 运行：`cargo test -p bps-platform-windows --test window_smoke -- --ignored --nocapture`
-//! 会在屏幕上临时显示两个本测试自己创建的置顶窗口（约 1 秒），结束时销毁；不碰其他程序的窗口。
+//! 会在屏幕上临时显示两个本测试自己创建的置顶窗口（约 1 秒，其中一个会短暂最大化），结束时销毁；
+//! 不碰其他程序的窗口。`print_current_window_layout` 只打印当前窗口布局，供排查用。
 #![cfg(windows)]
 
 use std::time::{Duration, Instant};
@@ -15,9 +16,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, MSG, PM_REMOVE, PeekMessageW, RegisterClassExW,
-    SetWindowLongPtrW, TranslateMessage, UnregisterClassW, WM_PAINT, WNDCLASSEXW, WS_CHILD,
-    WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    GetWindowLongPtrW, GetWindowRect, MSG, PM_REMOVE, PeekMessageW, RegisterClassExW, SW_MAXIMIZE,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, UnregisterClassW, WM_PAINT, WNDCLASSEXW,
+    WS_CHILD, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -159,6 +160,9 @@ fn window_layout_hit_test_and_capture_of_partly_covered_window() {
     let source = WgcWindowSource::new();
     let started = Instant::now();
     let layout = source.layout().unwrap();
+    for window in layout.windows() {
+        eprintln!("  {:?} {:?}", window.title, window.bounds);
+    }
     eprintln!(
         "枚举顶层窗口：{:?}，共 {} 个",
         started.elapsed(),
@@ -277,6 +281,30 @@ fn window_layout_hit_test_and_capture_of_partly_covered_window() {
     let center = pixel_at(&image, above_info.bounds, above.client_to_screen(100, 100));
     assert!(rgb_near(center, BLUE), "{center:?}");
 
+    // 最大化的窗口：不可见的缩放边框在显示器外面，截图仍应与可见外框一样大。
+    unsafe {
+        let _ = ShowWindow(above.0, SW_MAXIMIZE);
+    }
+    pump_messages(Duration::from_millis(500));
+    let maximized = source
+        .layout()
+        .unwrap()
+        .get(above_info.id)
+        .cloned()
+        .expect("最大化后仍在布局里");
+    let image = source.capture_window(above_info.id).unwrap();
+    eprintln!(
+        "最大化：外框 {:?}，截图 {}x{}，左上角 {:?}",
+        maximized.bounds,
+        image.width(),
+        image.height(),
+        image.pixel(0, 0)
+    );
+    assert_eq!(
+        (image.width(), image.height()),
+        (maximized.bounds.width, maximized.bounds.height)
+    );
+
     let id = below_info.id;
     drop(below);
     drop(above);
@@ -284,5 +312,16 @@ fn window_layout_hit_test_and_capture_of_partly_covered_window() {
     unsafe {
         let module = GetModuleHandleW(None).unwrap();
         let _ = UnregisterClassW(CLASS_NAME, Some(module.into()));
+    }
+}
+
+/// 诊断用：打印此刻的顶层窗口布局（标题与外框），不显示也不操作任何窗口。
+#[test]
+#[ignore = "诊断：打印此刻桌面上的顶层窗口布局"]
+fn print_current_window_layout() {
+    assert!(dpi::ensure_per_monitor_v2());
+    let layout = WgcWindowSource::new().layout().unwrap();
+    for window in layout.windows() {
+        eprintln!("{:?} {:?} {:?}", window.id, window.title, window.bounds);
     }
 }

@@ -278,12 +278,13 @@ try {
     $form = New-Object System.Windows.Forms.Form
     try {
         $form.Text = 'BetterPrtSc 冒烟 窗口模式'
-        $form.TopMost = $true
         $form.StartPosition = 'Manual'
         $form.Location = New-Object System.Drawing.Point(160, 140)
         $form.Size = New-Object System.Drawing.Size(420, 300)
         $form.BackColor = [System.Drawing.Color]::FromArgb(30, 160, 90)
         $form.Show()
+        # 显示之后再置顶：本脚本前面用过剪贴板等，显示前设的 TopMost 实测不生效，窗口会落在其他窗口后面。
+        $form.TopMost = $true
         for ($i = 0; $i -lt 25; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 }
         $frame = Get-WindowFrameBounds $form.Handle
         $origin = Get-PhysicalVirtualScreenOrigin

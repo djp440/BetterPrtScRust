@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGIDevice3};
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
@@ -268,9 +268,17 @@ impl WindowCaptureSession {
 }
 
 impl Drop for WindowCaptureSession {
+    /// 停止捕获，并请驱动交还读回用的暂存内存（同 #8 遮罩的做法，否则会一直计入私有工作集）。
     fn drop(&mut self) {
         let _ = self.session.Close();
         let _ = self.pool.Close();
+        unsafe {
+            self.context.ClearState();
+            self.context.Flush();
+            if let Ok(device) = self.device.cast::<IDXGIDevice3>() {
+                device.Trim();
+            }
+        }
     }
 }
 
