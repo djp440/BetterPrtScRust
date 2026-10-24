@@ -1,4 +1,5 @@
-//! 标注的软件光栅化：在截图的一块像素上画实心矩形和带抗锯齿的凸多边形。
+//! 标注的软件光栅化：在截图的一块像素上画实心矩形、带抗锯齿的凸多边形、覆盖率蒙版（文字）
+//! 和马赛克。
 //!
 //! 坐标是截图的像素坐标；像素 `(x, y)` 占据 `[x, x+1) × [y, y+1)`，中心在 `(x+0.5, y+0.5)`。
 //! 像素是非预乘 alpha 的 RGBA8，颜色按 src-over 叠加。
@@ -65,6 +66,91 @@ impl Target<'_> {
                 }
             }
         }
+    }
+
+    /// 用 `color` 按覆盖率蒙版画：`coverage` 是 `rect` 范围内每个像素的覆盖率（0–255，
+    /// 按行排列），只画与本块重叠的部分。
+    pub fn fill_mask(&mut self, rect: Rect, coverage: &[u8], color: Color) {
+        let Some(visible) = rect.intersection(self.area) else {
+            return;
+        };
+        for y in visible.y..visible.y + visible.height as i32 {
+            let row = (y - rect.y) as usize * rect.width as usize;
+            let mask_start = row + (visible.x - rect.x) as usize;
+            let mask = &coverage[mask_start..mask_start + visible.width as usize];
+            let start = self.offset(visible.x, y);
+            let pixels = &mut self.pixels[start..start + visible.width as usize * 4];
+            for (pixel, &value) in pixels.chunks_exact_mut(4).zip(mask) {
+                if value > 0 {
+                    blend(pixel, color, f32::from(value) / 255.0);
+                }
+            }
+        }
+    }
+
+    /// 马赛克：`rect` 与本块重叠的部分换成边长 `block` 的色块（从 `rect` 左上角起排列），
+    /// 每块的颜色是本块里这个色块整块范围内像素的平均色（按 alpha 加权）。
+    pub fn pixelate(&mut self, rect: Rect, block: u32) {
+        let Some(visible) = rect.intersection(self.area) else {
+            return;
+        };
+        let step = block as i64;
+        let cells = |from: i32, start: i32, length: u32| {
+            let first = (i64::from(from) - i64::from(start)) / step;
+            let last = (i64::from(from) + i64::from(length) - 1 - i64::from(start)) / step;
+            first..=last
+        };
+        for row in cells(visible.y, rect.y, visible.height) {
+            for column in cells(visible.x, rect.x, visible.width) {
+                let cell = Rect::new(
+                    (i64::from(rect.x) + column * step) as i32,
+                    (i64::from(rect.y) + row * step) as i32,
+                    block,
+                    block,
+                );
+                let Some(sample) = cell.intersection(self.area) else {
+                    continue;
+                };
+                let color = self.average(sample);
+                let Some(fill) = cell.intersection(visible) else {
+                    continue;
+                };
+                for y in fill.y..fill.y + fill.height as i32 {
+                    let start = self.offset(fill.x, y);
+                    for pixel in
+                        self.pixels[start..start + fill.width as usize * 4].chunks_exact_mut(4)
+                    {
+                        pixel.copy_from_slice(&color);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 本块中 `rect`（在本块以内）的平均颜色：颜色按 alpha 加权，alpha 取平均。
+    fn average(&self, rect: Rect) -> [u8; 4] {
+        let (mut sums, mut alpha) = ([0u64; 3], 0u64);
+        for y in rect.y..rect.y + rect.height as i32 {
+            let start = self.offset(rect.x, y);
+            for pixel in self.pixels[start..start + rect.width as usize * 4].chunks_exact(4) {
+                let a = u64::from(pixel[3]);
+                for (sum, &channel) in sums.iter_mut().zip(&pixel[..3]) {
+                    *sum += u64::from(channel) * a;
+                }
+                alpha += a;
+            }
+        }
+        if alpha == 0 {
+            return [0, 0, 0, 0];
+        }
+        let count = u64::from(rect.width) * u64::from(rect.height);
+        let channel = |sum: u64| ((sum + alpha / 2) / alpha) as u8;
+        [
+            channel(sums[0]),
+            channel(sums[1]),
+            channel(sums[2]),
+            ((alpha + count / 2) / count) as u8,
+        ]
     }
 
     fn offset(&self, x: i32, y: i32) -> usize {

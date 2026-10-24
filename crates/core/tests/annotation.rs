@@ -11,12 +11,32 @@ use bps_core::{
     ResidentInstance,
 };
 use bps_platform::{
-    FileType, LocalDateTime, NotificationClick, PlatformEvent, Point, Rect, SaveAsOptions,
+    Color, FileType, LocalDateTime, NotificationClick, OverlayItem, PlatformEvent, Point,
+    PointerButton, Rect, SaveAsOptions,
 };
 use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, decode, desktop_pattern};
 
 /// 工具条上的全部按钮文字。
-const TOOLBAR: [&str; 6] = ["矩形", "箭头", "取消", "另存为", "自动存储", "复制"];
+const TOOLBAR: [&str; 8] = [
+    "矩形",
+    "箭头",
+    "马赛克",
+    "文字",
+    "取消",
+    "另存为",
+    "自动存储",
+    "复制",
+];
+
+/// 工具条上的 5 种预设颜色（第一种是默认的红色）。
+const PALETTE: [Color; 5] = [
+    Color::rgba(240, 40, 40, 255),
+    Color::rgba(255, 190, 0, 255),
+    Color::rgba(40, 170, 70, 255),
+    Color::rgba(30, 110, 240, 255),
+    Color::rgba(0, 0, 0, 255),
+];
+const BLUE: Color = PALETTE[3];
 
 fn annotate(mode: CaptureMode) -> Command {
     Command::Capture(CaptureRequest::new(mode, vec![PostCaptureAction::Annotate]))
@@ -65,6 +85,50 @@ fn toolbar_rects(fake: &FakePlatform) -> Vec<Rect> {
         .collect()
 }
 
+/// 工具条上显示 `color` 的色块（正方形的填充）。
+fn swatch(fake: &FakePlatform, color: Color) -> Rect {
+    let scene = fake.overlay_scene().expect("遮罩应显示着");
+    scene
+        .items
+        .iter()
+        .find_map(|item| match *item {
+            OverlayItem::Fill { rect, color: c } if c == color && rect.width == rect.height => {
+                Some(rect)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("工具条上没有 {color:?} 色块"))
+}
+
+/// 工具条上三档线宽的线条样本（白色填充），从细到粗。
+fn thickness_samples(fake: &FakePlatform) -> Vec<Rect> {
+    let scene = fake.overlay_scene().expect("遮罩应显示着");
+    let mut samples: Vec<Rect> = scene
+        .items
+        .iter()
+        .filter_map(|item| match *item {
+            // 选区的调整手柄也是白色填充，但是正方形；线条样本是扁的。
+            OverlayItem::Fill { rect, color }
+                if color == Color::rgba(255, 255, 255, 255) && rect.width > rect.height =>
+            {
+                Some(rect)
+            }
+            _ => None,
+        })
+        .collect();
+    samples.sort_by_key(|r| r.height);
+    assert_eq!(samples.len(), 3, "工具条上应有三档线宽：{samples:?}");
+    samples
+}
+
+fn click_on(fake: &FakePlatform, rect: Rect) -> Vec<PlatformEvent> {
+    let center = Point::new(
+        rect.x + rect.width as i32 / 2,
+        rect.y + rect.height as i32 / 2,
+    );
+    fake.click(PointerButton::Left, center)
+}
+
 fn contains(outer: Rect, inner: Rect) -> bool {
     outer.intersection(inner) == Some(inner)
 }
@@ -73,7 +137,8 @@ fn contains(outer: Rect, inner: Rect) -> bool {
 fn toolbar_appears_right_below_selected_region_when_capture_annotates() {
     let fake = single_display();
     let mut instance = start(&fake, annotate(CaptureMode::Region));
-    let region = Rect::new(100, 80, 300, 200);
+    // 选区比工具条宽，工具条才能与选区右边对齐（窄选区时工具条被挪进显示器）。
+    let region = Rect::new(200, 80, 560, 200);
 
     feed(&mut instance, drag_region(&fake, region));
 
@@ -288,6 +353,101 @@ fn canvas_follows_the_annotation_while_it_is_being_dragged() {
     feed(&mut instance, vec![release]);
     let (_, released) = fake.overlay_canvas().unwrap();
     assert!(released == dragging, "松开时位置没变，画面不变");
+}
+
+#[test]
+fn mosaic_dragged_on_region_replaces_its_content_with_coarse_blocks() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 300, 200);
+    let mut instance = annotating(&fake, region);
+
+    feed(&mut instance, fake.click_text("马赛克"));
+    // 截图坐标 (40,30)–(199,129)：160×100。
+    feed(
+        &mut instance,
+        fake.drag(Point::new(140, 110), Point::new(299, 209)),
+    );
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    let base = desktop_pattern(region);
+    let mosaic = Rect::new(40, 30, 160, 100);
+    let mut colors = std::collections::HashSet::new();
+    let mut unchanged = 0;
+    for y in mosaic.y..mosaic.y + mosaic.height as i32 {
+        for x in mosaic.x..mosaic.x + mosaic.width as i32 {
+            let (x, y) = (x as u32, y as u32);
+            unchanged += usize::from(png.pixel(x, y) == base.pixel(x, y));
+            colors.insert(png.pixel(x, y));
+        }
+    }
+    // 桌面图案每个像素颜色都不同、按坐标渐变，块的平均色最多与块中心那一个像素相同。
+    assert!(unchanged <= 21 * 14, "{unchanged} 个像素保留原样");
+    // 色块边长至少 8 像素时，160×100 里最多 (160/8+1)×(100/8+1) 种颜色。
+    assert!(
+        colors.len() <= 21 * 14,
+        "颜色太多，不像马赛克：{}",
+        colors.len()
+    );
+    for (x, y) in [(39, 30), (40, 29), (200, 129), (199, 130), (10, 10)] {
+        assert_eq!(
+            png.pixel(x, y),
+            base.pixel(x, y),
+            "马赛克以外 ({x},{y}) 不变"
+        );
+    }
+}
+
+#[test]
+fn changing_color_and_thickness_affects_only_annotations_drawn_afterwards() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = annotating(&fake, region);
+    feed(&mut instance, fake.click_text("矩形"));
+    // 默认红色、中档（4 像素）：截图坐标 (50,40)–(149,99)。
+    feed(
+        &mut instance,
+        fake.drag(Point::new(150, 120), Point::new(249, 179)),
+    );
+
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+    feed(&mut instance, click_on(&fake, thickness_samples(&fake)[2]));
+    // 蓝色、粗档（6 像素）：截图坐标 (60,150)–(259,229)。
+    feed(
+        &mut instance,
+        fake.drag(Point::new(160, 230), Point::new(359, 309)),
+    );
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    let base = desktop_pattern(region);
+    let rgba = |c: Color| [c.r, c.g, c.b, c.a];
+    assert_eq!(
+        png.pixel(53, 70),
+        rgba(PALETTE[0]),
+        "先画的框仍是红色、4 像素宽"
+    );
+    assert_eq!(png.pixel(54, 70), base.pixel(54, 70));
+    assert_eq!(png.pixel(65, 190), rgba(BLUE), "后画的框是蓝色、6 像素宽");
+    assert_eq!(png.pixel(66, 190), base.pixel(66, 190));
+}
+
+#[test]
+fn thin_thickness_draws_two_pixel_lines() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = annotating(&fake, region);
+    feed(&mut instance, click_on(&fake, thickness_samples(&fake)[0]));
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(150, 120), Point::new(249, 179)),
+    );
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    assert_eq!(png.pixel(51, 70), [240, 40, 40, 255]);
+    assert_eq!(png.pixel(52, 70), desktop_pattern(region).pixel(52, 70));
 }
 
 #[test]
@@ -540,4 +700,193 @@ fn virtual_desktop_capture_with_annotate_annotates_the_whole_virtual_desktop() {
 
     let png = fake.clipboard().png_image().unwrap();
     assert_eq!((png.width(), png.height()), (1440, 600));
+}
+
+/// 默认（中档）字号 22 时假平台的字形（`bps_platform_fake::text_mask`）：行高 28，汉字宽 22、
+/// ASCII 宽 13；字形方块在字符格内左右缩进 1、上下缩进 4。以下坐标都是截图坐标，文字原点
+/// 在 (50,40)，即遮罩上的 (150,120)。
+const TEXT_AT: Point = Point::new(150, 120);
+
+fn caret(fake: &FakePlatform) -> Option<Rect> {
+    fake.overlay_scene().expect("遮罩应显示着").text_caret
+}
+
+/// 选好文字工具、在 (150,120) 单击开始输入的标注捕获。
+fn typing(fake: &FakePlatform, region: Rect) -> ResidentInstance {
+    let mut instance = annotating(fake, region);
+    feed(&mut instance, fake.click_text("文字"));
+    feed(&mut instance, fake.click(PointerButton::Left, TEXT_AT));
+    instance
+}
+
+#[test]
+fn chinese_text_typed_with_input_method_is_drawn_where_the_user_clicked() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = annotating(&fake, region);
+    feed(&mut instance, fake.click_text("文字"));
+    assert_eq!(caret(&fake), None, "还没单击时不接受文字输入");
+
+    feed(&mut instance, fake.click(PointerButton::Left, TEXT_AT));
+    assert_eq!(
+        caret(&fake),
+        Some(Rect::new(150, 120, 1, 28)),
+        "单击处开始输入：输入法打开，候选窗口跟着插入点"
+    );
+    feed(&mut instance, fake.type_text("你好"));
+    assert_eq!(
+        caret(&fake),
+        Some(Rect::new(194, 120, 1, 28)),
+        "插入点在“好”之后"
+    );
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    let base = desktop_pattern(region);
+    assert!(is_red(png.pixel(60, 54)), "“你”");
+    assert!(is_red(png.pixel(82, 54)), "“好”");
+    for (x, y) in [(71, 54), (100, 54), (60, 42), (60, 65), (45, 54)] {
+        assert_eq!(png.pixel(x, y), base.pixel(x, y), "字形以外 ({x},{y})");
+    }
+}
+
+#[test]
+fn backspace_deletes_and_enter_starts_a_new_line_while_typing() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+
+    feed(&mut instance, fake.type_text("你好"));
+    feed(
+        &mut instance,
+        vec![
+            fake.press_key(bps_platform::OverlayKey::Backspace),
+            fake.press_key(bps_platform::OverlayKey::Enter),
+        ],
+    );
+    assert!(
+        fake.overlay_visible(),
+        "输入文字时 Enter 是换行，不结束捕获"
+    );
+    assert!(fake.clipboard().is_empty());
+    feed(&mut instance, fake.type_text("A"));
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    let base = desktop_pattern(region);
+    assert!(is_red(png.pixel(60, 54)), "“你”还在");
+    assert_eq!(png.pixel(82, 54), base.pixel(82, 54), "“好”已删除");
+    assert!(is_red(png.pixel(55, 80)), "第二行的“A”");
+}
+
+#[test]
+fn escape_finishes_typing_without_cancelling_the_capture() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+    feed(&mut instance, fake.type_text("你"));
+
+    feed(
+        &mut instance,
+        vec![fake.press_key(bps_platform::OverlayKey::Escape)],
+    );
+    assert!(fake.overlay_visible(), "Esc 只结束输入");
+    assert_eq!(caret(&fake), None, "输入法关闭");
+    feed(&mut instance, fake.type_text("好"));
+    feed(
+        &mut instance,
+        vec![fake.press_key(bps_platform::OverlayKey::Enter)],
+    );
+
+    let png = fake.clipboard().png_image().expect("不在输入时 Enter 复制");
+    assert!(is_red(png.pixel(60, 54)));
+    assert_eq!(
+        png.pixel(82, 54),
+        desktop_pattern(region).pixel(82, 54),
+        "结束输入后打的字不算"
+    );
+}
+
+#[test]
+fn clicking_elsewhere_starts_another_text_and_style_changes_apply_to_the_text_being_typed() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+    feed(&mut instance, fake.type_text("你"));
+
+    // 截图坐标 (50,170) 开始第二段文字，再改成蓝色、粗档（字号 30：行高 38，上下缩进 6）。
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(150, 250)),
+    );
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+    feed(&mut instance, click_on(&fake, thickness_samples(&fake)[2]));
+    assert_eq!(
+        caret(&fake),
+        Some(Rect::new(150, 250, 1, 38)),
+        "改样式不打断输入"
+    );
+    feed(&mut instance, fake.type_text("好"));
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    let base = desktop_pattern(region);
+    assert!(is_red(png.pixel(60, 54)), "第一段仍是红色");
+    assert_eq!(png.pixel(75, 54), base.pixel(75, 54), "第一段仍是中档字号");
+    assert_eq!(png.pixel(60, 180), [30, 110, 240, 255], "第二段是蓝色");
+    assert_eq!(png.pixel(75, 200), [30, 110, 240, 255], "第二段是粗档字号");
+}
+
+#[test]
+fn switching_tool_finishes_typing_and_typing_is_ignored_by_other_tools() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+    feed(&mut instance, fake.type_text("你"));
+
+    feed(&mut instance, fake.click_text("矩形"));
+    assert_eq!(caret(&fake), None);
+    feed(&mut instance, fake.type_text("好"));
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    assert!(is_red(png.pixel(60, 54)), "切换工具时已输入的文字保留");
+    assert_eq!(png.pixel(82, 54), desktop_pattern(region).pixel(82, 54));
+}
+
+#[test]
+fn overlay_shows_exactly_the_screenshot_with_mosaic_and_text_that_will_be_produced() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = annotating(&fake, region);
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(130, 100), Point::new(260, 200)),
+    );
+    // 马赛克盖住框的一部分，色块从拖拽起点排起，与截图边缘不对齐。
+    feed(&mut instance, fake.click_text("马赛克"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(203, 147), Point::new(371, 288)),
+    );
+    // 第一段文字写在马赛克上，第二段在输入中途被马赛克的拖拽改动过的地方以外。
+    feed(&mut instance, fake.click_text("文字"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(220, 160)),
+    );
+    feed(&mut instance, fake.type_text("马赛克上的字"));
+    feed(&mut instance, fake.click(PointerButton::Left, TEXT_AT));
+    feed(&mut instance, fake.type_text("Hi 你好"));
+
+    let (area, shown) = fake.overlay_canvas().expect("标注时遮罩上应有画布");
+    assert_eq!(area, region);
+    feed(&mut instance, fake.click_text("复制"));
+
+    let png = fake.clipboard().png_image().unwrap();
+    assert!(
+        png == shown,
+        "屏幕上看到的应与最终截图逐像素一致（插入点不在截图里）"
+    );
 }

@@ -73,7 +73,9 @@ impl Snapping {
             OverlayInput::PointerMoved { position, .. }
             | OverlayInput::PointerPressed { position, .. }
             | OverlayInput::PointerReleased { position, .. } => position,
-            OverlayInput::KeyPressed { .. } | OverlayInput::Interrupted => return,
+            OverlayInput::KeyPressed { .. }
+            | OverlayInput::Character(_)
+            | OverlayInput::Interrupted => return,
         };
         if let Some(window) = self.layout.window_at(position)
             && !self.controls.contains_key(&window.id)

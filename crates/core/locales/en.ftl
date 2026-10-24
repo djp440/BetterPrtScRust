@@ -176,6 +176,8 @@ overlay-record-hint = Enter or double-click the selection: start recording   Esc
 
 annotation-rectangle = Rectangle
 annotation-arrow = Arrow
+annotation-mosaic = Mosaic
+annotation-text = Text
 annotation-cancel = Cancel
 annotation-save-as = Save as
 annotation-auto-save = Auto-save

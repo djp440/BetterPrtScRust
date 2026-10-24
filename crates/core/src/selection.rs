@@ -411,6 +411,7 @@ impl RegionSelection {
         OverlayScene {
             items,
             cursor: self.cursor(),
+            text_caret: None,
         }
     }
 

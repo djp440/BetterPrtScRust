@@ -1,5 +1,5 @@
-//! 标注真机冒烟：在真实的选区遮罩上框选、画框和箭头，检查屏幕上显示的标注与存下的截图
-//! 一致，以及“另存为”对话框显示在遮罩之上。默认忽略。
+//! 标注真机冒烟：在真实的选区遮罩上框选、画框、箭头、马赛克，输入中文文字，检查屏幕上
+//! 显示的标注与存下的截图一致，以及“另存为”对话框显示在遮罩之上。默认忽略。
 //!
 //! 运行（release 下标注的合成才是真实速度）：
 //! `cargo test --release -p bps-app --test annotation_smoke -- --ignored --nocapture`
@@ -7,7 +7,8 @@
 //! 在本进程里用真实的 Windows 平台创建常驻实例（不启动 BetterPrtSc.exe），把遮罩上的输入
 //! 直接交给常驻实例；遮罩包一层记录最近一次场景，用来找工具条按钮的位置。剪贴板、通知换成
 //! 不出声的替身，不动用户的剪贴板、不弹通知；自动存储写到临时目录，结束时删除。
-//! 屏幕会闪现遮罩约 5 秒，期间请勿操作电脑。`BPS_SMOKE_SHOTS` 指向一个目录时，把带工具条
+//! 文字直接以 `OverlayInput::Character` 交给常驻实例（窗口消息到输入的转换由
+//! `bps-platform-windows` 的 `overlay_smoke` 测）。屏幕会闪现遮罩约 5 秒，期间请勿操作电脑。`BPS_SMOKE_SHOTS` 指向一个目录时，把带工具条
 //! 和带对话框的屏幕截图存成 PNG 供目视检查。
 #![cfg(windows)]
 
@@ -24,7 +25,7 @@ use bps_core::{
 use bps_platform::{
     Backdrop, Clipboard, ClipboardItem, Display, DisplayId, FrameSource, Image, Modifiers,
     Notification, Notifier, OverlayInput, OverlayScene, PlatformError, PlatformEvent, Point,
-    PointerButton, Rect, SelectionOverlay, SystemLanguage,
+    PointerButton, Rect, SelectionOverlay, SystemLanguage, TextMask,
 };
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -60,6 +61,9 @@ impl SelectionOverlay for RecordingOverlay {
     }
     fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError> {
         self.inner.update_canvas(at, patch)
+    }
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
+        self.inner.rasterize_text(text, font_size)
     }
     fn close(&mut self) {
         *self.scene.borrow_mut() = None;
@@ -260,6 +264,50 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     let drawing = Instant::now();
     drag(&mut instance, at(0.9, 0.95), at(0.05, 0.05));
     eprintln!("拖拽画对角箭头（10 次输入）：{:?}", drawing.elapsed());
+    click(&mut instance, &scene, "马赛克");
+    let (mosaic_from, mosaic_to) = (at(0.55, 0.15), at(0.85, 0.45));
+    let drawing = Instant::now();
+    drag(&mut instance, mosaic_from, mosaic_to);
+    eprintln!("拖拽画马赛克（10 次输入）：{:?}", drawing.elapsed());
+    click(&mut instance, &scene, "文字");
+    let text_at = at(0.12, 0.72);
+    drag(&mut instance, text_at, text_at);
+    let typing = Instant::now();
+    for c in "标注文字 Text，你好！".chars() {
+        input(&mut instance, OverlayInput::Character(c));
+    }
+    eprintln!("输入 12 个字符：{:?}", typing.elapsed());
+    input(
+        &mut instance,
+        OverlayInput::KeyPressed {
+            key: bps_platform::OverlayKey::Enter,
+            modifiers: Modifiers::NONE,
+        },
+    );
+    for c in "第二行 gjy".chars() {
+        input(&mut instance, OverlayInput::Character(c));
+    }
+    let caret = scene.borrow().as_ref().and_then(|s| s.text_caret);
+    eprintln!("插入点：{caret:?}");
+    assert!(
+        caret.is_some_and(|c| c.y > text_at.y),
+        "换行后插入点应在第二行：{caret:?}"
+    );
+    // Esc 结束输入（文字框和插入点不再显示），不取消捕获。
+    input(
+        &mut instance,
+        OverlayInput::KeyPressed {
+            key: bps_platform::OverlayKey::Escape,
+            modifiers: Modifiers::NONE,
+        },
+    );
+    assert!(
+        scene
+            .borrow()
+            .as_ref()
+            .is_some_and(|s| s.text_caret.is_none()),
+        "Esc 后结束输入、遮罩仍在"
+    );
 
     // 屏幕上实际显示的画面。
     thread::sleep(Duration::from_millis(300));
@@ -267,7 +315,7 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     let screen_origin = Point::new(b.x, b.y);
     if let Some(dir) = &shots {
         let region_bottom = region.y + region.height as i32;
-        let below = (b.y + b.height as i32 - region_bottom).clamp(0, 120);
+        let below = (b.y + b.height as i32 - region_bottom).clamp(0, 200);
         let toolbar_area = Rect::new(
             region.x + region.width as i32 / 2,
             region_bottom - 60,
@@ -344,6 +392,25 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     let local = |p: Point| ((p.x - region.x) as u32, (p.y - region.y) as u32);
     let (fx, fy) = local(rect_from);
     assert!(is_red(image.pixel(fx + 1, fy + 1)), "存下的截图包含框");
+    // 马赛克：从拖拽起点排起的第一块色块里颜色都一样（色块边长至少 10 像素）。
+    let (mx, my) = local(mosaic_from);
+    let block = image.pixel(mx, my);
+    for (dx, dy) in [(9, 0), (0, 9), (5, 5), (9, 9)] {
+        assert_eq!(
+            image.pixel(mx + dx, my + dy),
+            block,
+            "马赛克色块内 (+{dx},+{dy})"
+        );
+    }
+    // 文字：单击处右下方 400×80 像素内有足够多的红色像素。
+    let (tx, ty) = local(text_at);
+    let red_text = (0..80u32)
+        .flat_map(|dy| (0..400u32).map(move |dx| (dx, dy)))
+        .filter(|&(dx, dy)| tx + dx < image.width() && ty + dy < image.height())
+        .filter(|&(dx, dy)| is_red(image.pixel(tx + dx, ty + dy)))
+        .count();
+    eprintln!("文字区域的红色像素：{red_text}");
+    assert!(red_text > 200, "存下的截图包含文字");
     let shown = crop(&screen, screen_origin, region);
     let mut max_diff = 0;
     let mut differing = 0usize;
@@ -387,6 +454,9 @@ impl SelectionOverlay for NoOverlay {
         unreachable!()
     }
     fn update_canvas(&mut self, _: Point, _: &Image) -> Result<(), PlatformError> {
+        unreachable!()
+    }
+    fn rasterize_text(&self, _: &str, _: u32) -> Result<TextMask, PlatformError> {
         unreachable!()
     }
     fn close(&mut self) {}

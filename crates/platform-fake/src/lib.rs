@@ -13,8 +13,10 @@
 //! [`FakePlatform::recognition_requests`] 查看识别过哪些图像。
 //!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
-//! [`FakePlatform::press_key`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
+//! [`FakePlatform::press_key`]、[`FakePlatform::type_text`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
 //! 和真实平台“窗口过程把输入放进事件队列”的方式一致。
+//!
+//! 标注文字的字形由 [`text_mask`] 按简单规则生成（方块代替字形），测试可以据此写出期望像素。
 //!
 //! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
 //!
@@ -46,6 +48,7 @@ mod notifier;
 mod ocr;
 mod overlay;
 mod resident_channel;
+mod text;
 mod tray;
 mod update;
 mod video;
@@ -68,6 +71,7 @@ pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
+pub use text::text_mask;
 pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
 pub use window_source::{FakeWindow, window_pattern};
 
@@ -680,6 +684,18 @@ impl FakePlatform {
             key,
             modifiers: Modifiers::NONE,
         })
+    }
+
+    /// 在遮罩上打字：`text` 的每个字符依次以 [`OverlayInput::Character`] 递交，包括用输入法
+    /// 输入、确认后的中文（平台逐字递交）。只能含可打印字符，换行用 [`press_key`](Self::press_key)
+    /// 按 Enter。
+    pub fn type_text(&self, text: &str) -> Vec<PlatformEvent> {
+        text.chars()
+            .map(|c| {
+                assert!(!c.is_control(), "type_text 只能输入可打印字符");
+                self.overlay_input(OverlayInput::Character(c))
+            })
+            .collect()
     }
 
     /// 用户框选 `region` 并确定：从它左上角的像素拖到右下角的像素，再按 Enter。

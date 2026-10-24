@@ -176,6 +176,8 @@ overlay-record-hint = Enter 或双击选区：开始录屏　Esc：取消
 
 annotation-rectangle = 矩形
 annotation-arrow = 箭头
+annotation-mosaic = 马赛克
+annotation-text = 文字
 annotation-cancel = 取消
 annotation-save-as = 另存为
 annotation-auto-save = 自动存储

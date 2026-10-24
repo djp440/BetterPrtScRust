@@ -34,6 +34,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::Ime::{HIMC, ImmAssociateContextEx};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DestroyWindow, GWLP_USERDATA, HWND_TOPMOST, RegisterClassExW,
@@ -100,12 +101,15 @@ impl LiveWindow {
             cloak(hwnd, true);
             // 低于 Windows 10 2004 时不支持，遮罩仍可用（录屏开始前遮罩已关闭）。
             let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            // 实时遮罩不接受文字输入：关掉输入法，打字不会弹出输入法的窗口。
+            let _ = ImmAssociateContextEx(hwnd, HIMC::default(), 0);
             let shared = Rc::new(Shared {
                 queue,
                 origin: Cell::new(Point::new(bounds.x, bounds.y)),
                 cursor: Cell::new(OverlayCursor::Crosshair),
                 active: Cell::new(false),
                 stale: Cell::new(false),
+                high_surrogate: Cell::new(None),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::as_ptr(&shared) as isize);
             // 从这里起出错时由 Drop 销毁窗口。

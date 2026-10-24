@@ -31,8 +31,9 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
+    IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -88,8 +89,8 @@ pub(crate) struct Gpu {
     pub d2d: ID2D1DeviceContext,
     dwrite: IDWriteFactory,
     pub brush: ID2D1SolidColorBrush,
-    /// 每个字号、对齐方式一个文字格式（字号按 1/100 像素取整，与是否居中一起作键）。
-    text_formats: RefCell<Vec<((u32, bool), IDWriteTextFormat)>>,
+    /// 每个字号、用途一个文字格式（字号按 1/100 像素取整，与用途一起作键）。
+    text_formats: RefCell<Vec<((u32, TextStyle), IDWriteTextFormat)>>,
 }
 
 impl Gpu {
@@ -447,31 +448,43 @@ impl Gpu {
 
     /// 字号为 `font_size`（物理像素）的文字格式：微软雅黑 UI 半粗体、不换行、左上对齐。
     pub fn text_format(&self, font_size: f32) -> Result<IDWriteTextFormat, PlatformError> {
-        self.cached_text_format(font_size, false)
+        self.cached_text_format(font_size, TextStyle::Label)
     }
 
     /// 同 [`text_format`](Self::text_format)，但在排版矩形内水平、垂直都居中。
     pub fn centered_text_format(&self, font_size: f32) -> Result<IDWriteTextFormat, PlatformError> {
-        self.cached_text_format(font_size, true)
+        self.cached_text_format(font_size, TextStyle::Centered)
+    }
+
+    /// 标注文字的格式：微软雅黑 UI 常规、不换行、左上对齐。
+    pub fn annotation_text_format(
+        &self,
+        font_size: f32,
+    ) -> Result<IDWriteTextFormat, PlatformError> {
+        self.cached_text_format(font_size, TextStyle::Annotation)
     }
 
     fn cached_text_format(
         &self,
         font_size: f32,
-        centered: bool,
+        style: TextStyle,
     ) -> Result<IDWriteTextFormat, PlatformError> {
-        let key = ((font_size * 100.0).round() as u32, centered);
+        let key = ((font_size * 100.0).round() as u32, style);
         let mut formats = self.text_formats.borrow_mut();
         if let Some((_, format)) = formats.iter().find(|(k, _)| *k == key) {
             return Ok(format.clone());
         }
+        let weight = match style {
+            TextStyle::Label | TextStyle::Centered => DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            TextStyle::Annotation => DWRITE_FONT_WEIGHT_NORMAL,
+        };
         let format = unsafe {
             let format = self
                 .dwrite
                 .CreateTextFormat(
                     w!("Microsoft YaHei UI"),
                     None,
-                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    weight,
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
                     font_size,
@@ -481,7 +494,7 @@ impl Gpu {
             format
                 .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)
                 .map_err(|e| win_error("设置文字格式失败", e))?;
-            if centered {
+            if style == TextStyle::Centered {
                 format
                     .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)
                     .and_then(|()| format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER))
@@ -492,6 +505,17 @@ impl Gpu {
         formats.push((key, format.clone()));
         Ok(format)
     }
+}
+
+/// 文字格式的用途。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextStyle {
+    /// 遮罩上带底色的标签。
+    Label,
+    /// 工具条按钮上居中的文字。
+    Centered,
+    /// 标注里的文字。
+    Annotation,
 }
 
 /// 显示器在虚拟桌面中的范围。

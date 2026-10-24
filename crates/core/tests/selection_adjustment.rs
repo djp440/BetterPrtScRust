@@ -323,11 +323,11 @@ fn shifted(rect: Rect, dx: i32, dy: i32) -> Rect {
 fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
     let fake = single_display();
     let mut instance = capture(&fake, vec![PostCaptureAction::Annotate]);
-    let region = Rect::new(100, 80, 300, 200);
+    let region = Rect::new(300, 80, 300, 200);
     select(&fake, &mut instance, region);
     let copy = text_rect(&fake, "复制");
 
-    // 工具条贴在选区右下方：拖右下角手柄、按方向键后，工具条随选区挪动。
+    // 工具条贴在选区右下方（选区靠右一些，免得工具条被挤到屏幕左边缘）：拖右下角手柄、按方向键后，工具条随选区挪动。
     let handle = Point::new(right(region), bottom(region));
     feed(
         &mut instance,
@@ -339,7 +339,7 @@ fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
         vec![key(&fake, OverlayKey::Right, Modifiers::NONE)],
     );
     assert_eq!(text_rect(&fake, "复制"), shifted(copy, 41, 30));
-    let adjusted = Rect::new(101, 80, 340, 230);
+    let adjusted = Rect::new(301, 80, 340, 230);
     assert!(handle_at(
         &fake.overlay_scene().unwrap(),
         handle_points(adjusted)[7]

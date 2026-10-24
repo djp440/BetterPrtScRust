@@ -23,7 +23,7 @@ use bps_core::{
 use bps_platform::{
     Backdrop, Clipboard, ClipboardItem, Color, Display, DisplayId, FrameSource, Image, Modifiers,
     Notification, Notifier, OverlayInput, OverlayItem, OverlayKey, OverlayScene, PlatformError,
-    PlatformEvent, Point, PointerButton, Rect, SelectionOverlay, SystemLanguage,
+    PlatformEvent, Point, PointerButton, Rect, SelectionOverlay, SystemLanguage, TextMask,
 };
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::Foundation::HGLOBAL;
@@ -56,6 +56,9 @@ impl SelectionOverlay for RecordingOverlay {
     }
     fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError> {
         self.inner.update_canvas(at, patch)
+    }
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
+        self.inner.rasterize_text(text, font_size)
     }
     fn close(&mut self) {
         *self.scene.borrow_mut() = None;
@@ -399,6 +402,9 @@ impl SelectionOverlay for NoOverlay {
         unreachable!()
     }
     fn update_canvas(&mut self, _: Point, _: &Image) -> Result<(), PlatformError> {
+        unreachable!()
+    }
+    fn rasterize_text(&self, _: &str, _: u32) -> Result<TextMask, PlatformError> {
         unreachable!()
     }
     fn close(&mut self) {}
