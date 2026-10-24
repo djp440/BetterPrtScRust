@@ -510,18 +510,19 @@ impl ResidentInstance {
             self.long_screenshot = Some(capture);
             return Ok(Progress::Pending);
         }
+        // 窗口模式先悬停高亮、单击选窗，标注（如果有）在窗口截图上进行。
+        if request.mode == CaptureMode::Window {
+            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
+                .map_err(CaptureFailure::before_actions)?;
+            self.window_capture = Some(capture);
+            return Ok(Progress::Pending);
+        }
         if request.mode == CaptureMode::Region
             || request.actions.contains(&PostCaptureAction::Annotate)
         {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.region_capture = Some(capture);
-            return Ok(Progress::Pending);
-        }
-        if request.mode == CaptureMode::Window {
-            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
-                .map_err(CaptureFailure::before_actions)?;
-            self.window_capture = Some(capture);
             return Ok(Progress::Pending);
         }
         let screenshot = capture::capture(&self.platform, request.mode)

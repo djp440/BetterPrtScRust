@@ -4,5 +4,6 @@ mod preview;
 mod session;
 mod stitcher;
 
+pub(crate) use preview::annotation_view;
 pub(crate) use session::LongScreenshotCapture;
 pub use stitcher::{LongScreenshot, Stitched};

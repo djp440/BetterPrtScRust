@@ -16,7 +16,7 @@ use bps_platform::{
 };
 
 use super::{LongScreenshot, Stitched, preview};
-use crate::annotation::finish;
+use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Response};
 use crate::annotation::toolbar::{Entry, Toolbar, ToolbarButton};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
@@ -291,7 +291,10 @@ impl LongScreenshotCapture {
                     annotator,
                     view,
                     &self.request,
-                    self.captured_at,
+                    &Origin {
+                        captured_at: self.captured_at,
+                        window_title: None,
+                    },
                     how,
                     self.texts,
                 ) {

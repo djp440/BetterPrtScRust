@@ -16,7 +16,7 @@ use bps_platform::{
     PlatformError, Point, Rect,
 };
 
-use crate::annotation::finish;
+use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Finish, Response};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
 use crate::magnifier::Magnifier;
@@ -193,7 +193,10 @@ impl RegionCapture {
             annotator,
             region,
             &self.request,
-            self.captured_at,
+            &Origin {
+                captured_at: self.captured_at,
+                window_title: None,
+            },
             finish,
             self.texts,
         ) {

@@ -13,6 +13,13 @@ use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
 use crate::{CaptureRequest, CoreError, OutputFormat, PostCaptureAction, Texts, action, encode};
 
+/// 被标注的截图是什么时候、从哪里截下来的：命名模板用它。
+pub(crate) struct Origin {
+    pub captured_at: LocalDateTime,
+    /// 窗口捕获时被截窗口的标题。
+    pub window_title: Option<String>,
+}
+
 /// 另存为对话框里可选的格式（显示名、扩展名），按这个顺序列出。
 const SAVE_AS_FORMATS: [(OutputFormat, &str, &[&str]); 4] = [
     (OutputFormat::Png, "PNG", &["png"]),
@@ -61,7 +68,7 @@ pub(crate) fn conclude(
     annotator: &Annotator,
     region: Rect,
     request: &CaptureRequest,
-    captured_at: LocalDateTime,
+    origin: &Origin,
     finish: Finish,
     texts: &Texts,
 ) -> Option<Result<(), CaptureFailure>> {
@@ -75,8 +82,8 @@ pub(crate) fn conclude(
     let screenshot = Screenshot {
         image,
         mode: request.mode,
-        captured_at,
-        window_title: None,
+        captured_at: origin.captured_at,
+        window_title: origin.window_title.clone(),
     };
     let mut save_as: Option<PathBuf> = None;
     if finish == Finish::SaveAs {
