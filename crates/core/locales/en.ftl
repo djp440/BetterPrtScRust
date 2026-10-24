@@ -209,6 +209,20 @@ result-panel-copied = Copied to the clipboard
 result-panel-copy-failed = Copy failed: { $error }
 result-panel-open-settings-failed = Cannot open Windows Settings: { $error }
 result-panel-close = Close
+config-unknown-translation-provider = Unknown translation service “{ $provider }”: use openai (OpenAI-compatible API) or deepl
+config-unknown-target-language = Unknown target language “{ $language }”: use auto (follow the interface language), zh-CN, en, ja, ko, fr, de, es or ru
+translation-error-network = Cannot reach the translation service: { $detail }
+translation-error-rejected = The translation service rejected the API key (HTTP { $status }). Check api_key under [translation] in config.toml
+translation-error-http = The translation service returned an error (HTTP { $status })
+translation-error-http-detail = The translation service returned an error (HTTP { $status }): { $detail }
+translation-error-reply = Cannot understand the reply from the translation service
+result-panel-translate = Translate
+result-panel-translate-unconfigured = No translation service is configured: fill in a service (openai or deepl) and your own API key under [translation] in config.toml
+result-panel-translate-unconfigured-hint = No translation service (see [translation] in config.toml)
+result-panel-translating = Translating…
+result-panel-translation = Translation
+result-panel-translation-failed = Translation failed: { $error }
+result-panel-copy-translation = Copy translation
 ## Long screenshot
 
 long-screenshot-start = Start

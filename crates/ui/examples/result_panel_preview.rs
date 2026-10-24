@@ -1,5 +1,6 @@
 //! 结果面板的界面预览：用一个假的文字识别显示各种状态，供目视检查布局与文字。
-//! 不碰剪贴板（复制只打印到控制台），不发出网络请求。
+//! 不碰剪贴板（复制只打印到控制台），不发出网络请求（translated / translate-failed 场景
+//! 配置了假的翻译服务，不联网）。
 //!
 //! ```text
 //! cargo run -p bps-ui --example result_panel_preview -- [recognized|slow|failed|no-language-pack] [zh-CN|en]
@@ -9,9 +10,32 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use bps_core::Language;
-use bps_platform::{Image, PlatformError, RecognitionLanguage, RecognizedLine, TextRecognizer};
+use bps_core::{Language, TargetLanguage, TranslationConfig, TranslationProvider};
+use bps_platform::{
+    HttpRequest, HttpResponse, HttpTransport, Image, PlatformError, RecognitionLanguage,
+    RecognizedLine, TextRecognizer,
+};
 use bps_ui::{ResultPanelEnvironment, SystemClipboard, UiEnvironment, UiFont, run_result_panel};
+
+/// 假的翻译服务传输：稍等片刻后返回固定译文，或模拟网络失败。
+struct PreviewHttp {
+    fail: bool,
+}
+
+impl HttpTransport for PreviewHttp {
+    fn post(&self, _request: &HttpRequest) -> Result<HttpResponse, PlatformError> {
+        thread::sleep(Duration::from_millis(1500));
+        if self.fail {
+            return Err(PlatformError::new("预览：无法连接服务器"));
+        }
+        Ok(HttpResponse {
+            status: 200,
+            body: br#"{"choices":[{"message":{"content":"Hello, world.
+This is a preview translation."}}]}"#
+                .to_vec(),
+        })
+    }
+}
 
 struct PreviewRecognizer {
     scenario: String,
@@ -105,6 +129,18 @@ fn main() {
         ui,
         language,
         screenshot: Image::from_rgba(1, 1, vec![255; 4]),
+        translation: scenario
+            .starts_with("translate")
+            .then(|| TranslationConfig {
+                provider: TranslationProvider::OpenAi,
+                api_key: "preview".to_owned(),
+                base_url: None,
+                model: None,
+                target_language: TargetLanguage::Auto,
+            }),
+        http: Arc::new(PreviewHttp {
+            fail: scenario == "translate-failed",
+        }),
         recognizer: Arc::new(PreviewRecognizer { scenario }),
     });
     if let Err(e) = result {
