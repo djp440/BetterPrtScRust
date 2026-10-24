@@ -76,6 +76,10 @@ impl FileSystem for WindowsFileSystem {
     fn remove_file(&mut self, path: &Path) -> Result<(), PlatformError> {
         fs::remove_file(path).map_err(|e| io_error("删除文件", path, e))
     }
+
+    fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), PlatformError> {
+        fs::write(path, contents).map_err(|e| io_error("写入文件", path, e))
+    }
 }
 
 fn io_error(action: &str, path: &Path, error: io::Error) -> PlatformError {

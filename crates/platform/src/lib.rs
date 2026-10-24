@@ -14,6 +14,7 @@ mod clock;
 mod config_file;
 mod error;
 mod event;
+mod file_dialog;
 mod file_system;
 mod frame_source;
 mod geometry;
@@ -29,6 +30,7 @@ mod tray;
 mod update;
 mod video;
 mod window;
+mod window_source;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -36,6 +38,7 @@ pub use clock::{Clock, LocalDateTime};
 pub use config_file::ConfigFile;
 pub use error::PlatformError;
 pub use event::PlatformEvent;
+pub use file_dialog::{FileDialog, FileType, SaveAsOptions};
 pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
@@ -59,6 +62,7 @@ pub use video::{
     VideoSource, VideoStream, VideoTarget, VideoWriter,
 };
 pub use window::{StandaloneWindow, WindowLauncher};
+pub use window_source::{TopLevelWindow, WindowId, WindowLayout, WindowSource};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -100,4 +104,8 @@ pub struct Platform {
     pub video_encoder: Box<dyn VideoEncoder>,
     /// 节拍：录屏期间按帧率递交 [`PlatformEvent::Tick`]。
     pub ticker: Box<dyn Ticker>,
+    /// 文件对话框（另存为）。
+    pub file_dialog: Box<dyn FileDialog>,
+    /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。
+    pub window_source: Box<dyn WindowSource>,
 }

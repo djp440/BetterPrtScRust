@@ -1,4 +1,4 @@
-use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform};
+use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform, Point};
 
 use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, stitch};
 
@@ -40,7 +40,10 @@ impl CaptureFailure {
 pub(crate) fn is_implemented(mode: CaptureMode) -> bool {
     matches!(
         mode,
-        CaptureMode::Display | CaptureMode::VirtualDesktop | CaptureMode::Region
+        CaptureMode::Display
+            | CaptureMode::VirtualDesktop
+            | CaptureMode::Region
+            | CaptureMode::Window
     )
 }
 
@@ -70,7 +73,8 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
                 window_title: None,
             })
         }
-        // 区域需要用户在选区遮罩上框选，由 `region::RegionCapture` 跨多个事件完成，不走这里。
+        // 区域、窗口需要用户在选区遮罩上框选或选择，由 `region::RegionCapture`、
+        // `window::WindowCapture` 跨多个事件完成，不走这里。
         CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
     }
 }
@@ -79,11 +83,16 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
 pub(crate) fn display_under_cursor(frames: &dyn FrameSource) -> Result<Display, CoreError> {
     let displays = frames.displays()?;
     let cursor = frames.cursor_position()?;
-    displays
-        .iter()
-        .find(|d| d.bounds.contains(cursor))
-        .or_else(|| displays.iter().find(|d| d.is_primary))
-        .or_else(|| displays.first())
+    display_at(&displays, cursor)
         .cloned()
         .ok_or(CoreError::NoDisplay)
+}
+
+/// `displays` 中包含 `point` 的显示器；`point` 不在任何显示器内时退回主显示器。
+pub(crate) fn display_at(displays: &[Display], point: Point) -> Option<&Display> {
+    displays
+        .iter()
+        .find(|d| d.bounds.contains(point))
+        .or_else(|| displays.iter().find(|d| d.is_primary))
+        .or_else(|| displays.first())
 }

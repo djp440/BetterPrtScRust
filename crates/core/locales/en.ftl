@@ -167,3 +167,14 @@ settings-cancel = Cancel
 ## 选区遮罩
 overlay-selected-hint = Enter or double-click the selection: done   Esc: cancel
 overlay-record-hint = Enter or double-click the selection: start recording   Esc: cancel
+
+## Annotation
+
+annotation-rectangle = Rectangle
+annotation-arrow = Arrow
+annotation-cancel = Cancel
+annotation-save-as = Save as
+annotation-auto-save = Auto-save
+annotation-copy = Copy
+save-as-file-type = { $format } image
+notification-save-as-failed-title = Could not save the screenshot

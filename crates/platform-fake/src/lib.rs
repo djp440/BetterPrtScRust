@@ -3,9 +3,10 @@
 //! 用法：先用 [`FakeDisplay`] 和 [`FakePlatform`] 的构造方法描述“桌面”，
 //! 再用 [`FakePlatform::platform`] 生成交给 `bps-core` 的 [`Platform`]；
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
-//! 编辑配置文件、修改系统设置、选托盘菜单、在选区遮罩上框选或取消）并检查外部可见的结果
-//! （剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、开机自启登记、
-//! 遮罩当前画的场景、托盘菜单的文字、打开的窗口、检查更新发出的请求）。
+//! 编辑配置文件、修改系统设置、选托盘菜单、关闭桌面上的窗口、在选区遮罩上框选或取消）
+//! 并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、
+//! 开机自启登记、遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
+//! 检查更新发出的请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
 //! [`FakePlatform::press_key`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
@@ -33,6 +34,7 @@ mod autostart;
 mod clipboard;
 mod config_file;
 pub mod decode;
+mod file_dialog;
 mod file_system;
 mod frame_source;
 mod hotkeys;
@@ -42,6 +44,7 @@ mod resident_channel;
 mod tray;
 mod update;
 mod video;
+mod window_source;
 mod windows;
 
 use std::path::{Path, PathBuf};
@@ -51,8 +54,8 @@ use std::time::Duration;
 use bps_platform::{
     AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, Image, Key, LatestRelease,
     LocalDateTime, Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform,
-    PlatformError, PlatformEvent, Point, PointerButton, Rect, StandaloneWindow, SystemLanguage,
-    TrayMenuItem,
+    PlatformError, PlatformEvent, Point, PointerButton, Rect, SaveAsOptions, StandaloneWindow,
+    SystemLanguage, TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -61,10 +64,12 @@ pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
 pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
+pub use window_source::{FakeWindow, window_pattern};
 
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
 use clipboard::FakeClipboard;
 use config_file::{ConfigFileState, FakeConfigFile};
+use file_dialog::{DialogState, FakeFileDialog};
 use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
@@ -73,6 +78,7 @@ use overlay::{FakeOverlay, OverlayState};
 use tray::FakeTrayMenu;
 use update::{FakeUpdateService, UpdateState};
 use video::{FakeTicker, FakeVideoEncoder, FakeVideoSource, VideoState};
+use window_source::{FakeWindowSource, WindowSourceState};
 use windows::{FakeWindowLauncher, WindowsState};
 
 /// 假时钟的默认时间。
@@ -100,6 +106,8 @@ pub struct FakePlatform {
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
     video: Arc<Mutex<VideoState>>,
+    dialogs: Arc<Mutex<DialogState>>,
+    window_source: Arc<Mutex<WindowSourceState>>,
 }
 
 impl Default for FakePlatform {
@@ -120,6 +128,8 @@ impl Default for FakePlatform {
             system: Default::default(),
             overlay: Default::default(),
             video: Default::default(),
+            dialogs: Default::default(),
+            window_source: Default::default(),
         }
     }
 }
@@ -136,6 +146,16 @@ impl FakePlatform {
     /// 接入一块显示器；按添加顺序分配 `DisplayId`。
     pub fn with_display(self, display: FakeDisplay) -> Self {
         self.frames.lock().unwrap().displays.push(display);
+        self
+    }
+
+    /// 在桌面上打开一个顶层窗口；后添加的窗口在上层（像依次打开的窗口）。
+    pub fn with_window(self, window: FakeWindow) -> Self {
+        self.window_source
+            .lock()
+            .unwrap()
+            .windows
+            .push(Some(window));
         self
     }
 
@@ -158,6 +178,12 @@ impl FakePlatform {
         files.add_dir(&path);
         files.pictures_dir = path;
         drop(files);
+        self
+    }
+
+    /// 预先创建一个目录（及其上级目录）。
+    pub fn with_dir(self, path: impl AsRef<Path>) -> Self {
+        self.files.lock().unwrap().add_dir(path.as_ref());
         self
     }
 
@@ -288,6 +314,12 @@ impl FakePlatform {
         *display = display.clone().with_image(image);
     }
 
+    /// 模拟用户关闭第 `index` 个窗口（按添加顺序，从 0 开始）：之后的窗口布局里没有它，
+    /// 截取它会失败。
+    pub fn close_window(&self, index: usize) {
+        self.window_source.lock().unwrap().windows[index] = None;
+    }
+
     /// 模拟时间流逝。
     pub fn set_time(&self, time: LocalDateTime) {
         *self.time.lock().unwrap() = time;
@@ -372,7 +404,20 @@ impl FakePlatform {
                 state: self.video.clone(),
             }),
             ticker: Box::new(FakeTicker(self.video.clone())),
+            file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),
+            window_source: Box::new(FakeWindowSource(self.window_source.clone())),
         }
+    }
+
+    /// 安排用户在下一次弹出的“另存为”对话框里的选择：选定 `path`，或取消（`None`）。
+    /// 可以连续安排多次，按弹出顺序使用；弹出时没有安排好的选择会让测试 panic。
+    pub fn answer_save_as(&self, path: Option<PathBuf>) {
+        self.dialogs.lock().unwrap().answers.push_back(path);
+    }
+
+    /// 至今弹出过的“另存为”对话框，按弹出顺序排列。
+    pub fn save_as_dialogs(&self) -> Vec<SaveAsOptions> {
+        self.dialogs.lock().unwrap().shown.clone()
     }
 
     /// 当前的开机自启登记：普通方式在前。
@@ -501,6 +546,25 @@ impl FakePlatform {
     /// 正显示着的遮罩底下是什么（冻结帧或实时画面）；遮罩没有显示时返回 `None`。
     pub fn overlay_backdrop(&self) -> Option<Backdrop> {
         self.overlay.lock().unwrap().visible_backdrop()
+    }
+
+    /// 遮罩上用户正看到的画布：位置和内容；没有画布或遮罩没有显示时返回 `None`。
+    pub fn overlay_canvas(&self) -> Option<(Rect, Image)> {
+        self.overlay.lock().unwrap().visible_canvas().cloned()
+    }
+
+    /// 在遮罩上单击写着 `text` 的地方（[`OverlayItem::Text`](bps_platform::OverlayItem::Text)
+    /// 所在矩形的中心），例如工具条上的按钮。遮罩上没有这段文字时 panic。
+    pub fn click_text(&self, text: &str) -> Vec<PlatformEvent> {
+        let scene = self.overlay_scene().expect("选区遮罩没有显示");
+        let rect = scene
+            .text_rect(text)
+            .unwrap_or_else(|| panic!("遮罩上没有“{text}”"));
+        let center = Point::new(
+            rect.x + rect.width as i32 / 2,
+            rect.y + rect.height as i32 / 2,
+        );
+        self.click(PointerButton::Left, center)
     }
 
     /// 模拟用户在遮罩上的一次输入，返回平台事件循环会递交的事件。

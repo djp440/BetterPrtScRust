@@ -163,4 +163,24 @@ impl FileSystem for FakeFileSystem {
         state.files.remove(path);
         Ok(())
     }
+
+    fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), PlatformError> {
+        let mut state = self.0.lock().unwrap();
+        if state.dirs.contains(path) {
+            return Err(PlatformError::new(format!(
+                "无法写入：{} 是目录",
+                path.display()
+            )));
+        }
+        let parent = path.parent().unwrap_or(Path::new(""));
+        if !state.dirs.contains(parent) {
+            return Err(PlatformError::new(format!(
+                "系统找不到指定的路径：{}",
+                parent.display()
+            )));
+        }
+        state.check_writable(path)?;
+        state.files.insert(path.to_path_buf(), contents.to_vec());
+        Ok(())
+    }
 }

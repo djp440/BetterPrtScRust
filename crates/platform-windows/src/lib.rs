@@ -11,10 +11,13 @@
 //! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WgcWindowSource`]：`EnumWindows` 枚举顶层窗口（命中测试用它的布局），Windows.Graphics.Capture
+//!   截取单个窗口的完整内容
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`WgcVideoSource`]：录屏的视频源（Windows.Graphics.Capture，按区域裁剪，GPU 纹理）
 //! - [`MfVideoEncoder`]：录屏的 MP4 编码器（Media Foundation，优先硬件 H.264 编码）
 //! - [`WindowsTicker`]：录屏的节拍（高精度可等待定时器），由 [`EventLoop`] 递交
+//! - [`WindowsFileDialog`]：系统“另存为”对话框，遮罩显示着时显示在遮罩之上
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
 //! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面
@@ -40,6 +43,7 @@ mod display_config;
 pub mod dpi;
 mod error;
 mod event_loop;
+mod file_dialog;
 mod file_system;
 mod font;
 mod frame_source;
@@ -56,6 +60,8 @@ mod ticker;
 mod token;
 mod update;
 mod video;
+mod window_capture;
+mod window_source;
 
 pub use autostart::WindowsAutostart;
 pub use child_windows::{ChildProcessWindows, window_argument};
@@ -63,6 +69,7 @@ pub use clipboard::WindowsClipboard;
 pub use clock::WindowsClock;
 pub use config_file::WindowsConfigFile;
 pub use event_loop::{EventLoop, EventSender, WindowsTrayMenu};
+pub use file_dialog::WindowsFileDialog;
 pub use file_system::WindowsFileSystem;
 pub use font::map_system_font;
 pub use frame_source::DxgiFrameSource;
@@ -83,6 +90,7 @@ pub use token::{
 };
 pub use update::{GitHubReleases, latest_release};
 pub use video::{MfVideoEncoder, WgcVideoSource};
+pub use window_source::WgcWindowSource;
 
 use std::path::PathBuf;
 
@@ -110,5 +118,7 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         video_source: Box::new(WgcVideoSource::new()),
         video_encoder: Box::new(MfVideoEncoder::new()),
         ticker: Box::new(event_loop.ticker()),
+        file_dialog: Box::new(WindowsFileDialog::new()),
+        window_source: Box::new(WgcWindowSource::new()),
     }
 }

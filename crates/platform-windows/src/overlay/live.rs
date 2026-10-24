@@ -43,7 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, PCWSTR, w};
 
-use super::draw;
+use super::draw::{self, Canvas};
 use super::gpu::Gpu;
 use super::window::{PartialWindow, Shared, apply_cursor, cloak, window_proc};
 use crate::error::win_error;
@@ -187,8 +187,13 @@ impl LiveWindow {
         }
     }
 
-    /// 按 `scene` 画一帧并呈现；第一次调用时把窗口显示出来并取得键盘焦点。
-    pub fn render(&self, gpu: &Gpu, scene: &OverlayScene) -> Result<(), PlatformError> {
+    /// 按 `canvas`（有的话）和 `scene` 画一帧并呈现；第一次调用时把窗口显示出来并取得键盘焦点。
+    pub fn render(
+        &self,
+        gpu: &Gpu,
+        canvas: Option<&Canvas>,
+        scene: &OverlayScene,
+    ) -> Result<(), PlatformError> {
         if self.shared.cursor.replace(scene.cursor) != scene.cursor && self.shared.active.get() {
             apply_cursor(scene.cursor);
         }
@@ -209,7 +214,7 @@ impl LiveWindow {
             .map_err(|e| win_error("显示实时遮罩窗口失败", e))?;
         }
         let origin = Point::new(self.bounds.x, self.bounds.y);
-        draw::draw_transparent(gpu, &self.target, origin, scene)?;
+        draw::draw_transparent(gpu, &self.target, origin, canvas, scene)?;
         unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) }
             .ok()
             .map_err(|e| win_error("呈现实时遮罩失败", e))?;

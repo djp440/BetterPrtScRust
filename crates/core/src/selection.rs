@@ -20,15 +20,15 @@ use bps_platform::{
 use crate::stitch::virtual_desktop_bounds;
 
 /// 选区外的半透明遮挡。
-const MASK: Color = Color::rgba(0, 0, 0, 115);
+pub(crate) const MASK: Color = Color::rgba(0, 0, 0, 115);
 /// 选区边框。
-const ACCENT: Color = Color::rgba(30, 144, 255, 255);
-const LABEL_TEXT: Color = Color::rgba(255, 255, 255, 255);
-const LABEL_BACKGROUND: Color = Color::rgba(0, 0, 0, 180);
+pub(crate) const ACCENT: Color = Color::rgba(30, 144, 255, 255);
+pub(crate) const LABEL_TEXT: Color = Color::rgba(255, 255, 255, 255);
+pub(crate) const LABEL_BACKGROUND: Color = Color::rgba(0, 0, 0, 180);
 /// 以下尺寸是 100% 缩放下的值（物理像素），按标签所在显示器的缩放比例放大。
-const FONT_SIZE: f32 = 13.0;
-const LABEL_PADDING: f64 = 4.0;
-const LABEL_GAP: f64 = 4.0;
+pub(crate) const FONT_SIZE: f32 = 13.0;
+pub(crate) const LABEL_PADDING: f64 = 4.0;
+pub(crate) const LABEL_GAP: f64 = 4.0;
 /// 估算标签高度用的行高系数；只用于判断标签放在选区外还是选区内，实际尺寸由平台按字体决定。
 const LINE_HEIGHT: f32 = 1.4;
 
@@ -63,8 +63,8 @@ pub(crate) struct RegionSelection {
     /// 虚拟桌面范围：指针位置和选区都限制在其中。
     bounds: Rect,
     state: State,
-    /// 选区确定后的操作提示（已按界面语言翻译）。
-    selected_hint: String,
+    /// 选区确定后的操作提示（已按界面语言翻译）；标注时由工具条代替，为 `None`。
+    selected_hint: Option<String>,
 }
 
 impl RegionSelection {
@@ -75,8 +75,28 @@ impl RegionSelection {
             displays,
             bounds,
             state: State::Idle,
-            selected_hint,
+            selected_hint: Some(selected_hint),
         })
+    }
+
+    /// 一开始就已框好 `region`（例如显示器模式下直接标注整块显示器）。
+    pub fn with_selected(mut self, region: Rect) -> Self {
+        self.state = State::Selected(region);
+        self
+    }
+
+    /// 选区确定后不显示操作提示。
+    pub fn without_selected_hint(mut self) -> Self {
+        self.selected_hint = None;
+        self
+    }
+
+    /// 已经框好、等待确定的选区；还没有选区或正在拖拽时为 `None`。
+    pub fn selected(&self) -> Option<Rect> {
+        match self.state {
+            State::Selected(region) => Some(region),
+            _ => None,
+        }
     }
 
     /// 处理一次用户输入。
@@ -214,12 +234,14 @@ impl RegionSelection {
                     border,
                     size,
                 )));
-                if matches!(self.state, State::Selected(_)) {
+                if let Some(hint) = &self.selected_hint
+                    && matches!(self.state, State::Selected(_))
+                {
                     items.push(OverlayItem::Label(self.label_beside(
                         region,
                         Side::Below,
                         border,
-                        self.selected_hint.clone(),
+                        hint.clone(),
                     )));
                 }
             }
@@ -307,7 +329,7 @@ enum Side {
 }
 
 /// 以 `a`、`b` 两个像素为对角、同时包含它们的矩形。
-fn between(a: Point, b: Point) -> Rect {
+pub(crate) fn between(a: Point, b: Point) -> Rect {
     let (left, right) = (a.x.min(b.x), a.x.max(b.x));
     let (top, bottom) = (a.y.min(b.y), a.y.max(b.y));
     Rect::new(
@@ -319,7 +341,7 @@ fn between(a: Point, b: Point) -> Rect {
 }
 
 /// 覆盖 `bounds` 中 `region` 以外部分的遮挡：上、下、左、右四条。
-fn mask_around(bounds: Rect, region: Rect) -> Vec<OverlayItem> {
+pub(crate) fn mask_around(bounds: Rect, region: Rect) -> Vec<OverlayItem> {
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width as i32, top + bounds.height as i32);
     let (r_left, r_top) = (region.x, region.y);

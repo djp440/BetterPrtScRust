@@ -29,4 +29,7 @@ pub trait FileSystem {
 
     /// 删除文件 `path`。只用于删除本程序自己建的临时文件（例如放弃了的录屏）。
     fn remove_file(&mut self, path: &Path) -> Result<(), PlatformError>;
+    /// 把 `contents` 写入 `path`：文件不存在时新建，已存在时覆盖。只用于用户明确选择了
+    /// 这个路径的场合（另存为）；自动存储用不覆盖的 [`create_new`](Self::create_new)。
+    fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), PlatformError>;
 }

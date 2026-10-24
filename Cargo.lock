@@ -233,8 +233,10 @@ version = "0.1.0"
 dependencies = [
  "bps-core",
  "bps-platform",
+ "bps-platform-fake",
  "bps-platform-windows",
  "bps-ui",
+ "png",
  "windows",
 ]
 
