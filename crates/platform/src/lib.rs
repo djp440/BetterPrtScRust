@@ -18,6 +18,8 @@ mod geometry;
 mod hotkey;
 mod image;
 mod notifier;
+mod request;
+mod resident_channel;
 
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use clock::{Clock, LocalDateTime};
@@ -29,6 +31,8 @@ pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
 pub use image::Image;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use request::IncomingRequest;
+pub use resident_channel::{ChannelError, ResidentChannel};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///

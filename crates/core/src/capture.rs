@@ -27,6 +27,9 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
                 window_title: None,
             })
         }
+        CaptureMode::VirtualDesktop | CaptureMode::Region | CaptureMode::Window => {
+            Err(CoreError::UnsupportedCaptureMode(mode))
+        }
     }
 }
 

@@ -5,6 +5,8 @@
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键）
 //! 并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、已注册的热键）。
 //!
+//! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
+//!
 //! ```
 //! use bps_platform::{Point, Rect};
 //! use bps_platform_fake::{FakeDisplay, FakePlatform};
@@ -23,6 +25,7 @@ mod file_system;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod resident_channel;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -32,6 +35,7 @@ use bps_platform::{Clock, Hotkey, LocalDateTime, Notification, Platform, Platfor
 pub use clipboard::ClipboardContent;
 pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
+pub use resident_channel::FakeResidentChannel;
 
 use clipboard::FakeClipboard;
 use file_system::{FakeFileSystem, FsState};

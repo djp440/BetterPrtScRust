@@ -7,6 +7,9 @@ use crate::OutputOptions;
 pub enum Command {
     /// 按捕获模式捕获一次，然后依次执行截后动作。
     Capture(CaptureRequest),
+    /// 用户再次启动了程序：激活已在运行的常驻实例。
+    /// 目前常驻实例只有托盘图标、没有可显示的界面，所以什么也不做；有了设置界面后改为打开它。
+    Activate,
     /// 注销热键并结束常驻实例。
     Exit,
 }
@@ -38,6 +41,24 @@ impl CaptureRequest {
 pub enum CaptureMode {
     /// 鼠标所在的那块显示器，按物理像素输出。
     Display,
+    /// 所有显示器拼合成的整个虚拟桌面。尚未实现，执行时报告“暂不支持”。
+    VirtualDesktop,
+    /// 用户在选区遮罩上框选的区域。尚未实现，执行时报告“暂不支持”。
+    Region,
+    /// 用户在选区遮罩上指定的顶层窗口。尚未实现，执行时报告“暂不支持”。
+    Window,
+}
+
+impl CaptureMode {
+    /// 术语表里的中文名称，用于给人看的消息。
+    pub fn label(self) -> &'static str {
+        match self {
+            CaptureMode::Display => "显示器",
+            CaptureMode::VirtualDesktop => "虚拟桌面",
+            CaptureMode::Region => "区域",
+            CaptureMode::Window => "窗口",
+        }
+    }
 }
 
 /// 截后动作：捕获完成后对产物执行的处理。

@@ -1,7 +1,7 @@
 //! 命名模板：自动存储时根据日期时间、捕获模式、窗口标题等生成文件名。
 //!
 //! 语法：`{...}` 是占位符，其余文字原样保留；`{{`、`}}` 表示字面的花括号。
-//! - `{mode}`：捕获模式，例如 `display`
+//! - `{mode}`：捕获模式，与 CLI 的名称一致：`display`、`virtual-desktop`、`region`、`window`
 //! - `{window_title}`：被捕获窗口的标题，没有窗口时为空
 //! - 其他占位符是日期时间格式，由下列记号和任意非字母字符组成（区分大小写）：
 //!   `yyyy` `yy` 年，`MM` `M` 月，`dd` `d` 日，`HH` `H` 时（24 小时制），
@@ -15,6 +15,8 @@ use std::str::FromStr;
 use bps_platform::LocalDateTime;
 
 use crate::CaptureMode;
+// `{mode}` 的取值与 CLI 里的捕获模式名称一致（display、virtual-desktop、region、window）。
+use crate::request::mode_name;
 
 /// 默认命名模板。
 pub const DEFAULT_FILENAME_TEMPLATE: &str = "{yyyy-MM-dd HH-mm-ss}";
@@ -253,13 +255,6 @@ fn format_date_time(out: &mut String, parts: &[DateTimePart], t: LocalDateTime) 
             DateTimePart::Second1 => write!(out, "{}", t.second),
             DateTimePart::Millisecond3 => write!(out, "{:03}", t.millisecond),
         };
-    }
-}
-
-/// `{mode}` 的取值，与 CLI 里的捕获模式名称一致。
-fn mode_name(mode: CaptureMode) -> &'static str {
-    match mode {
-        CaptureMode::Display => "display",
     }
 }
 
