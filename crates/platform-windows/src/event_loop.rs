@@ -1,6 +1,7 @@
 //! 常驻实例的宿主：隐藏窗口 + 消息循环 + 托盘图标。
 //!
-//! 热键（`WM_HOTKEY`）、托盘菜单、关闭请求、配置文件变更都转换成 [`PlatformEvent`]
+//! 热键（`WM_HOTKEY`）、托盘菜单（内容由 `core` 经 [`WindowsTrayMenu`] 设置）、关闭请求、
+//! 配置文件变更都转换成 [`PlatformEvent`]
 //! 放进队列，由 [`EventLoop::run`] 在窗口过程之外逐个交给处理函数，
 //! 因此处理函数里执行耗时的捕获不会重入窗口过程。
 //! 其他线程（命名管道等）经 [`EventSender`] 投递事件，同样进入这个队列；
@@ -17,7 +18,9 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use bps_platform::{HotkeyId, Image, PlatformError, PlatformEvent};
+use bps_platform::{
+    HotkeyId, Image, PlatformError, PlatformEvent, TrayMenu, TrayMenuItem, TrayMenuItemId,
+};
 use windows::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WAIT_OBJECT_0,
     WPARAM,
@@ -41,7 +44,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_QUIT,
     WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::config_file::ChangeNotification;
 use crate::error::win_error;
@@ -60,7 +63,6 @@ const WM_TRAY: u32 = WM_APP + 1;
 /// 其他线程经 [`EventSender`] 投递了事件，唤醒消息循环去取。
 const WM_SENT_EVENT: u32 = WM_APP + 2;
 pub(crate) const TRAY_ICON_ID: u32 = 1;
-const MENU_EXIT: usize = 1;
 /// 配置文件所在目录变化后，等这么久没有新的变化才递交事件。
 const CONFIG_SETTLE_TIMER: usize = 1;
 const CONFIG_SETTLE_DELAY_MS: u32 = 300;
@@ -81,11 +83,27 @@ struct WindowState {
     /// 其他线程投递的事件，收到 `WM_SENT_EVENT` 时移进 `events`。
     sent: mpsc::Receiver<PlatformEvent>,
     tray: RefCell<Option<TrayIcon>>,
+    /// 托盘菜单的内容，由 `core` 设置。
+    menu: MenuItems,
     /// 最近一条托盘通知的点击操作。
     balloon_click: PendingClick,
     /// 资源管理器重启后广播的消息，收到时重新添加托盘图标。
     taskbar_created: u32,
     shared: Rc<Shared>,
+}
+
+/// 托盘菜单的内容，由 [`WindowsTrayMenu`] 写入、窗口过程弹出菜单时读取。
+type MenuItems = Rc<RefCell<Vec<TrayMenuItem>>>;
+
+/// 托盘图标的右键菜单。菜单在用户单击托盘图标时按当前内容弹出。
+pub struct WindowsTrayMenu {
+    items: MenuItems,
+}
+
+impl TrayMenu for WindowsTrayMenu {
+    fn set_items(&mut self, items: Vec<TrayMenuItem>) {
+        *self.items.borrow_mut() = items;
+    }
 }
 
 /// 事件循环与它创建的配置文件、系统截图工具对象共享的状态。
@@ -192,6 +210,7 @@ impl EventLoop {
                 events: EventQueue::default(),
                 sent,
                 tray: RefCell::new(None),
+                menu: MenuItems::default(),
                 balloon_click: PendingClick::default(),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 shared: Rc::default(),
@@ -213,7 +232,7 @@ impl EventLoop {
         }
     }
 
-    /// 显示托盘图标；右键或左键单击弹出只有“退出”一项的菜单。
+    /// 显示托盘图标；右键或左键单击弹出 [`tray_menu`](Self::tray_menu) 设置的菜单。
     pub fn show_tray_icon(&self, tooltip: &str, icon: &Image) -> Result<(), PlatformError> {
         let tray = TrayIcon {
             icon: create_icon(icon)?,
@@ -224,6 +243,13 @@ impl EventLoop {
             old.icon_destroy();
         }
         Ok(())
+    }
+
+    /// 托盘图标的右键菜单；选中某项时本循环递交 [`PlatformEvent::TrayMenuItemSelected`]。
+    pub fn tray_menu(&self) -> WindowsTrayMenu {
+        WindowsTrayMenu {
+            items: self.state.menu.clone(),
+        }
     }
 
     /// 绑定到本窗口的全局热键；按下时本循环递交 [`PlatformEvent::HotkeyPressed`]。
@@ -395,10 +421,12 @@ unsafe extern "system" fn window_proc(
                     if let Some(click) = click {
                         open_click_target(hwnd, &click);
                     }
-                } else if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
-                    && show_tray_menu(hwnd) == Some(MENU_EXIT)
-                {
-                    state.push(PlatformEvent::ExitRequested);
+                } else if mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP {
+                    // 弹出菜单期间会重入窗口过程，先复制一份菜单内容。
+                    let items = state.menu.borrow().clone();
+                    if let Some(id) = show_tray_menu(hwnd, &items) {
+                        state.push(PlatformEvent::TrayMenuItemSelected(id));
+                    }
                 }
                 return LRESULT(0);
             }
@@ -435,10 +463,17 @@ unsafe extern "system" fn window_proc(
 }
 
 /// 在鼠标位置弹出托盘菜单，返回选中的菜单项。
-fn show_tray_menu(hwnd: HWND) -> Option<usize> {
+fn show_tray_menu(hwnd: HWND, items: &[TrayMenuItem]) -> Option<TrayMenuItemId> {
+    if items.is_empty() {
+        return None;
+    }
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("退出"));
+        for (index, item) in items.iter().enumerate() {
+            let label = HSTRING::from(item.label.as_str());
+            // 菜单命令号从 1 开始（0 表示没有选中）。
+            let _ = AppendMenuW(menu, MF_STRING, index + 1, &label);
+        }
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
         // 不先置前，点击菜单外部时菜单不会关闭（KB135788）。
@@ -454,7 +489,8 @@ fn show_tray_menu(hwnd: HWND) -> Option<usize> {
         );
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
-        (command.0 > 0).then_some(command.0 as usize)
+        let chosen = usize::try_from(command.0).ok()?.checked_sub(1)?;
+        items.get(chosen).map(|item| item.id)
     }
 }
 

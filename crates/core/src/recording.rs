@@ -27,7 +27,7 @@ use crate::filename::FilenameFields;
 use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::selection::{RegionSelection, Step};
 use crate::stitch::virtual_desktop_bounds;
-use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir};
+use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir, Texts};
 
 /// MP4 的默认帧率。
 const DEFAULT_MP4_FRAME_RATE: u32 = 30;
@@ -48,6 +48,8 @@ pub(crate) enum Ending {
 pub(crate) struct Recording {
     request: CaptureRequest,
     phase: Phase,
+    /// 开始录屏时的界面语言：遮罩上的提示和录屏结束的通知都用它。
+    texts: &'static Texts,
     /// 经 CLI 转交来、等录屏结束再回复的请求。
     pub requester: Option<IncomingRequest>,
 }
@@ -131,11 +133,17 @@ impl Settings {
 impl Recording {
     /// 开始一次录屏。区域模式先打开实时画面上的选区遮罩，等用户框选要录制的区域；
     /// 显示器（鼠标所在的那台）和虚拟桌面模式不用框选，直接开始录制。
-    pub fn start(platform: &mut Platform, request: CaptureRequest) -> Result<Self, CoreError> {
+    /// 遮罩上的提示和通知用 `texts` 的语言。
+    pub fn start(
+        platform: &mut Platform,
+        request: CaptureRequest,
+        texts: &'static Texts,
+    ) -> Result<Self, CoreError> {
         Settings::of(&request)?;
         let mut recording = Self {
             request,
             phase: Phase::Ended,
+            texts,
             requester: None,
         };
         let frames = platform.frame_source.as_ref();
@@ -153,7 +161,8 @@ impl Recording {
             return Ok(recording);
         }
         let displays = platform.overlay.open(Backdrop::Live)?;
-        let Some(selection) = RegionSelection::new(displays) else {
+        let Some(selection) = RegionSelection::new(displays, texts.get("overlay-record-hint"))
+        else {
             platform.overlay.close();
             return Err(CoreError::NoDisplay);
         };
@@ -233,7 +242,7 @@ impl Recording {
                 platform.overlay.close();
                 Ok(Ending::Cancelled)
             }
-            Phase::Recording(active) => (*active).finish(platform),
+            Phase::Recording(active) => (*active).finish(platform, self.texts),
             Phase::Ended => Ok(Ending::Cancelled),
         }
     }
@@ -357,7 +366,7 @@ impl Active {
 
     /// 停止录制：补齐到此刻的帧（至少一帧），写完视频，改名成命名模板生成的文件名，
     /// 发“录屏已保存”通知，再把文件放进剪贴板。
-    fn finish(mut self, platform: &mut Platform) -> Result<Ending, CaptureFailure> {
+    fn finish(mut self, platform: &mut Platform, texts: &Texts) -> Result<Ending, CaptureFailure> {
         let due = self.due(platform.clock.monotonic()).max(1);
         let caught_up = self.catch_up(due);
         platform.ticker.stop();
@@ -385,7 +394,7 @@ impl Active {
         let path = rename_to_final(platform, &temp, &dir, &stem, extension)
             .map_err(CaptureFailure::before_actions)?;
         platform.notifier.notify(Notification {
-            title: "录屏已保存".to_owned(),
+            title: texts.get("notification-recording-saved-title"),
             body: path.display().to_string(),
             on_click: Some(NotificationClick::OpenFile(path.clone())),
         });

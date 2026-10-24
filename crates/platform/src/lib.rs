@@ -19,12 +19,16 @@ mod frame_source;
 mod geometry;
 mod hotkey;
 mod image;
+mod language;
 mod notifier;
 mod overlay;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
+mod tray;
+mod update;
 mod video;
+mod window;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -35,8 +39,11 @@ pub use event::PlatformEvent;
 pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
-pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError};
+pub use hotkey::{
+    GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError, RegisterHotkeyError,
+};
 pub use image::Image;
+pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
 pub use overlay::{
     Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
@@ -45,10 +52,13 @@ pub use overlay::{
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
+pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
+pub use update::{LatestRelease, UpdateService};
 pub use video::{
     StreamFrame, StreamOptions, Ticker, VideoEncoder, VideoFormat, VideoFrame, VideoSettings,
     VideoSource, VideoStream, VideoTarget, VideoWriter,
 };
+pub use window::{StandaloneWindow, WindowLauncher};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -74,6 +84,14 @@ pub struct Platform {
     pub elevation: Box<dyn Elevation>,
     /// 系统自带截图工具对 PrtSc 键的占用（只读）；设置变化经平台事件循环以 [`PlatformEvent`] 递交。
     pub system_screenshot_tool: Box<dyn SystemScreenshotTool>,
+    /// 托盘图标的右键菜单；选中某项经平台事件循环以 [`PlatformEvent`] 递交。
+    pub tray_menu: Box<dyn TrayMenu>,
+    /// 打开设置界面等独立窗口（各在一个按需启动的子进程里）。
+    pub windows: Box<dyn WindowLauncher>,
+    /// 系统的界面语言，用于“跟随系统”的界面语言。
+    pub system_language: Box<dyn SystemLanguage>,
+    /// 检查更新；结果经平台事件循环以 [`PlatformEvent`] 递交。
+    pub updates: Box<dyn UpdateService>,
     /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
     pub overlay: Box<dyn SelectionOverlay>,
     /// 录屏的视频源：持续捕获屏幕上的一块区域。

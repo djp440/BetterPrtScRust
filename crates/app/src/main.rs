@@ -9,32 +9,68 @@
 //! - `--restarted-as-administrator`：常驻实例为“以管理员身份运行”重新启动了自己，
 //!   新进程等旧进程让出命名管道后接替它；
 //! - `--remove-autostart`：卸载前移除指向本程序的开机自启（安装包的卸载流程调用），
-//!   移除计划任务需要管理员权限时以管理员身份再运行一次（弹出 UAC 提示）。
+//!   移除计划任务需要管理员权限时以管理员身份再运行一次（弹出 UAC 提示）；
+//! - `--settings`：本程序也是独立窗口界面的子进程，打开设置界面（见 [`settings`]），
+//!   用户关掉窗口即退出。由常驻实例按需启动；常驻实例本身不初始化任何界面库。
 
 // release 版不弹控制台窗口；debug 版保留控制台，便于查看输出。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(windows)]
 mod icon;
+#[cfg(windows)]
+mod settings;
 
 use std::process::ExitCode;
 
 #[cfg(windows)]
 fn main() -> ExitCode {
+    use bps_platform::StandaloneWindow;
+    use bps_platform_windows::window_argument;
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == resident::REMOVE_AUTOSTART_ARG) {
         return resident::remove_autostart_before_uninstall();
     }
-    let restarted = args
-        .iter()
-        .any(|a| a == bps_platform_windows::RESTARTED_AS_ADMINISTRATOR_ARG);
-    match resident::run(restarted) {
+    let result = if args
+        .first()
+        .is_some_and(|a| a == window_argument(StandaloneWindow::Settings))
+    {
+        settings::run()
+    } else {
+        let restarted = args
+            .iter()
+            .any(|a| a == bps_platform_windows::RESTARTED_AS_ADMINISTRATOR_ARG);
+        resident::run(restarted)
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("BetterPrtSc 启动失败：{e}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// 程序目录下有 `portable` 标记文件时用便携模式，否则用 `%APPDATA%\BetterPrtSc`。
+/// 常驻实例和设置界面用同一套规则找配置文件。
+#[cfg(windows)]
+fn data_location() -> Result<bps_core::DataLocation, bps_platform::PlatformError> {
+    use bps_core::{DataLocation, PORTABLE_MARKER};
+    use bps_platform::PlatformError;
+
+    let exe = std::env::current_exe()
+        .map_err(|e| PlatformError::new(format!("无法确定程序所在目录：{e}")))?;
+    let program_dir = exe
+        .parent()
+        .ok_or_else(|| PlatformError::new("无法确定程序所在目录"))?;
+    let portable = program_dir.join(PORTABLE_MARKER).is_file();
+    let app_data = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
+    DataLocation::resolve(program_dir, portable, app_data.as_deref()).ok_or_else(|| {
+        PlatformError::new(format!(
+            "找不到 %APPDATA%；可以在程序目录下放一个名为 {PORTABLE_MARKER} 的文件，改用便携模式"
+        ))
+    })
 }
 
 #[cfg(not(windows))]
@@ -47,22 +83,22 @@ fn main() -> ExitCode {
 mod resident {
     use std::error::Error;
     use std::ops::ControlFlow;
-    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::thread;
     use std::time::{Duration, Instant};
 
     use bps_core::{
-        DataLocation, Flow, PORTABLE_MARKER, Reply, Request, ResidentInstance, StartOptions,
-        WhenNotRunning, forward, remove_autostart,
+        Flow, Reply, Request, ResidentInstance, StartOptions, WhenNotRunning, forward,
+        remove_autostart,
     };
     use bps_platform::{Autostart, AutostartMethod, PlatformError, PlatformEvent};
     use bps_platform_windows::{
-        EventLoop, PipeChannel, PipeClaim, ResidentPipe, WindowsAutostart, dpi, is_elevated,
-        resident_pipe_name, run_self_as_administrator_and_wait,
+        EventLoop, PipeChannel, PipeClaim, ResidentPipe, WindowsAutostart,
+        allow_any_process_to_set_foreground, dpi, is_elevated, resident_pipe_name,
+        run_self_as_administrator_and_wait,
     };
 
-    use crate::icon;
+    use crate::{data_location, icon};
 
     /// 卸载前移除开机自启的命令行参数。
     pub const REMOVE_AUTOSTART_ARG: &str = "--remove-autostart";
@@ -106,8 +142,10 @@ mod resident {
         // 先显示托盘图标：启动过程中的通知（如热键注册失败）要靠它发出。
         event_loop.show_tray_icon("BetterPrtSc", &icon::tray_icon())?;
 
+        // 设置界面等独立窗口用本程序自己以子进程打开。
+        let ui_exe = std::env::current_exe()?;
         let mut instance = ResidentInstance::start_with(
-            bps_platform_windows::platform(&event_loop, location.config_file()),
+            bps_platform_windows::platform(&event_loop, location.config_file(), ui_exe),
             StartOptions {
                 portable: location.is_portable(),
                 restarted_as_administrator: restarted,
@@ -198,27 +236,13 @@ mod resident {
         }
     }
 
-    /// 程序目录下有 `portable` 标记文件时用便携模式，否则用 `%APPDATA%\BetterPrtSc`。
-    fn data_location() -> Result<DataLocation, PlatformError> {
-        let exe = std::env::current_exe()
-            .map_err(|e| PlatformError::new(format!("无法确定程序所在目录：{e}")))?;
-        let program_dir = exe
-            .parent()
-            .ok_or_else(|| PlatformError::new("无法确定程序所在目录"))?;
-        let portable = program_dir.join(PORTABLE_MARKER).is_file();
-        let app_data = std::env::var_os("APPDATA").map(PathBuf::from);
-        DataLocation::resolve(program_dir, portable, app_data.as_deref()).ok_or_else(|| {
-            PlatformError::new(format!(
-                "找不到 %APPDATA%；可以在程序目录下放一个名为 {PORTABLE_MARKER} 的文件，改用便携模式"
-            ))
-        })
-    }
-
-    /// 再次启动时：把“激活”请求转交给已在运行的常驻实例，不再拉起新的。
+    /// 再次启动时：把“激活”请求转交给已在运行的常驻实例（它会打开设置界面），不再拉起新的。
     fn activate_running_instance(pipe_name: &str) -> Result<(), Box<dyn Error>> {
+        // 本进程是用户刚启动的，有前台权限；让给常驻实例，设置界面才能出现在最前面。
+        allow_any_process_to_set_foreground();
         let mut channel = PipeChannel::new(pipe_name, std::env::current_exe()?);
         match forward(&Request::Activate, &mut channel, WhenNotRunning::GiveUp)? {
-            Reply::Done => {
+            Reply::Done | Reply::Status(_) => {
                 eprintln!("BetterPrtSc 已在运行，已激活该常驻实例");
                 Ok(())
             }
