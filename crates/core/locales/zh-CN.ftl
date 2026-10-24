@@ -14,6 +14,8 @@ notification-unsupported-title = 暂不支持
 notification-capture-failed-title = 捕获失败
 notification-saved-title = 截图已保存
 notification-save-failed-title = 自动存储失败
+notification-recording-saved-title = 录屏已保存
+notification-recording-in-progress-title = 正在录屏
 notification-config-unwatchable-title = 无法监视配置文件
 notification-config-unwatchable-body = 修改配置文件后需要重启 BetterPrtSc 才能生效。{ $error }
 notification-config-unwritable-title = 无法写入配置文件
@@ -66,6 +68,11 @@ error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
 error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
 error-capture-in-progress = 上一次捕获还没有结束
+error-unsupported-recording-format = 暂不支持“{ $format }”录屏格式
+error-recording-region-too-small = 区域 { $width } × { $height } 太小，无法录屏（宽和高至少 { $minimum } 像素）
+error-nothing-recorded = 没有录到任何画面
+error-recording-in-progress-hotkey = 正在录屏，按 { $hotkey } 停止录制后再捕获
+error-recording-in-progress = 正在录屏，停止录制后再捕获
 
 ## 热键注册失败的原因
 
@@ -160,6 +167,7 @@ settings-cancel = 取消
 
 ## 选区遮罩
 overlay-selected-hint = Enter 或双击选区：完成　Esc：取消
+overlay-record-hint = Enter 或双击选区：开始录屏　Esc：取消
 
 ## 标注
 

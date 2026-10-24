@@ -23,6 +23,7 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
         action,
         PostCaptureAction::CopyToClipboard
             | PostCaptureAction::AutoSave
+            | PostCaptureAction::Record
             | PostCaptureAction::Annotate
             | PostCaptureAction::Ocr
     )
