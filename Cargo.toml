@@ -29,3 +29,7 @@ windows = { version = "0.62", default-features = false }
 lto = true
 codegen-units = 1
 strip = true
+
+# debug 构建也优化第三方依赖：未优化的 PNG 编码处理一张 4K 截图要数秒。
+[profile.dev.package."*"]
+opt-level = 3

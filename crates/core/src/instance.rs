@@ -29,9 +29,6 @@ impl ResidentInstance {
         let mut failures = Vec::new();
         for (index, binding) in self.bindings.iter().enumerate() {
             let id = hotkey_id(index);
-            if self.registered.contains(&id) {
-                continue;
-            }
             match self.platform.hotkeys.register(id, binding.hotkey) {
                 Ok(()) => self.registered.push(id),
                 Err(error) => failures.push(HotkeyRegistrationFailure {

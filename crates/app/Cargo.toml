@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "BetterPrtSc"
@@ -13,3 +14,6 @@ path = "src/main.rs"
 [dependencies]
 bps-core.workspace = true
 bps-platform.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+bps-platform-windows.workspace = true
