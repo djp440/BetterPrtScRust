@@ -65,9 +65,8 @@ impl ResidentInstance {
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match command {
             Command::Capture(request) => {
-                let screenshot =
-                    capture::capture(self.platform.frame_source.as_ref(), request.mode)?;
-                action::run(&mut self.platform, &screenshot, &request.actions)?;
+                let screenshot = capture::capture(&self.platform, request.mode)?;
+                action::run(&mut self.platform, &screenshot, &request)?;
                 Ok(Flow::Continue)
             }
             Command::Exit => {

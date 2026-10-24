@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use bps_platform::PlatformError;
 
@@ -11,6 +12,8 @@ pub enum CoreError {
     NoDisplay,
     /// 截图编码失败。
     Encode(String),
+    /// 存储目录里以 `-1`…`-N` 结尾的同名文件都已存在，找不到可用的文件名。
+    TooManySameNameFiles(PathBuf),
 }
 
 impl fmt::Display for CoreError {
@@ -19,6 +22,9 @@ impl fmt::Display for CoreError {
             CoreError::Platform(e) => write!(f, "平台调用失败：{e}"),
             CoreError::NoDisplay => f.write_str("没有可用的显示器"),
             CoreError::Encode(e) => write!(f, "截图编码失败：{e}"),
+            CoreError::TooManySameNameFiles(path) => {
+                write!(f, "同名文件过多，找不到可用的文件名：{}", path.display())
+            }
         }
     }
 }

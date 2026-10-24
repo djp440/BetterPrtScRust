@@ -1,8 +1,11 @@
 //! `bps-platform` 能力 trait 的 Windows 实现（ADR 0002），尽量薄。
 //!
 //! - [`DxgiFrameSource`]：显示器布局 + 鼠标位置 + DXGI Desktop Duplication 截图
-//! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `CF_DIB`
+//! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `JFIF` / `CF_DIB` / `CF_HDROP` 等
 //! - [`WindowsHotkeys`]：`RegisterHotKey`，按下时由 [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WindowsFileSystem`]：“图片”文件夹位置 + 不覆盖已有文件的写盘
+//! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
+//! - [`WindowsClock`]：本地时间
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标
 //!
 //! 进程必须是 Per-Monitor V2 DPI 感知，坐标和图像才是物理像素，见 [`dpi`]。
@@ -12,18 +15,24 @@
 #![cfg(windows)]
 
 mod clipboard;
+mod clock;
 mod display_config;
 pub mod dpi;
 mod error;
 mod event_loop;
+mod file_system;
 mod frame_source;
 mod hotkeys;
+mod notifier;
 mod pixels;
 
 pub use clipboard::WindowsClipboard;
+pub use clock::WindowsClock;
 pub use event_loop::EventLoop;
+pub use file_system::WindowsFileSystem;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
+pub use notifier::TrayNotifier;
 
 use bps_platform::Platform;
 
@@ -33,5 +42,8 @@ pub fn platform(event_loop: &EventLoop) -> Platform {
         frame_source: Box::new(DxgiFrameSource::new()),
         clipboard: Box::new(WindowsClipboard::new(Some(event_loop))),
         hotkeys: Box::new(event_loop.hotkeys()),
+        file_system: Box::new(WindowsFileSystem::new()),
+        notifier: Box::new(event_loop.notifier()),
+        clock: Box::new(WindowsClock::new()),
     }
 }

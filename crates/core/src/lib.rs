@@ -10,9 +10,15 @@ mod capture;
 mod command;
 mod encode;
 mod error;
+mod filename;
 mod instance;
+mod output;
 
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, default_bindings};
 pub use command::{CaptureMode, CaptureRequest, Command, Flow, PostCaptureAction};
 pub use error::CoreError;
+pub use filename::{
+    DEFAULT_FILENAME_TEMPLATE, FilenameFields, FilenameTemplate, FilenameTemplateError,
+};
 pub use instance::ResidentInstance;
+pub use output::{OutputFormat, OutputOptions, SaveDir};
