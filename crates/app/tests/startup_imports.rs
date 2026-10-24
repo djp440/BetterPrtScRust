@@ -1,6 +1,7 @@
 //! 常驻进程启动时不加载用不到的 DLL：设置界面（egui + glow）和常驻实例是同一个 exe，
 //! `opengl32.dll` 只能延迟加载，由设置界面子进程第一次用到时才载入；`winhttp.dll` 只有开启
-//! “检查更新”后才载入。
+//! “检查更新”后才载入；录屏用的 Media Foundation（`mfplat.dll`、`mfreadwrite.dll`）和实时遮罩用的
+//! DirectComposition（`dcomp.dll`）只在第一次录屏时载入。
 //!
 //! 直接读 exe 的 PE 导入表（普通导入 = 进程启动时由加载器载入），不需要运行程序。
 #![cfg(windows)]
@@ -9,6 +10,16 @@ const RESIDENT_EXE: &str = env!("CARGO_BIN_EXE_BetterPrtSc");
 
 #[test]
 fn resident_program_loads_opengl_and_winhttp_only_on_demand() {
+    assert_loaded_only_on_demand(&["opengl32.dll", "winhttp.dll"]);
+}
+
+#[test]
+fn resident_program_loads_recording_dlls_only_on_demand() {
+    assert_loaded_only_on_demand(&["mfplat.dll", "mfreadwrite.dll", "dcomp.dll"]);
+}
+
+/// `dlls` 不在普通导入表里（进程启动时不载入），而在延迟导入表里。
+fn assert_loaded_only_on_demand(dlls: &[&str]) {
     let image = std::fs::read(RESIDENT_EXE).expect("读取 BetterPrtSc.exe");
     let pe = Pe::parse(&image);
 
@@ -19,7 +30,7 @@ fn resident_program_loads_opengl_and_winhttp_only_on_demand() {
         loaded_at_startup.iter().any(|dll| dll == "kernel32.dll"),
         "导入表解析有误：{loaded_at_startup:?}"
     );
-    for dll in ["opengl32.dll", "winhttp.dll"] {
+    for &dll in dlls {
         assert!(
             !loaded_at_startup.iter().any(|d| d == dll),
             "启动时就会载入 {dll}：{loaded_at_startup:?}"

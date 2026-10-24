@@ -50,8 +50,10 @@ use crate::config_file::ChangeNotification;
 use crate::error::win_error;
 use crate::notifier::{PendingClick, open_click_target};
 use crate::registry::RegistryWatch;
+use crate::ticker::WaitableTimer;
 use crate::{
     D2dSelectionOverlay, TrayNotifier, WindowsConfigFile, WindowsHotkeys, WindowsScreenshotTool,
+    WindowsTicker,
 };
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
@@ -111,6 +113,8 @@ pub(crate) struct Shared {
     pub config_watch: RefCell<Option<ChangeNotification>>,
     /// PrtSc 键系统设置所在注册表键的变更通知。
     pub keyboard_watch: RefCell<Option<RegistryWatch>>,
+    /// 节拍（录屏）的定时器；到点后递交 `PlatformEvent::Tick`。
+    pub ticker: RefCell<Option<WaitableTimer>>,
 }
 
 /// 从其他线程向 [`EventLoop`] 投递事件的句柄，可以克隆、跨线程传递。
@@ -143,6 +147,14 @@ impl EventQueue {
 
     fn pop_front(&self) -> Option<PlatformEvent> {
         self.0.borrow_mut().pop_front()
+    }
+
+    /// 递交一个节拍；队列里已有还没处理的节拍时合并成一个。
+    fn push_tick(&self) {
+        let mut queue = self.0.borrow_mut();
+        if !queue.iter().any(|e| matches!(e, PlatformEvent::Tick)) {
+            queue.push_back(PlatformEvent::Tick);
+        }
     }
 
     /// 丢掉还没递交的遮罩输入：遮罩关闭后它们已经没有意义。
@@ -269,6 +281,11 @@ impl EventLoop {
         D2dSelectionOverlay::new(self.state.events.clone())
     }
 
+    /// 节拍；开始后本循环按周期递交 [`PlatformEvent::Tick`]。
+    pub fn ticker(&self) -> WindowsTicker {
+        WindowsTicker::new(self.state.shared.clone())
+    }
+
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -308,7 +325,12 @@ impl EventLoop {
         let config_watch: Option<HANDLE> = shared.config_watch.borrow().as_ref().map(|w| w.0);
         let keyboard_watch: Option<HANDLE> =
             shared.keyboard_watch.borrow().as_ref().map(|w| w.handle());
-        let handles: Vec<HANDLE> = config_watch.into_iter().chain(keyboard_watch).collect();
+        let ticker: Option<HANDLE> = shared.ticker.borrow().as_ref().map(|t| t.handle());
+        let handles: Vec<HANDLE> = config_watch
+            .into_iter()
+            .chain(keyboard_watch)
+            .chain(ticker)
+            .collect();
         // INFINITE 是 u32::MAX；有限的等待时间不能恰好等于它。
         let millis = timeout.map_or(u32::MAX, |t| {
             t.as_millis().min(u128::from(u32::MAX - 1)) as u32
@@ -320,7 +342,10 @@ impl EventLoop {
             .0
             .checked_sub(WAIT_OBJECT_0.0)
             .and_then(|i| handles.get(i as usize).copied());
-        if let Some(handle) = signaled
+        if signaled.is_some() && signaled == ticker {
+            // 自动重置的定时器：这次等待已经把它复位了。
+            self.state.events.push_tick();
+        } else if let Some(handle) = signaled
             && signaled == config_watch
         {
             // 重新布防，再用定时器合并编辑器保存时的连续多次变化。

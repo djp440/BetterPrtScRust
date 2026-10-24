@@ -13,7 +13,9 @@ pub enum Backdrop {
     /// 冻结帧：打开遮罩前先拍下每块显示器的画面，遮罩画在它上面；
     /// 框选结果从冻结帧裁剪（[`SelectionOverlay::frozen_image`]），不重新截图。
     FrozenFrame,
-    // 在实时画面上框选（录屏、长截屏）时在这里加 `Live`：不拍冻结帧，遮罩透明地盖在实时桌面上。
+    /// 实时画面（录屏、长截屏）：不拍冻结帧，遮罩半透明地盖在仍在变化的桌面上，
+    /// [`SelectionOverlay::frozen_image`] 返回错误。遮罩本身不会出现在任何屏幕捕获里。
+    Live,
 }
 
 /// 选区遮罩能力。一次只能打开一个遮罩。
@@ -154,6 +156,7 @@ pub enum OverlayCursor {
 /// 用户在遮罩上的输入，坐标为虚拟桌面物理像素。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayInput {
+    /// 指针移动。修饰键按下或松开而指针没动时，平台也在原位置递交一次，`modifiers` 是新的状态。
     PointerMoved {
         position: Point,
         modifiers: Modifiers,

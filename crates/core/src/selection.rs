@@ -8,6 +8,7 @@
 //! - 选区确定后按 Enter 或双击选区内部，完成框选。
 //! - Esc 随时取消整次捕获；右键在有选区（或正在拖拽）时清除选区，没有选区时取消捕获。
 //! - 选区包含拖拽起点和终点两个像素；按下后没有移动就松开不算框选。
+//! - 拖拽时选区的边吸附到附近窗口、控件的边缘，按住 Ctrl 临时不吸附（见 [`crate::snap`]）。
 //!
 //! 扩展点（后续 ticket）：在 [`State`] 里加状态或字段（如调整手柄、移动选区），在
 //! [`RegionSelection::handle`] 里处理新输入，在 [`RegionSelection::scene`] 里按层追加绘制元素。
@@ -17,6 +18,7 @@ use bps_platform::{
     OverlayScene, Point, PointerButton, Rect,
 };
 
+use crate::snap::{DragEnd, SNAP_DISTANCE, Snapping};
 use crate::stitch::virtual_desktop_bounds;
 
 /// 选区外的半透明遮挡。
@@ -65,6 +67,8 @@ pub(crate) struct RegionSelection {
     state: State,
     /// 选区确定后的操作提示（已按界面语言翻译）；标注时由工具条代替，为 `None`。
     selected_hint: Option<String>,
+    /// 拖拽框选时选区的边吸附到窗口、控件的边缘；默认没有目标，不吸附。
+    snapping: Snapping,
 }
 
 impl RegionSelection {
@@ -76,7 +80,14 @@ impl RegionSelection {
             bounds,
             state: State::Idle,
             selected_hint: Some(selected_hint),
+            snapping: Snapping::default(),
         })
+    }
+
+    /// 拖拽框选时，选区的边按 `snapping` 吸附。
+    pub fn with_snapping(mut self, snapping: Snapping) -> Self {
+        self.snapping = snapping;
+        self
     }
 
     /// 一开始就已框好 `region`（例如显示器模式下直接标注整块显示器）。
@@ -91,6 +102,11 @@ impl RegionSelection {
         self
     }
 
+    /// 框选时的吸附，供持有平台的一方补充吸附目标。
+    pub fn snapping_mut(&mut self) -> &mut Snapping {
+        &mut self.snapping
+    }
+
     /// 已经框好、等待确定的选区；还没有选区或正在拖拽时为 `None`。
     pub fn selected(&self) -> Option<Rect> {
         match self.state {
@@ -102,6 +118,7 @@ impl RegionSelection {
     /// 处理一次用户输入。
     pub fn handle(&mut self, input: &OverlayInput) -> Step {
         use OverlayInput::*;
+        self.snapping.observe(input);
         match (self.state, *input) {
             (_, Interrupted)
             | (
@@ -177,7 +194,7 @@ impl RegionSelection {
                 self.state = if current == anchor {
                     previous.map_or(State::Idle, State::Selected)
                 } else {
-                    State::Selected(between(anchor, current))
+                    State::Selected(self.dragged(anchor, current))
                 };
             }
             (
@@ -205,7 +222,7 @@ impl RegionSelection {
             State::Idle => None,
             State::Dragging {
                 anchor, current, ..
-            } => Some(between(anchor, current)),
+            } => Some(self.dragged(anchor, current)),
             State::Selected(region) => Some(region),
         }
     }
@@ -309,6 +326,14 @@ impl RegionSelection {
             .or_else(|| self.displays.iter().find(|d| d.is_primary))
             .or_else(|| self.displays.first())
             .map_or(1.0, |d| d.scale_factor)
+    }
+
+    /// 从 `anchor` 拖到 `current` 框出的选区，边缘按吸附规则对齐。
+    fn dragged(&self, anchor: Point, current: Point) -> Rect {
+        let end = |point: Point| {
+            DragEnd::new(point, (SNAP_DISTANCE * self.scale_at(point)).round() as i32)
+        };
+        self.snapping.region(self.bounds, end(anchor), end(current))
     }
 
     /// 把指针位置限制在虚拟桌面范围内。

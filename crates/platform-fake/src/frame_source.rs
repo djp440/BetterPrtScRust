@@ -92,6 +92,27 @@ impl FrameState {
             })
             .collect()
     }
+
+    /// 此刻虚拟桌面上 `rect` 范围内的画面；不在任何显示器上的像素是透明的。
+    pub fn crop(&self, rect: Rect) -> Image {
+        let mut pixels = vec![0u8; rect.width as usize * rect.height as usize * 4];
+        for display in &self.displays {
+            let Some(part) = display.bounds.intersection(rect) else {
+                continue;
+            };
+            for y in part.y..part.y + part.height as i32 {
+                for x in part.x..part.x + part.width as i32 {
+                    let pixel = display
+                        .image
+                        .pixel((x - display.bounds.x) as u32, (y - display.bounds.y) as u32);
+                    let i =
+                        ((y - rect.y) as usize * rect.width as usize + (x - rect.x) as usize) * 4;
+                    pixels[i..i + 4].copy_from_slice(&pixel);
+                }
+            }
+        }
+        Image::from_rgba(rect.width, rect.height, pixels)
+    }
 }
 
 pub(crate) struct FakeFrameSource(pub Arc<Mutex<FrameState>>);

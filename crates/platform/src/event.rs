@@ -22,6 +22,8 @@ pub enum PlatformEvent {
     RequestReceived(IncomingRequest),
     /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
     OverlayInput(OverlayInput),
+    /// 用 [`crate::Ticker::start`] 开始的节拍到了。
+    Tick,
     /// 用户选中了托盘菜单（[`crate::TrayMenu`]）里的一项。
     TrayMenuItemSelected(TrayMenuItemId),
     /// [`crate::UpdateService::request_latest_release`] 的查询结果；
