@@ -24,6 +24,7 @@ mod overlay;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
+mod window;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -44,6 +45,7 @@ pub use overlay::{
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
+pub use window::{TopLevelWindow, WindowId, WindowLayout, WindowSource};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -71,4 +73,6 @@ pub struct Platform {
     pub system_screenshot_tool: Box<dyn SystemScreenshotTool>,
     /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
     pub overlay: Box<dyn SelectionOverlay>,
+    /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。
+    pub windows: Box<dyn WindowSource>,
 }

@@ -3,7 +3,7 @@
 //! 用法：先用 [`FakeDisplay`] 和 [`FakePlatform`] 的构造方法描述“桌面”，
 //! 再用 [`FakePlatform::platform`] 生成交给 `bps-core` 的 [`Platform`]；
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
-//! 编辑配置文件、修改系统设置、在选区遮罩上框选或取消）并检查外部可见的结果（剪贴板内容、
+//! 编辑配置文件、修改系统设置、打开或关闭窗口、在选区遮罩上框选或取消）并检查外部可见的结果（剪贴板内容、
 //! 写入的文件、发出的通知、已注册的热键、配置文件内容、开机自启登记、遮罩当前画的场景）。
 //!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
@@ -34,6 +34,7 @@ mod hotkeys;
 mod notifier;
 mod overlay;
 mod resident_channel;
+mod window;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -49,6 +50,7 @@ pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
+pub use window::{FakeWindow, window_pattern};
 
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
 use clipboard::FakeClipboard;
@@ -58,6 +60,7 @@ use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
 use notifier::FakeNotifier;
 use overlay::{FakeOverlay, OverlayState};
+use window::{FakeWindowSource, WindowState};
 
 /// 假时钟的默认时间。
 pub const DEFAULT_TIME: LocalDateTime = LocalDateTime::new(2000, 1, 1, 0, 0, 0);
@@ -74,6 +77,7 @@ pub struct FakePlatform {
     config_file: Arc<Mutex<ConfigFileState>>,
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
+    windows: Arc<Mutex<WindowState>>,
 }
 
 impl Default for FakePlatform {
@@ -88,6 +92,7 @@ impl Default for FakePlatform {
             config_file: Default::default(),
             system: Default::default(),
             overlay: Default::default(),
+            windows: Default::default(),
         }
     }
 }
@@ -103,6 +108,12 @@ impl FakePlatform {
     /// 接入一块显示器；按添加顺序分配 `DisplayId`。
     pub fn with_display(self, display: FakeDisplay) -> Self {
         self.frames.lock().unwrap().displays.push(display);
+        self
+    }
+
+    /// 在桌面上打开一个顶层窗口；后添加的窗口在上层（像依次打开的窗口）。
+    pub fn with_window(self, window: FakeWindow) -> Self {
+        self.windows.lock().unwrap().windows.push(Some(window));
         self
     }
 
@@ -242,6 +253,12 @@ impl FakePlatform {
         *display = display.clone().with_image(image);
     }
 
+    /// 模拟用户关闭第 `index` 个窗口（按添加顺序，从 0 开始）：之后的窗口布局里没有它，
+    /// 截取它会失败。
+    pub fn close_window(&self, index: usize) {
+        self.windows.lock().unwrap().windows[index] = None;
+    }
+
     /// 模拟时间流逝。
     pub fn set_time(&self, time: LocalDateTime) {
         *self.time.lock().unwrap() = time;
@@ -267,6 +284,7 @@ impl FakePlatform {
                 frames: self.frames.clone(),
                 state: self.overlay.clone(),
             }),
+            windows: Box::new(FakeWindowSource(self.windows.clone())),
         }
     }
 

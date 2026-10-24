@@ -11,6 +11,8 @@
 //! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WgcWindowSource`]：`EnumWindows` 枚举顶层窗口（命中测试用它的布局），Windows.Graphics.Capture
+//!   截取单个窗口的完整内容
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
@@ -40,6 +42,8 @@ mod pixels;
 mod registry;
 mod screenshot_tool;
 mod token;
+mod window;
+mod window_capture;
 
 pub use autostart::WindowsAutostart;
 pub use clipboard::WindowsClipboard;
@@ -57,6 +61,7 @@ pub use token::{
     RESTARTED_AS_ADMINISTRATOR_ARG, WindowsElevation, is_elevated,
     run_self_as_administrator_and_wait,
 };
+pub use window::WgcWindowSource;
 
 use std::path::PathBuf;
 
@@ -76,5 +81,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
         overlay: Box::new(event_loop.selection_overlay()),
+        windows: Box::new(WgcWindowSource::new()),
     }
 }

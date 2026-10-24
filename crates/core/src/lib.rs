@@ -21,6 +21,8 @@
 //!
 //! 区域捕获要等用户在选区遮罩（`bps_platform::SelectionOverlay`）上框选：命令打开遮罩后即返回，
 //! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
+//! 窗口捕获同样在遮罩上进行：悬停高亮光标下的顶层窗口（`bps_platform::WindowSource` 给出的
+//! 窗口布局），单击后关闭遮罩，再截取这个窗口的完整内容。
 
 mod action;
 mod autostart;
@@ -40,6 +42,8 @@ mod region;
 mod request;
 mod selection;
 mod stitch;
+mod window;
+mod window_selection;
 
 pub use autostart::remove_autostart;
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};

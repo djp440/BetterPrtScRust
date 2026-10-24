@@ -11,8 +11,8 @@ use bps_core::{
     CaptureMode, CaptureRequest, CliStatus, Command, HotkeyBinding, PostCaptureAction,
     ResidentInstance, default_bindings, run_cli,
 };
-use bps_platform::{Hotkey, Key, Modifiers, OverlayKey, PlatformEvent, Point, Rect};
-use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel};
+use bps_platform::{Hotkey, Key, Modifiers, OverlayKey, PlatformEvent, Point, PointerButton, Rect};
+use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel, FakeWindow};
 
 fn primary_display() -> FakeDisplay {
     FakeDisplay::new(Rect::new(0, 0, 64, 48)).primary()
@@ -98,7 +98,7 @@ fn bindings_with_region_copy() -> Vec<HotkeyBinding> {
     [vec![region_copy], default_bindings()].concat()
 }
 
-/// 带一条“区域 + 复制”绑定的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
+/// 带一条“区域 + 复制”绑定（外加默认绑定）的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
 /// 只要选区遮罩显示着，用户就在上面做 `gesture`。
 fn resident_instance_with_user(
     fake: &FakePlatform,
@@ -192,16 +192,37 @@ fn bps_capture_fails_while_previous_capture_is_still_selecting() {
 }
 
 #[test]
-fn bps_capture_window_is_accepted_but_reported_as_unsupported_until_implemented() {
-    let fake = two_displays_cursor_on_second();
-    let mut channel = FakeResidentChannel::running(resident_instance(&fake));
+fn bps_capture_window_replies_after_user_clicks_window_like_ctrl_print_screen() {
+    let window = FakeWindow::new("记事本", Rect::new(70, 0, 60, 30));
+    let fake = two_displays_cursor_on_second().with_window(window.clone());
+    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, |fake| {
+        fake.click(PointerButton::Left, Point::new(100, 20))
+    }));
 
     let outcome = run_cli(["capture", "window"], &mut channel);
 
-    assert_eq!(outcome.status, CliStatus::Unsupported, "{outcome:?}");
-    assert_eq!(outcome.status.exit_code(), 3);
-    assert!(outcome.stderr.contains("暂不支持"), "{outcome:?}");
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
+    assert!(!fake.overlay_visible());
+    // 与 Ctrl+PrtSc 的默认绑定一致：复制 + 自动存储。
+    let clipboard = fake.clipboard();
+    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
+    assert_eq!(clipboard.png_image().unwrap(), *window.image());
+}
+
+#[test]
+fn bps_capture_window_reports_cancelled_when_user_presses_escape() {
+    let fake = two_displays_cursor_on_second()
+        .with_window(FakeWindow::new("记事本", Rect::new(70, 0, 60, 30)));
+    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, |fake| {
+        vec![fake.press_key(OverlayKey::Escape)]
+    }));
+
+    let outcome = run_cli(["capture", "window"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Cancelled, "{outcome:?}");
+    assert!(!fake.overlay_visible());
     assert!(fake.clipboard().is_empty());
+    assert!(fake.files().is_empty());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! 配置能表达后续 ticket 才实现的捕获模式和截后动作；执行到它们时明确报告“暂不支持”，
+//! 配置能表达后续 ticket 才实现的截后动作；执行到它们时明确报告“暂不支持”，
 //! 不崩溃、不产生任何产物。
 
 use bps_core::{
@@ -11,24 +11,6 @@ fn desktop() -> FakePlatform {
     FakePlatform::new()
         .with_display(FakeDisplay::new(Rect::new(0, 0, 32, 24)).primary())
         .with_cursor_at(Point::new(5, 5))
-}
-
-#[test]
-fn unimplemented_capture_mode_is_reported_without_producing_anything() {
-    let fake = desktop();
-    let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
-
-    let result = instance.execute(Command::Capture(CaptureRequest::new(
-        CaptureMode::Window,
-        vec![PostCaptureAction::CopyToClipboard],
-    )));
-
-    assert_eq!(
-        result,
-        Err(CoreError::UnsupportedCaptureMode(CaptureMode::Window))
-    );
-    assert!(fake.clipboard().is_empty());
-    assert_eq!(result.unwrap_err().to_string(), "暂不支持“窗口”捕获模式");
 }
 
 #[test]
@@ -93,5 +75,10 @@ fn every_default_binding_either_runs_or_reports_unsupported() {
             ),
             "{hotkey}: {result:?}"
         );
+        // 需要在选区遮罩上操作的捕获（如 Ctrl+PrtSc 的窗口）已经开始：取消它，再试下一个热键。
+        if fake.overlay_visible() {
+            let escape = fake.press_key(bps_platform::OverlayKey::Escape);
+            assert_eq!(instance.handle(escape), Ok(Flow::Continue), "{hotkey}");
+        }
     }
 }
