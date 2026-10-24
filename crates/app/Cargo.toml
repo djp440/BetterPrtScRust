@@ -1,0 +1,15 @@
+[package]
+name = "bps-app"
+description = "BetterPrtSc 常驻实例（BetterPrtSc.exe）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "BetterPrtSc"
+path = "src/main.rs"
+
+[dependencies]
+bps-core.workspace = true
+bps-platform.workspace = true
