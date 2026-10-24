@@ -301,7 +301,7 @@ impl LongScreenshotCapture {
                     None => self.keep_going(platform),
                     Some(result) => {
                         self.phase = Phase::Over;
-                        Some(result.map(|()| Ending::Captured))
+                        Some(result.map(|()| Ending::Delivered))
                     }
                 }
             }
@@ -450,7 +450,7 @@ impl LongScreenshotCapture {
         }) {
             request.actions.push(PostCaptureAction::CopyToClipboard);
         }
-        Some(action::run(platform, &screenshot, &request, self.texts).map(|()| Ending::Captured))
+        Some(action::run(platform, &screenshot, &request, self.texts).map(|()| Ending::Delivered))
     }
 
     /// 用户取消：停止采样、关闭遮罩，没有任何产物。

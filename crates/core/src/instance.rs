@@ -67,7 +67,7 @@ enum Progress {
     /// 命令已执行完。
     Done(Flow),
     /// 已开始一次需要用户操作的捕获，结束时才有结果。
-    Pending,
+    AwaitingUser,
 }
 
 impl ResidentInstance {
@@ -405,7 +405,7 @@ impl ResidentInstance {
                 incoming.reply(Reply::Done.encode());
                 Ok(flow)
             }
-            Ok(Progress::Pending) => {
+            Ok(Progress::AwaitingUser) => {
                 if let Some(active) = self.active.as_mut() {
                     active.set_requester(incoming);
                 }
@@ -440,7 +440,7 @@ impl ResidentInstance {
 
     /// 执行一次捕获：捕获、执行截后动作。
     ///
-    /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::Pending`]），之后由遮罩上的输入推进。
+    /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::AwaitingUser`]），之后由遮罩上的输入推进。
     fn capture(&mut self, request: &CaptureRequest) -> Result<Progress, CaptureFailure> {
         if let Some(ActiveCapture::Recording(recording)) = &self.active {
             if recording.is_recording() && recording.request() == request {
@@ -474,21 +474,21 @@ impl ResidentInstance {
             let recording = Recording::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Recording(recording));
-            return Ok(Progress::Pending);
+            return Ok(Progress::AwaitingUser);
         }
         // 长截屏不论什么模式都先在选区遮罩上框选区域，之后的截后动作（含标注）由它负责。
         if request.actions.contains(&PostCaptureAction::LongScreenshot) {
             let capture = LongScreenshotCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::LongScreenshot(capture));
-            return Ok(Progress::Pending);
+            return Ok(Progress::AwaitingUser);
         }
         // 窗口模式先悬停高亮、单击选窗，标注（如果有）在窗口截图上进行。
         if request.mode == CaptureMode::Window {
             let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Window(capture));
-            return Ok(Progress::Pending);
+            return Ok(Progress::AwaitingUser);
         }
         if request.mode == CaptureMode::Region
             || request.actions.contains(&PostCaptureAction::Annotate)
@@ -496,7 +496,7 @@ impl ResidentInstance {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Region(Box::new(capture)));
-            return Ok(Progress::Pending);
+            return Ok(Progress::AwaitingUser);
         }
         let screenshot = capture::capture(&self.platform, request.mode)
             .map_err(CaptureFailure::before_actions)?;
@@ -510,7 +510,7 @@ impl ResidentInstance {
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match self.run(command)? {
             Progress::Done(flow) => Ok(flow),
-            Progress::Pending => Ok(Flow::Continue),
+            Progress::AwaitingUser => Ok(Flow::Continue),
         }
     }
 
@@ -561,7 +561,7 @@ impl ResidentInstance {
         match (requester, ending) {
             (Some(requester), ending) => {
                 let reply = match &ending {
-                    Ok(Ending::Captured) => Reply::Done,
+                    Ok(Ending::Delivered) => Reply::Done,
                     Ok(Ending::Cancelled) => Reply::Cancelled,
                     Err(failure) => reply_for_error(&failure.error, self.texts()),
                 };

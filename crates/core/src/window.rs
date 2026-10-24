@@ -108,7 +108,7 @@ impl WindowCapture {
         window: &TopLevelWindow,
     ) -> Option<Result<Ending, CaptureFailure>> {
         if !self.request.actions.contains(&PostCaptureAction::Annotate) {
-            return Some(self.finish(platform, window).map(|()| Ending::Captured));
+            return Some(self.finish(platform, window).map(|()| Ending::Delivered));
         }
         let image = match platform.window_source.capture_window(window.id) {
             Ok(image) => image,
@@ -153,7 +153,7 @@ impl WindowCapture {
                     self.texts,
                 ) {
                     None => self.keep_going(platform),
-                    Some(result) => Some(result.map(|()| Ending::Captured)),
+                    Some(result) => Some(result.map(|()| Ending::Delivered)),
                 }
             }
             Ok(Response::Cancel) => {

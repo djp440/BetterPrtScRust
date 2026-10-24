@@ -102,7 +102,7 @@ impl ActiveCapture {
 
 fn to_ending(ending: Result<recording::Ending, CaptureFailure>) -> Result<Ending, CaptureFailure> {
     ending.map(|ending| match ending {
-        recording::Ending::Saved => Ending::Captured,
+        recording::Ending::Saved => Ending::Delivered,
         recording::Ending::Cancelled => Ending::Cancelled,
     })
 }
