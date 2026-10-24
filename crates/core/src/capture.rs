@@ -80,7 +80,7 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
 }
 
 /// 鼠标所在的显示器；鼠标不在任何显示器内时退回主显示器。
-fn display_under_cursor(frames: &dyn FrameSource) -> Result<Display, CoreError> {
+pub(crate) fn display_under_cursor(frames: &dyn FrameSource) -> Result<Display, CoreError> {
     let displays = frames.displays()?;
     let cursor = frames.cursor_position()?;
     display_at(&displays, cursor)
