@@ -253,6 +253,7 @@ dependencies = [
  "png",
  "ravif",
  "serde",
+ "serde_json",
  "toml",
  "toml_edit",
  "unic-langid",

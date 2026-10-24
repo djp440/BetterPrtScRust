@@ -7,7 +7,12 @@
 
 use std::sync::Arc;
 
-use bps_platform::{Image, PlatformError, RecognitionLanguage, RecognizedLine, TextRecognizer};
+use bps_platform::{
+    HttpTransport, Image, PlatformError, RecognitionLanguage, RecognizedLine, TextRecognizer,
+};
+
+use crate::translation::{self, TranslationConfig, TranslationError};
+use crate::{Locale, Texts};
 
 /// 识别进行到哪一步了。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +27,19 @@ pub enum RecognitionStatus {
     Failed(String),
 }
 
+/// 翻译进行到哪一步了。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranslationStatus {
+    /// 还没翻译（或识别结果已更新，之前的译文作废）。
+    Idle,
+    /// 正在翻译。
+    Translating,
+    /// 译文。
+    Translated(String),
+    /// 翻译失败，附带给人看的原因（已按界面语言本地化，不含 API Key）。
+    Failed(String),
+}
+
 /// 结果面板的界面无关部分。
 pub struct ResultPanel {
     screenshot: Arc<Image>,
@@ -31,6 +49,35 @@ pub struct ResultPanel {
     text: String,
     /// 最近一次开始的识别的编号；更早开始的识别晚到的结果直接丢弃。
     latest: u64,
+    translation: Option<TranslationConfig>,
+    locale: Locale,
+    translation_status: TranslationStatus,
+    /// 最近一次开始的翻译的编号。
+    latest_translation: u64,
+}
+
+/// 一次要做的翻译：把当时的文字交给配置的翻译服务。在后台线程执行 [`run`](Self::run)。
+pub struct Translation {
+    id: u64,
+    config: TranslationConfig,
+    locale: Locale,
+    text: String,
+}
+
+/// 一次翻译的结果，交回 [`ResultPanel::finish_translation`]。
+pub struct TranslationOutcome {
+    id: u64,
+    result: Result<String, TranslationError>,
+}
+
+impl Translation {
+    /// 用 `transport` 发送翻译请求（只含文字）。会阻塞到收到回复或超时。
+    pub fn run(self, transport: &dyn HttpTransport) -> TranslationOutcome {
+        TranslationOutcome {
+            id: self.id,
+            result: translation::translate(&self.config, self.locale, &self.text, transport),
+        }
+    }
 }
 
 /// 一次要做的识别：用某种识别语言识别截图。在后台线程执行 [`run`](Self::run)。
@@ -72,6 +119,10 @@ impl ResultPanel {
             status: RecognitionStatus::Recognizing,
             text: String::new(),
             latest: 0,
+            translation: None,
+            locale: Locale::ZhCn,
+            translation_status: TranslationStatus::Idle,
+            latest_translation: 0,
         };
         let recognition = panel.recognize_again(recognizer);
         (panel, recognition)
@@ -134,6 +185,50 @@ impl ResultPanel {
         &mut self.text
     }
 
+    /// 设置翻译服务（来自配置文件，`None` 表示没有配置）和界面语言（译文目标语言缺省跟随它）。
+    pub fn set_translation(&mut self, config: Option<TranslationConfig>, locale: Locale) {
+        self.translation = config;
+        self.locale = locale;
+    }
+
+    /// 是否配置了翻译服务。没有时界面应禁用翻译按钮并提示去配置文件里配置。
+    pub fn can_translate(&self) -> bool {
+        self.translation.is_some()
+    }
+
+    pub fn translation_status(&self) -> &TranslationStatus {
+        &self.translation_status
+    }
+
+    /// 用户点了“翻译”：给出要做的翻译（发送的是此刻文本框里的文字）。
+    /// 没有配置翻译服务、文字为空、或正在翻译时什么都不做。
+    pub fn start_translation(&mut self) -> Option<Translation> {
+        let config = self.translation.clone()?;
+        if self.text.trim().is_empty() || self.translation_status == TranslationStatus::Translating
+        {
+            return None;
+        }
+        self.translation_status = TranslationStatus::Translating;
+        self.latest_translation += 1;
+        Some(Translation {
+            id: self.latest_translation,
+            config,
+            locale: self.locale,
+            text: self.text.clone(),
+        })
+    }
+
+    /// 后台的翻译完成了：显示译文或失败原因。已作废的翻译结果直接丢弃。
+    pub fn finish_translation(&mut self, outcome: TranslationOutcome) {
+        if outcome.id != self.latest_translation {
+            return;
+        }
+        self.translation_status = match outcome.result {
+            Ok(text) => TranslationStatus::Translated(text),
+            Err(e) => TranslationStatus::Failed(e.localized(Texts::of(self.locale))),
+        };
+    }
+
     /// 后台的识别完成了：显示它的结果。更早开始、已被新的识别取代的识别，结果直接丢弃。
     pub fn finish(&mut self, outcome: RecognitionOutcome) {
         if outcome.id != self.latest {
@@ -155,6 +250,9 @@ impl ResultPanel {
         };
         self.status = RecognitionStatus::Recognizing;
         self.latest += 1;
+        // 文字将被新的识别结果取代：之前的译文（和还在路上的翻译）作废。
+        self.latest_translation += 1;
+        self.translation_status = TranslationStatus::Idle;
         Some(Recognition {
             id: self.latest,
             screenshot: self.screenshot.clone(),

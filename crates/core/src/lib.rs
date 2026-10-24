@@ -62,6 +62,7 @@ mod settings;
 mod snap;
 mod status;
 mod stitch;
+mod translation;
 mod update;
 mod window;
 mod window_selection;
@@ -86,8 +87,12 @@ pub use location::{DataLocation, PORTABLE_MARKER};
 pub use long_screenshot::{LongScreenshot, Stitched};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{Reply, Request};
-pub use result_panel::{Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel};
+pub use result_panel::{
+    Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel, Translation,
+    TranslationOutcome, TranslationStatus,
+};
 pub use settings::{BindingSettings, Settings, SettingsDocument, SettingsProblem};
 pub use status::{BindingFailure, ResidentStatus, UpdateStatus};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};
+pub use translation::{TargetLanguage, TranslationConfig, TranslationError, TranslationProvider};
 pub use update::VERSION;

@@ -206,6 +206,20 @@ result-panel-copied = 已复制到剪贴板
 result-panel-copy-failed = 复制失败：{ $error }
 result-panel-open-settings-failed = 无法打开系统设置：{ $error }
 result-panel-close = 关闭
+config-unknown-translation-provider = 未知的翻译服务“{ $provider }”：可用 openai（OpenAI 兼容接口）、deepl
+config-unknown-target-language = 未知的翻译目标语言“{ $language }”：可用 auto（跟随界面语言）、zh-CN、en、ja、ko、fr、de、es、ru
+translation-error-network = 无法连接翻译服务：{ $detail }
+translation-error-rejected = 翻译服务拒绝了 API Key（HTTP { $status }），请检查 config.toml 里 [translation] 的 api_key
+translation-error-http = 翻译服务返回了错误（HTTP { $status }）
+translation-error-http-detail = 翻译服务返回了错误（HTTP { $status }）：{ $detail }
+translation-error-reply = 无法理解翻译服务的回复
+result-panel-translate = 翻译
+result-panel-translate-unconfigured = 没有配置翻译服务：请在配置文件 config.toml 的 [translation] 里填写服务（openai 或 deepl）和你自己的 API Key
+result-panel-translate-unconfigured-hint = 未配置翻译服务（见 config.toml 的 [translation]）
+result-panel-translating = 正在翻译…
+result-panel-translation = 译文
+result-panel-translation-failed = 翻译失败：{ $error }
+result-panel-copy-translation = 复制译文
 ## 长截屏
 
 long-screenshot-start = 开始
