@@ -20,14 +20,6 @@ pub(crate) struct Origin {
     pub window_title: Option<String>,
 }
 
-/// 另存为对话框里可选的格式（显示名、扩展名），按这个顺序列出。
-const SAVE_AS_FORMATS: [(OutputFormat, &str, &[&str]); 4] = [
-    (OutputFormat::Png, "PNG", &["png"]),
-    (OutputFormat::Jpeg, "JPEG", &["jpg", "jpeg"]),
-    (OutputFormat::WebP, "WebP", &["webp"]),
-    (OutputFormat::Avif, "AVIF", &["avif"]),
-];
-
 /// 另存为对话框的初始内容：文件名按命名模板生成，类型默认是输出格式，
 /// 目录默认是自动存储目录。
 fn save_as_options(
@@ -45,16 +37,20 @@ fn save_as_options(
     SaveAsOptions {
         file_name: format!("{stem}.{}", output.output_format.extension()),
         folder: action::save_dir(platform, output).ok(),
-        file_types: SAVE_AS_FORMATS
+        file_types: OutputFormat::ALL
             .iter()
-            .map(|(_, name, extensions)| FileType {
-                name: texts.format("save-as-file-type", &[("format", name)]),
-                extensions: extensions.iter().map(|e| (*e).to_owned()).collect(),
+            .map(|format| FileType {
+                name: texts.format("save-as-file-type", &[("format", &format.display_name())]),
+                extensions: format
+                    .extensions()
+                    .iter()
+                    .map(|e| (*e).to_owned())
+                    .collect(),
             })
             .collect(),
-        default_file_type: SAVE_AS_FORMATS
+        default_file_type: OutputFormat::ALL
             .iter()
-            .position(|(format, ..)| *format == output.output_format)
+            .position(|format| *format == output.output_format)
             .unwrap_or(0),
     }
 }
@@ -172,14 +168,10 @@ fn write_save_as(
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
-    let format = SAVE_AS_FORMATS
-        .iter()
-        .find(|(_, _, extensions)| {
-            extension
-                .as_deref()
-                .is_some_and(|e| extensions.contains(&e))
-        })
-        .map_or(default, |(format, ..)| *format);
+    let format = extension
+        .as_deref()
+        .and_then(OutputFormat::from_extension)
+        .unwrap_or(default);
     let encoded = encode::encode(&screenshot.image, format)?;
     platform.file_system.write(path, &encoded)?;
     Ok(())

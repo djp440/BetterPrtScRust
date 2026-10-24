@@ -488,11 +488,10 @@ pub(crate) enum Format {
 impl Format {
     /// 配置文件里的写法（不区分大小写，`jpeg` 也可以）。
     pub(crate) fn from_name(name: &str) -> Option<Format> {
+        if let Some(format) = OutputFormat::from_extension(name) {
+            return Some(Format::Image(format));
+        }
         Some(match name.to_ascii_lowercase().as_str() {
-            "png" => Format::Image(OutputFormat::Png),
-            "jpg" | "jpeg" => Format::Image(OutputFormat::Jpeg),
-            "webp" => Format::Image(OutputFormat::WebP),
-            "avif" => Format::Image(OutputFormat::Avif),
             "mp4" => Format::Recording(RecordingFormat::Mp4),
             "gif" => Format::Recording(RecordingFormat::Gif),
             _ => return None,

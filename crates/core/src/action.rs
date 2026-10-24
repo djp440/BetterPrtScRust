@@ -124,12 +124,7 @@ fn copy_to_clipboard(
     encoded: Vec<u8>,
     saved: Option<PathBuf>,
 ) -> Result<(), CoreError> {
-    let image = match format {
-        OutputFormat::Png => ClipboardItem::Png(encoded),
-        OutputFormat::Jpeg => ClipboardItem::Jpeg(encoded),
-        OutputFormat::WebP => ClipboardItem::WebP(encoded),
-        OutputFormat::Avif => ClipboardItem::Avif(encoded),
-    };
+    let image = format.clipboard_item(encoded);
     let mut items = vec![image, ClipboardItem::Dib(encode::dib(&screenshot.image))];
     if let Some(path) = saved {
         items.push(ClipboardItem::Files(vec![path]));
