@@ -5,9 +5,12 @@
 //! 缩放比例放大。
 //!
 //! 按钮宽度由 `core` 按文字估算（平台只负责把文字居中画在按钮里），这样命中测试不依赖平台
-//! 的文字排版。扩展点：在 [`ENTRIES`] 里加按钮（#13 的颜色、线宽），在 [`Button`] 加变体。
+//! 的文字排版。扩展点：在 [`ENTRIES`] 里加按钮（#13 的颜色、线宽），在 [`Button`] 加变体，
+//! 按钮文字放进两份 FTL。
 
 use bps_platform::{Color, Display, OverlayItem, Point, Rect};
+
+use crate::Texts;
 
 /// 标注工具：选中后在区域里拖拽画出对应的标注。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,14 +34,15 @@ pub(crate) enum Button {
 }
 
 impl Button {
-    fn label(self) -> &'static str {
+    /// 按钮文字在文本资源里的消息。
+    fn message(self) -> &'static str {
         match self {
-            Button::Tool(Tool::Rectangle) => "矩形",
-            Button::Tool(Tool::Arrow) => "箭头",
-            Button::Cancel => "取消",
-            Button::SaveAs => "另存为",
-            Button::AutoSave => "自动存储",
-            Button::Copy => "复制",
+            Button::Tool(Tool::Rectangle) => "annotation-rectangle",
+            Button::Tool(Tool::Arrow) => "annotation-arrow",
+            Button::Cancel => "annotation-cancel",
+            Button::SaveAs => "annotation-save-as",
+            Button::AutoSave => "annotation-auto-save",
+            Button::Copy => "annotation-copy",
         }
     }
 }
@@ -81,15 +85,16 @@ const TEXT: Color = Color::rgba(255, 255, 255, 255);
 /// 一次布局好的工具条。
 pub(crate) struct Toolbar {
     bounds: Rect,
-    buttons: Vec<(Button, Rect)>,
+    /// 按钮、位置和文字。
+    buttons: Vec<(Button, Rect, String)>,
     separators: Vec<Rect>,
     font_size: f32,
     border: u32,
 }
 
 impl Toolbar {
-    /// 贴着 `region`（外侧有宽 `frame` 的边框）的工具条。
-    pub fn beside(region: Rect, frame: u32, displays: &[Display]) -> Self {
+    /// 贴着 `region`（外侧有宽 `frame` 的边框）的工具条，按钮文字用 `texts` 的语言。
+    pub fn beside(region: Rect, frame: u32, displays: &[Display], texts: &Texts) -> Self {
         let corner = Point::new(
             region.x + region.width as i32 - 1,
             region.y + region.height as i32 - 1,
@@ -119,9 +124,11 @@ impl Toolbar {
             }
             match *entry {
                 Entry::Button(button) => {
-                    let text = text_width(button.label(), f64::from(font_size));
+                    let label = texts.get(button.message());
+                    let text = text_width(&label, f64::from(font_size));
                     let width = (text.ceil() as i32 + 2 * px(BUTTON_PADDING)).max(height);
-                    buttons.push((button, Rect::new(x, padding, width as u32, height as u32)));
+                    let rect = Rect::new(x, padding, width as u32, height as u32);
+                    buttons.push((button, rect, label));
                     x += width;
                 }
                 Entry::Separator => {
@@ -144,7 +151,10 @@ impl Toolbar {
         let shift = |r: Rect| Rect::new(r.x + left, r.y + top, r.width, r.height);
         Self {
             bounds: Rect::new(left, top, size.0 as u32, size.1 as u32),
-            buttons: buttons.into_iter().map(|(b, r)| (b, shift(r))).collect(),
+            buttons: buttons
+                .into_iter()
+                .map(|(b, r, label)| (b, shift(r), label))
+                .collect(),
             separators: separators.into_iter().map(shift).collect(),
             font_size,
             border: px(1.0).max(1) as u32,
@@ -160,8 +170,8 @@ impl Toolbar {
     pub fn button_at(&self, point: Point) -> Option<Button> {
         self.buttons
             .iter()
-            .find(|(_, rect)| rect.contains(point))
-            .map(|(button, _)| *button)
+            .find(|(_, rect, _)| rect.contains(point))
+            .map(|(button, ..)| *button)
     }
 
     /// 画工具条的遮罩元素，从下往上。
@@ -181,7 +191,8 @@ impl Toolbar {
             rect,
             color: SEPARATOR,
         }));
-        for &(button, rect) in &self.buttons {
+        for (button, rect, label) in &self.buttons {
+            let (button, rect) = (*button, *rect);
             let highlight = if active.is_some_and(|tool| button == Button::Tool(tool)) {
                 Some(ACTIVE)
             } else if hovered == Some(button) {
@@ -194,7 +205,7 @@ impl Toolbar {
             }
             items.push(OverlayItem::Text {
                 rect,
-                text: button.label().to_owned(),
+                text: label.clone(),
                 font_size: self.font_size,
                 color: TEXT,
             });

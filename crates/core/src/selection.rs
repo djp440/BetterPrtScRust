@@ -31,8 +31,6 @@ const LABEL_PADDING: f64 = 4.0;
 const LABEL_GAP: f64 = 4.0;
 /// 估算标签高度用的行高系数；只用于判断标签放在选区外还是选区内，实际尺寸由平台按字体决定。
 const LINE_HEIGHT: f32 = 1.4;
-/// 选区确定后的操作提示。
-pub(crate) const SELECTED_HINT: &str = "Enter 或双击选区：完成　Esc：取消";
 
 /// 框选的下一步。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,19 +63,19 @@ pub(crate) struct RegionSelection {
     /// 虚拟桌面范围：指针位置和选区都限制在其中。
     bounds: Rect,
     state: State,
-    /// 选区确定后显示操作提示（标注时由工具条代替）。
-    selected_hint: bool,
+    /// 选区确定后的操作提示（已按界面语言翻译）；标注时由工具条代替，为 `None`。
+    selected_hint: Option<String>,
 }
 
 impl RegionSelection {
-    /// 在冻结帧覆盖的这些显示器上框选；没有显示器时返回 `None`。
-    pub fn new(displays: Vec<Display>) -> Option<Self> {
+    /// 在冻结帧覆盖的这些显示器上框选，选区确定后显示 `selected_hint`；没有显示器时返回 `None`。
+    pub fn new(displays: Vec<Display>, selected_hint: String) -> Option<Self> {
         let bounds = virtual_desktop_bounds(&displays)?;
         Some(Self {
             displays,
             bounds,
             state: State::Idle,
-            selected_hint: true,
+            selected_hint: Some(selected_hint),
         })
     }
 
@@ -89,7 +87,7 @@ impl RegionSelection {
 
     /// 选区确定后不显示操作提示。
     pub fn without_selected_hint(mut self) -> Self {
-        self.selected_hint = false;
+        self.selected_hint = None;
         self
     }
 
@@ -236,12 +234,14 @@ impl RegionSelection {
                     border,
                     size,
                 )));
-                if self.selected_hint && matches!(self.state, State::Selected(_)) {
+                if let Some(hint) = &self.selected_hint
+                    && matches!(self.state, State::Selected(_))
+                {
                     items.push(OverlayItem::Label(self.label_beside(
                         region,
                         Side::Below,
                         border,
-                        SELECTED_HINT.to_owned(),
+                        hint.clone(),
                     )));
                 }
             }

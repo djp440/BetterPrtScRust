@@ -11,14 +11,14 @@ use bps_platform::{FileType, Notification, Platform, SaveAsOptions};
 use super::session::Finish;
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
-use crate::{CaptureRequest, CoreError, OutputFormat, PostCaptureAction, action, encode};
+use crate::{CaptureRequest, CoreError, OutputFormat, PostCaptureAction, Texts, action, encode};
 
-/// 另存为对话框里可选的格式，按这个顺序列出。
+/// 另存为对话框里可选的格式（显示名、扩展名），按这个顺序列出。
 const SAVE_AS_FORMATS: [(OutputFormat, &str, &[&str]); 4] = [
-    (OutputFormat::Png, "PNG 图像", &["png"]),
-    (OutputFormat::Jpeg, "JPEG 图像", &["jpg", "jpeg"]),
-    (OutputFormat::WebP, "WebP 图像", &["webp"]),
-    (OutputFormat::Avif, "AVIF 图像", &["avif"]),
+    (OutputFormat::Png, "PNG", &["png"]),
+    (OutputFormat::Jpeg, "JPEG", &["jpg", "jpeg"]),
+    (OutputFormat::WebP, "WebP", &["webp"]),
+    (OutputFormat::Avif, "AVIF", &["avif"]),
 ];
 
 /// 另存为对话框的初始内容：文件名按命名模板生成，类型默认是输出格式，
@@ -27,6 +27,7 @@ pub(crate) fn save_as_options(
     platform: &Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,
+    texts: &Texts,
 ) -> SaveAsOptions {
     let output = &request.output;
     let stem = output.filename_template.render(&FilenameFields {
@@ -40,7 +41,7 @@ pub(crate) fn save_as_options(
         file_types: SAVE_AS_FORMATS
             .iter()
             .map(|(_, name, extensions)| FileType {
-                name: (*name).to_owned(),
+                name: texts.format("save-as-file-type", &[("format", name)]),
                 extensions: extensions.iter().map(|e| (*e).to_owned()).collect(),
             })
             .collect(),
@@ -58,6 +59,7 @@ pub(crate) fn run(
     request: &CaptureRequest,
     finish: Finish,
     save_as: Option<&Path>,
+    texts: &Texts,
 ) -> Result<(), CaptureFailure> {
     let mut actions: Vec<PostCaptureAction> = request
         .actions
@@ -89,14 +91,14 @@ pub(crate) fn run(
         let result = write_save_as(platform, screenshot, request.output.output_format, path);
         if let Err(error) = &result {
             platform.notifier.notify(Notification {
-                title: "另存为失败".to_owned(),
-                body: error.to_string(),
+                title: texts.get("notification-save-as-failed-title"),
+                body: error.localized(texts),
                 on_click: None,
             });
         }
         result
     });
-    let ran = action::run(platform, screenshot, &effective)
+    let ran = action::run(platform, screenshot, &effective, texts)
         .map_err(|error| CaptureFailure::in_actions(error, &effective));
     match saved_as {
         Some(Err(error)) => Err(CaptureFailure {

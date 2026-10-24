@@ -24,7 +24,7 @@ use bps_core::{
 use bps_platform::{
     Backdrop, Clipboard, ClipboardItem, Display, DisplayId, FrameSource, Image, Modifiers,
     Notification, Notifier, OverlayInput, OverlayScene, PlatformError, PlatformEvent, Point,
-    PointerButton, Rect, SelectionOverlay,
+    PointerButton, Rect, SelectionOverlay, SystemLanguage,
 };
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -69,6 +69,15 @@ struct QuietNotifier;
 impl Notifier for QuietNotifier {
     fn notify(&self, notification: Notification) {
         eprintln!("[通知] {}：{}", notification.title, notification.body);
+    }
+}
+
+/// 固定用简体中文界面，按钮文字与系统语言无关。
+struct Chinese;
+
+impl SystemLanguage for Chinese {
+    fn preferred_ui_languages(&self) -> Vec<String> {
+        vec!["zh-CN".to_owned()]
     }
 }
 
@@ -182,7 +191,10 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     let temp = std::env::temp_dir().join(format!("bps-annotation-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&temp).unwrap();
     let event_loop = EventLoop::new().unwrap();
-    let mut platform = bps_platform_windows::platform(&event_loop, temp.join("config.toml"));
+    // 测试不打开独立窗口，界面程序随便给一个。
+    let ui_exe = std::env::current_exe().unwrap();
+    let mut platform =
+        bps_platform_windows::platform(&event_loop, temp.join("config.toml"), ui_exe);
     let scene = Rc::new(RefCell::new(None));
     let real_overlay = std::mem::replace(
         &mut platform.overlay,
@@ -197,6 +209,7 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     });
     platform.notifier = Box::new(QuietNotifier);
     platform.clipboard = Box::new(NoClipboard);
+    platform.system_language = Box::new(Chinese);
     let mut instance = ResidentInstance::new(platform, Vec::new());
 
     let frames = DxgiFrameSource::new();

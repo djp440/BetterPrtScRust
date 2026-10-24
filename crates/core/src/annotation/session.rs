@@ -17,6 +17,7 @@ use bps_platform::{
 
 use super::toolbar::{Button, Tool, Toolbar};
 use super::{Annotation, AnnotationDocument, Stroke, compose_area};
+use crate::Texts;
 use crate::region::frozen_region;
 use crate::selection::between;
 
@@ -49,6 +50,8 @@ pub(crate) enum Response {
 /// 一次捕获里的标注界面。
 pub(crate) struct Annotator {
     displays: Vec<Display>,
+    /// 工具条文字的语言。
+    texts: &'static Texts,
     tool: Option<Tool>,
     /// 鼠标悬停的按钮。
     hovered: Option<Button>,
@@ -126,10 +129,11 @@ impl Canvas {
 }
 
 impl Annotator {
-    /// 在这些显示器上标注。
-    pub fn new(displays: Vec<Display>) -> Self {
+    /// 在这些显示器上标注，工具条文字用 `texts` 的语言。
+    pub fn new(displays: Vec<Display>, texts: &'static Texts) -> Self {
         Self {
             displays,
+            texts,
             tool: None,
             hovered: None,
             pressed: None,
@@ -290,7 +294,7 @@ impl Annotator {
     /// 显示器的缩放比例）。
     fn toolbar(&self, region: Rect) -> Toolbar {
         let frame = (self.scale_at(Point::new(region.x, region.y)).round() as u32).max(1);
-        Toolbar::beside(region, frame, &self.displays)
+        Toolbar::beside(region, frame, &self.displays, self.texts)
     }
 
     /// `point` 所在显示器的缩放比例；不在任何显示器上时为 1。
