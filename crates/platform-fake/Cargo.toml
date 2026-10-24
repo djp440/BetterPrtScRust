@@ -1,0 +1,11 @@
+[package]
+name = "bps-platform-fake"
+description = "测试用的整套假平台实现"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bps-platform.workspace = true
+png.workspace = true

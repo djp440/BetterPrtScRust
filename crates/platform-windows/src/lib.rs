@@ -1,0 +1,37 @@
+//! `bps-platform` 能力 trait 的 Windows 实现（ADR 0002），尽量薄。
+//!
+//! - [`DxgiFrameSource`]：显示器布局 + 鼠标位置 + DXGI Desktop Duplication 截图
+//! - [`WindowsClipboard`]：按 `ClipboardItem` 写入 `PNG` / `CF_DIB`
+//! - [`WindowsHotkeys`]：`RegisterHotKey`，按下时由 [`EventLoop`] 递交 `PlatformEvent`
+//! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标
+//!
+//! 进程必须是 Per-Monitor V2 DPI 感知，坐标和图像才是物理像素，见 [`dpi`]。
+//!
+//! 真机冒烟测试在 `tests/smoke.rs`，默认忽略：
+//! `cargo test -p bps-platform-windows -- --ignored`。
+#![cfg(windows)]
+
+mod clipboard;
+mod display_config;
+pub mod dpi;
+mod error;
+mod event_loop;
+mod frame_source;
+mod hotkeys;
+mod pixels;
+
+pub use clipboard::WindowsClipboard;
+pub use event_loop::EventLoop;
+pub use frame_source::DxgiFrameSource;
+pub use hotkeys::WindowsHotkeys;
+
+use bps_platform::Platform;
+
+/// 以 `event_loop` 的隐藏窗口为宿主，创建整套 Windows 平台能力。
+pub fn platform(event_loop: &EventLoop) -> Platform {
+    Platform {
+        frame_source: Box::new(DxgiFrameSource::new()),
+        clipboard: Box::new(WindowsClipboard::new(Some(event_loop))),
+        hotkeys: Box::new(event_loop.hotkeys()),
+    }
+}
