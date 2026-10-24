@@ -97,9 +97,8 @@ impl ResidentInstance {
                     .iter()
                     .find(|binding| binding.capture.mode == *mode)
                     .map(|binding| binding.capture.clone())
-                    .unwrap_or_else(|| CaptureRequest {
-                        mode: *mode,
-                        actions: vec![PostCaptureAction::CopyToClipboard],
+                    .unwrap_or_else(|| {
+                        CaptureRequest::new(*mode, vec![PostCaptureAction::CopyToClipboard])
                     }),
             ),
             Request::Activate => Command::Activate,
@@ -110,9 +109,8 @@ impl ResidentInstance {
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match command {
             Command::Capture(request) => {
-                let screenshot =
-                    capture::capture(self.platform.frame_source.as_ref(), request.mode)?;
-                action::run(&mut self.platform, &screenshot, &request.actions)?;
+                let screenshot = capture::capture(&self.platform, request.mode)?;
+                action::run(&mut self.platform, &screenshot, &request)?;
                 Ok(Flow::Continue)
             }
             Command::Activate => Ok(Flow::Continue),

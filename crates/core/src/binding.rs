@@ -9,14 +9,17 @@ pub struct HotkeyBinding {
     pub capture: CaptureRequest,
 }
 
-/// 内置的默认热键绑定。目前只有 Shift+PrtSc → 显示器 + 复制到剪贴板。
+/// 内置的默认热键绑定。目前只有 Shift+PrtSc → 显示器 + 复制到剪贴板 + 自动存储。
 pub fn default_bindings() -> Vec<HotkeyBinding> {
     vec![HotkeyBinding {
         hotkey: Hotkey::new(Modifiers::SHIFT, Key::PrintScreen),
-        capture: CaptureRequest {
-            mode: CaptureMode::Display,
-            actions: vec![PostCaptureAction::CopyToClipboard],
-        },
+        capture: CaptureRequest::new(
+            CaptureMode::Display,
+            vec![
+                PostCaptureAction::CopyToClipboard,
+                PostCaptureAction::AutoSave,
+            ],
+        ),
     }]
 }
 

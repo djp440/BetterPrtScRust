@@ -9,22 +9,28 @@
 //! 然后分别在 `platform-windows` 和 `platform-fake` 里实现。
 
 mod clipboard;
+mod clock;
 mod error;
 mod event;
+mod file_system;
 mod frame_source;
 mod geometry;
 mod hotkey;
 mod image;
+mod notifier;
 mod request;
 mod resident_channel;
 
 pub use clipboard::{Clipboard, ClipboardItem};
+pub use clock::{Clock, LocalDateTime};
 pub use error::PlatformError;
 pub use event::PlatformEvent;
+pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
 pub use image::Image;
+pub use notifier::{Notification, NotificationClick, Notifier};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 
@@ -38,4 +44,10 @@ pub struct Platform {
     pub clipboard: Box<dyn Clipboard>,
     /// 全局热键的注册与注销；按下事件经平台事件循环以 [`PlatformEvent`] 递交。
     pub hotkeys: Box<dyn GlobalHotkeys>,
+    /// 文件系统：自动存储写盘。
+    pub file_system: Box<dyn FileSystem>,
+    /// 通知（托盘气泡）。
+    pub notifier: Box<dyn Notifier>,
+    /// 本地时间，用于命名模板。
+    pub clock: Box<dyn Clock>,
 }

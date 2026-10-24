@@ -25,6 +25,17 @@ bps-platform-windows = { path = "crates/platform-windows" }
 png = { version = "0.18", default-features = false }
 windows = { version = "0.62", default-features = false }
 
+# 输出格式编码器（bps-core）。
+jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
+# 纯 Rust，编码器只支持无损 WebP。
+image-webp = { version = "0.2", default-features = false }
+# 纯 Rust（rav1e）；不开 asm（需要 nasm），开 threading 用多线程编码。
+ravif = { version = "0.13", default-features = false, features = ["threading"] }
+
+# 只给 bps-platform-fake 用的解码器，测试里读回编码结果。
+zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
+avif-parse = { version = "2", default-features = false }
+
 [profile.release]
 lto = true
 codegen-units = 1

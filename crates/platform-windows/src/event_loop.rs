@@ -21,7 +21,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIN_BALLOONUSERCLICK, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -34,8 +35,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::WindowsHotkeys;
 use crate::error::win_error;
+use crate::notifier::{PendingClick, open_click_target};
+use crate::{TrayNotifier, WindowsHotkeys};
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
@@ -43,7 +45,7 @@ const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
 const WM_TRAY: u32 = WM_APP + 1;
 /// 其他线程经 [`EventSender`] 投递了事件，唤醒消息循环去取。
 const WM_SENT_EVENT: u32 = WM_APP + 2;
-const TRAY_ICON_ID: u32 = 1;
+pub(crate) const TRAY_ICON_ID: u32 = 1;
 const MENU_EXIT: usize = 1;
 
 /// 常驻实例的消息循环。一个线程只应创建一个。
@@ -59,6 +61,8 @@ struct WindowState {
     /// 其他线程投递的事件，收到 `WM_SENT_EVENT` 时移进 `events`。
     sent: mpsc::Receiver<PlatformEvent>,
     tray: RefCell<Option<TrayIcon>>,
+    /// 最近一条托盘通知的点击操作。
+    balloon_click: PendingClick,
     /// 资源管理器重启后广播的消息，收到时重新添加托盘图标。
     taskbar_created: u32,
 }
@@ -127,6 +131,7 @@ impl EventLoop {
                 events: RefCell::new(VecDeque::new()),
                 sent,
                 tray: RefCell::new(None),
+                balloon_click: PendingClick::default(),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize);
@@ -162,6 +167,12 @@ impl EventLoop {
     /// 绑定到本窗口的全局热键；按下时本循环递交 [`PlatformEvent::HotkeyPressed`]。
     pub fn hotkeys(&self) -> WindowsHotkeys {
         WindowsHotkeys::new(self.hwnd)
+    }
+
+    /// 用本循环的托盘图标显示气泡通知；需要先 [`show_tray_icon`](Self::show_tray_icon)。
+    /// 用户点击气泡时，本循环执行通知的点击操作。
+    pub fn notifier(&self) -> TrayNotifier {
+        TrayNotifier::new(self.hwnd, self.state.balloon_click.clone())
     }
 
     pub(crate) fn hwnd(&self) -> HWND {
@@ -241,7 +252,13 @@ unsafe extern "system" fn window_proc(
             }
             WM_TRAY => {
                 let mouse = (lparam.0 & 0xFFFF) as u32;
-                if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
+                if mouse == NIN_BALLOONUSERCLICK {
+                    // 先取出再执行，ShellExecute 期间可能重入窗口过程。
+                    let click = state.balloon_click.borrow_mut().take();
+                    if let Some(click) = click {
+                        open_click_target(hwnd, &click);
+                    }
+                } else if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
                     && show_tray_menu(hwnd) == Some(MENU_EXIT)
                 {
                     state.push(PlatformEvent::ExitRequested);

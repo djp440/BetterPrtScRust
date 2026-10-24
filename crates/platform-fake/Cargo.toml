@@ -9,3 +9,7 @@ publish.workspace = true
 [dependencies]
 bps-platform.workspace = true
 png.workspace = true
+# 以下解码器只用于在测试里读回 core 编码的产物，不进入发布程序。
+zune-jpeg.workspace = true
+image-webp.workspace = true
+avif-parse.workspace = true
