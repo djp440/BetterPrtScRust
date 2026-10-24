@@ -6,6 +6,8 @@ use bps_platform::{GlobalHotkeys, Hotkey, HotkeyId, PlatformError};
 pub(crate) struct HotkeyState {
     /// 按注册顺序保存。
     registered: Vec<(HotkeyId, Hotkey)>,
+    /// 被“其他程序”占用、注册必然失败的热键。
+    pub occupied: Vec<Hotkey>,
 }
 
 impl HotkeyState {
@@ -28,6 +30,9 @@ impl GlobalHotkeys for FakeHotkeys {
         let mut state = self.0.lock().unwrap();
         if state.registered.iter().any(|(i, _)| *i == id) {
             return Err(PlatformError::new(format!("热键标识 {id:?} 已被使用")));
+        }
+        if state.occupied.contains(&hotkey) {
+            return Err(PlatformError::new("已被其他程序占用"));
         }
         if state.id_of(hotkey).is_some() {
             return Err(PlatformError::new(format!("热键 {hotkey:?} 已被注册")));

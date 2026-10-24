@@ -10,6 +10,7 @@
 
 mod clipboard;
 mod clock;
+mod config_file;
 mod error;
 mod event;
 mod file_system;
@@ -23,12 +24,13 @@ mod resident_channel;
 
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use clock::{Clock, LocalDateTime};
+pub use config_file::ConfigFile;
 pub use error::PlatformError;
 pub use event::PlatformEvent;
 pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
-pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
+pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError};
 pub use image::Image;
 pub use notifier::{Notification, NotificationClick, Notifier};
 pub use request::IncomingRequest;
@@ -50,4 +52,6 @@ pub struct Platform {
     pub notifier: Box<dyn Notifier>,
     /// 本地时间，用于命名模板。
     pub clock: Box<dyn Clock>,
+    /// 配置文件的读写与变更监视；变更经平台事件循环以 [`PlatformEvent`] 递交。
+    pub config_file: Box<dyn ConfigFile>,
 }

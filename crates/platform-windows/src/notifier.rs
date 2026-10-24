@@ -37,6 +37,8 @@ impl TrayNotifier {
 
 impl Notifier for TrayNotifier {
     fn notify(&self, notification: Notification) {
+        // 同时写一行日志，便于排查和冒烟脚本确认发出了哪条通知。
+        eprintln!("[通知] {}：{}", notification.title, notification.body);
         let mut data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: self.hwnd,

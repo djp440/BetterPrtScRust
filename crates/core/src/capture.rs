@@ -12,6 +12,11 @@ pub(crate) struct Screenshot {
     pub window_title: Option<String>,
 }
 
+/// 这个捕获模式是否已经实现。实现新的捕获模式时在这里登记。
+pub(crate) fn is_implemented(mode: CaptureMode) -> bool {
+    matches!(mode, CaptureMode::Display | CaptureMode::VirtualDesktop)
+}
+
 /// 按捕获模式从帧源取得截图。
 pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screenshot, CoreError> {
     let captured_at = platform.clock.now();

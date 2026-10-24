@@ -1,3 +1,5 @@
+use serde::Deserialize;
+
 use crate::OutputOptions;
 
 /// 交给常驻实例执行的命令，是 `core` 的唯一入口。
@@ -23,21 +25,38 @@ pub struct CaptureRequest {
     pub actions: Vec<PostCaptureAction>,
     /// 输出格式、自动存储目录和命名模板。
     pub output: OutputOptions,
+    /// 录屏选项；只有带录屏动作的捕获用到。
+    pub recording: RecordingOptions,
 }
 
 impl CaptureRequest {
-    /// 使用默认输出选项（PNG、`图片\BetterPrtSc`、默认命名模板）的捕获请求。
+    /// 使用默认输出选项（PNG、`图片\BetterPrtSc`、默认命名模板）和默认录屏选项的捕获请求。
     pub fn new(mode: CaptureMode, actions: Vec<PostCaptureAction>) -> Self {
         Self {
             mode,
             actions,
             output: OutputOptions::default(),
+            recording: RecordingOptions::default(),
         }
     }
 }
 
+/// 录屏选项；`None` 表示使用录屏功能的内置默认值。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordingOptions {
+    /// 录屏的输出格式。
+    pub format: Option<RecordingFormat>,
+    /// 帧率（每秒帧数）。
+    pub frame_rate: Option<u32>,
+    /// 是否录入鼠标指针。
+    pub show_cursor: Option<bool>,
+}
+
 /// 捕获模式：决定捕获屏幕上哪一部分内容。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// 配置文件里写作 `display`、`virtual_desktop`、`region`、`window`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     /// 鼠标所在的那块显示器，按物理像素输出。
     Display,
@@ -63,12 +82,48 @@ impl CaptureMode {
 }
 
 /// 截后动作：捕获完成后对产物执行的处理。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// 配置文件里写作 `copy_to_clipboard`、`auto_save`、`annotate`、`record`、
+/// `long_screenshot`、`ocr`、`translate`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PostCaptureAction {
     /// 把截图复制到剪贴板：按输出格式编码的图像 + DIB。
     CopyToClipboard,
     /// 自动存储：按命名模板和输出格式写入存储目录，完成后发通知。
     AutoSave,
+    /// 进入标注。
+    Annotate,
+    /// 在实时画面上框选后开始录屏。
+    Record,
+    /// 用户滚动内容时连续采样并拼接成长截屏。
+    LongScreenshot,
+    /// 识别截图中的文字。
+    Ocr,
+    /// 把 OCR 结果交给翻译服务。
+    Translate,
+}
+
+impl PostCaptureAction {
+    /// 术语表里的中文名称，用于给人看的消息。
+    pub fn label(self) -> &'static str {
+        match self {
+            PostCaptureAction::CopyToClipboard => "复制到剪贴板",
+            PostCaptureAction::AutoSave => "自动存储",
+            PostCaptureAction::Annotate => "标注",
+            PostCaptureAction::Record => "录屏",
+            PostCaptureAction::LongScreenshot => "长截屏",
+            PostCaptureAction::Ocr => "OCR",
+            PostCaptureAction::Translate => "翻译",
+        }
+    }
+}
+
+/// 录屏的输出格式。截图的输出格式见 [`crate::OutputFormat`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecordingFormat {
+    Mp4,
+    Gif,
 }
 
 /// 执行完一条命令后常驻实例应继续运行还是退出。

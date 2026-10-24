@@ -6,6 +6,7 @@
 //! - [`WindowsFileSystem`]：“图片”文件夹位置 + 不覆盖已有文件的写盘
 //! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
 //! - [`WindowsClock`]：本地时间
+//! - [`WindowsConfigFile`]：配置文件读写，所在目录变化时由 [`EventLoop`] 递交 `PlatformEvent`
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
 //!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
@@ -18,6 +19,7 @@
 
 mod clipboard;
 mod clock;
+mod config_file;
 mod display_config;
 pub mod dpi;
 mod error;
@@ -31,6 +33,7 @@ mod pixels;
 
 pub use clipboard::WindowsClipboard;
 pub use clock::WindowsClock;
+pub use config_file::WindowsConfigFile;
 pub use event_loop::{EventLoop, EventSender};
 pub use file_system::WindowsFileSystem;
 pub use frame_source::DxgiFrameSource;
@@ -38,10 +41,12 @@ pub use hotkeys::WindowsHotkeys;
 pub use notifier::TrayNotifier;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 
+use std::path::PathBuf;
+
 use bps_platform::Platform;
 
-/// 以 `event_loop` 的隐藏窗口为宿主，创建整套 Windows 平台能力。
-pub fn platform(event_loop: &EventLoop) -> Platform {
+/// 以 `event_loop` 的隐藏窗口为宿主，创建整套 Windows 平台能力；配置文件位于 `config_file`。
+pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
     Platform {
         frame_source: Box::new(DxgiFrameSource::new()),
         clipboard: Box::new(WindowsClipboard::new(Some(event_loop))),
@@ -49,5 +54,6 @@ pub fn platform(event_loop: &EventLoop) -> Platform {
         file_system: Box::new(WindowsFileSystem::new()),
         notifier: Box::new(event_loop.notifier()),
         clock: Box::new(WindowsClock::new()),
+        config_file: Box::new(event_loop.config_file(config_file)),
     }
 }

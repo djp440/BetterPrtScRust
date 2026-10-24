@@ -31,9 +31,9 @@ impl GlobalHotkeys for WindowsHotkeys {
         unsafe { RegisterHotKey(Some(self.hwnd), native_id(id)?, modifiers, u32::from(vk.0)) }
             .map_err(|e| {
                 if e.code() == ERROR_HOTKEY_ALREADY_REGISTERED.to_hresult() {
-                    PlatformError::new(format!("热键 {hotkey:?} 已被其他程序占用"))
+                    PlatformError::new("已被其他程序占用")
                 } else {
-                    win_error(&format!("注册热键 {hotkey:?} 失败"), e)
+                    win_error(&format!("注册热键 {hotkey} 失败"), e)
                 }
             })?;
         self.registered.push(id);
@@ -84,5 +84,9 @@ fn virtual_key(key: Key) -> Result<VIRTUAL_KEY, PlatformError> {
         Key::PrintScreen => Ok(VK_SNAPSHOT),
         Key::F(n @ 1..=24) => Ok(VIRTUAL_KEY(VK_F1.0 + u16::from(n) - 1)),
         Key::F(n) => Err(PlatformError::new(format!("不存在功能键 F{n}"))),
+        // 字母和数字键的虚拟键码就是它们的 ASCII 码（'A'–'Z'、'0'–'9'）。
+        Key::Letter(c @ 'A'..='Z') => Ok(VIRTUAL_KEY(c as u16)),
+        Key::Digit(d @ 0..=9) => Ok(VIRTUAL_KEY(u16::from(b'0' + d))),
+        Key::Letter(_) | Key::Digit(_) => Err(PlatformError::new(format!("不支持的按键 {key}"))),
     }
 }

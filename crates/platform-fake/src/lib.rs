@@ -2,8 +2,9 @@
 //!
 //! 用法：先用 [`FakeDisplay`] 和 [`FakePlatform`] 的构造方法描述“桌面”，
 //! 再用 [`FakePlatform::platform`] 生成交给 `bps-core` 的 [`Platform`]；
-//! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键）
-//! 并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、已注册的热键）。
+//! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
+//! 编辑配置文件）并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、
+//! 已注册的热键、配置文件内容）。
 //!
 //! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
 //!
@@ -20,6 +21,7 @@
 //! ```
 
 mod clipboard;
+mod config_file;
 pub mod decode;
 mod file_system;
 mod frame_source;
@@ -33,11 +35,13 @@ use std::sync::{Arc, Mutex};
 use bps_platform::{Clock, Hotkey, LocalDateTime, Notification, Platform, PlatformEvent, Point};
 
 pub use clipboard::ClipboardContent;
+pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
 
 use clipboard::FakeClipboard;
+use config_file::{ConfigFileState, FakeConfigFile};
 use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
@@ -55,6 +59,7 @@ pub struct FakePlatform {
     files: Arc<Mutex<FsState>>,
     notifications: Arc<Mutex<Vec<Notification>>>,
     time: Arc<Mutex<LocalDateTime>>,
+    config_file: Arc<Mutex<ConfigFileState>>,
 }
 
 impl Default for FakePlatform {
@@ -66,13 +71,14 @@ impl Default for FakePlatform {
             files: Default::default(),
             notifications: Default::default(),
             time: Arc::new(Mutex::new(DEFAULT_TIME)),
+            config_file: Default::default(),
         }
     }
 }
 
 impl FakePlatform {
     /// 没有任何显示器、鼠标位于 (0, 0)、剪贴板为空、只有一个空的“图片”文件夹
-    /// （[`DEFAULT_PICTURES_DIR`]）、时间为 [`DEFAULT_TIME`] 的平台。
+    /// （[`DEFAULT_PICTURES_DIR`]）、时间为 [`DEFAULT_TIME`]、配置文件不存在的平台。
     pub fn new() -> Self {
         Self::default()
     }
@@ -120,6 +126,18 @@ impl FakePlatform {
         self
     }
 
+    /// 配置文件已经存在，内容是 `text`。
+    pub fn with_config_file(self, text: &str) -> Self {
+        self.config_file.lock().unwrap().text = Some(text.to_owned());
+        self
+    }
+
+    /// `hotkey` 已被其他程序占用，注册它会失败。
+    pub fn with_hotkey_taken_by_other_program(self, hotkey: Hotkey) -> Self {
+        self.hotkeys.lock().unwrap().occupied.push(hotkey);
+        self
+    }
+
     /// 模拟用户移动鼠标。
     pub fn move_cursor(&self, position: Point) {
         self.frames.lock().unwrap().cursor = position;
@@ -139,7 +157,35 @@ impl FakePlatform {
             file_system: Box::new(FakeFileSystem(self.files.clone())),
             notifier: Box::new(FakeNotifier(self.notifications.clone())),
             clock: Box::new(FakeClock(self.time.clone())),
+            config_file: Box::new(FakeConfigFile {
+                state: self.config_file.clone(),
+                path: self.config_file_path(),
+            }),
         }
+    }
+
+    /// 配置文件的位置（[`FAKE_CONFIG_PATH`]）。
+    pub fn config_file_path(&self) -> PathBuf {
+        PathBuf::from(FAKE_CONFIG_PATH)
+    }
+
+    /// 配置文件当前的内容；文件不存在时返回 `None`。
+    pub fn config_file_text(&self) -> Option<String> {
+        self.config_file.lock().unwrap().text.clone()
+    }
+
+    /// 模拟用户在外部编辑器里修改配置文件：正在监视时返回平台事件循环会递交的事件。
+    pub fn edit_config_file(&self, text: &str) -> Option<PlatformEvent> {
+        let mut state = self.config_file.lock().unwrap();
+        state.text = Some(text.to_owned());
+        state.watched.then_some(PlatformEvent::ConfigFileChanged)
+    }
+
+    /// 模拟用户删除配置文件：正在监视时返回平台事件循环会递交的事件。
+    pub fn delete_config_file(&self) -> Option<PlatformEvent> {
+        let mut state = self.config_file.lock().unwrap();
+        state.text = None;
+        state.watched.then_some(PlatformEvent::ConfigFileChanged)
     }
 
     /// 剪贴板当前内容的快照。

@@ -1,7 +1,8 @@
 //! BetterPrtSc 常驻实例（`BetterPrtSc.exe`）：托盘图标 + 全局热键 + 命名管道 → `core` 命令。
 //!
-//! 这里只做组装：先占用常驻实例的命名管道（单实例），再创建平台事件循环和平台能力，
-//! 交给 `bps_core::ResidentInstance`，然后把事件循环递交的每个平台事件交给它处理。
+//! 这里只做组装：先占用常驻实例的命名管道（单实例），再决定配置文件的位置（便携模式或
+//! `%APPDATA%`），创建平台事件循环和平台能力，交给 `bps_core::ResidentInstance`，
+//! 然后把事件循环递交的每个平台事件交给它处理。
 //! 管道已被占用时说明常驻实例已在运行，本进程只把“激活”请求转交给它，随即退出。
 
 // release 版不弹控制台窗口；debug 版保留控制台，便于查看输出。
@@ -33,11 +34,14 @@ fn main() -> ExitCode {
 mod resident {
     use std::error::Error;
     use std::ops::ControlFlow;
+    use std::path::PathBuf;
     use std::time::Instant;
 
     use bps_core::{
-        Flow, Reply, Request, ResidentInstance, WhenNotRunning, default_bindings, forward,
+        DataLocation, Flow, PORTABLE_MARKER, Reply, Request, ResidentInstance, WhenNotRunning,
+        forward,
     };
+    use bps_platform::PlatformError;
     use bps_platform_windows::{
         EventLoop, PipeChannel, PipeClaim, ResidentPipe, dpi, resident_pipe_name,
     };
@@ -65,21 +69,36 @@ mod resident {
             }
         );
 
+        let location = data_location()?;
+        eprintln!(
+            "配置文件：{}{}",
+            location.config_file().display(),
+            if location.is_portable() {
+                "（便携模式）"
+            } else {
+                ""
+            }
+        );
+
         let event_loop = EventLoop::new()?;
+        // 先显示托盘图标：启动过程中的通知（如热键注册失败）要靠它发出。
         event_loop.show_tray_icon("BetterPrtSc", &icon::tray_icon())?;
 
-        let mut instance = ResidentInstance::new(
-            bps_platform_windows::platform(&event_loop),
-            default_bindings(),
-        );
-        for failure in instance.register_hotkeys() {
+        let mut instance = ResidentInstance::start(bps_platform_windows::platform(
+            &event_loop,
+            location.config_file(),
+        ));
+        for failure in instance.registration_failures() {
             eprintln!(
-                "热键 {:?} 注册失败：{}",
+                "热键 {} 注册失败：{}",
                 failure.binding.hotkey, failure.error
             );
         }
         pipe.serve(event_loop.sender())?;
-        eprintln!("常驻实例已启动（命名管道 {pipe_name}）");
+        eprintln!(
+            "常驻实例已启动（命名管道 {pipe_name}），{} 条热键绑定",
+            instance.config().bindings.len()
+        );
 
         event_loop.run(|event| {
             let started = Instant::now();
@@ -98,6 +117,22 @@ mod resident {
         });
         eprintln!("常驻实例已退出");
         Ok(())
+    }
+
+    /// 程序目录下有 `portable` 标记文件时用便携模式，否则用 `%APPDATA%\BetterPrtSc`。
+    fn data_location() -> Result<DataLocation, PlatformError> {
+        let exe = std::env::current_exe()
+            .map_err(|e| PlatformError::new(format!("无法确定程序所在目录：{e}")))?;
+        let program_dir = exe
+            .parent()
+            .ok_or_else(|| PlatformError::new("无法确定程序所在目录"))?;
+        let portable = program_dir.join(PORTABLE_MARKER).is_file();
+        let app_data = std::env::var_os("APPDATA").map(PathBuf::from);
+        DataLocation::resolve(program_dir, portable, app_data.as_deref()).ok_or_else(|| {
+            PlatformError::new(format!(
+                "找不到 %APPDATA%；可以在程序目录下放一个名为 {PORTABLE_MARKER} 的文件，改用便携模式"
+            ))
+        })
     }
 
     /// 再次启动时：把“激活”请求转交给已在运行的常驻实例，不再拉起新的。

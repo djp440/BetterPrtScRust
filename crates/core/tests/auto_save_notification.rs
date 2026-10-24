@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use bps_core::{
-    CaptureMode, CaptureRequest, Command, CoreError, PostCaptureAction, ResidentInstance, SaveDir,
+    CaptureMode, CaptureRequest, Command, CoreError, HotkeyBinding, PostCaptureAction,
+    ResidentInstance, SaveDir,
 };
-use bps_platform::{LocalDateTime, NotificationClick, Rect};
+use bps_platform::{Hotkey, Key, LocalDateTime, Modifiers, NotificationClick, Rect};
 use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform};
 
 fn fake() -> FakePlatform {
@@ -86,4 +87,28 @@ fn failed_auto_save_notifies_failure_but_still_copies_image() {
         notifications[0].body
     );
     assert_eq!(notifications[0].on_click, None);
+}
+
+#[test]
+fn failed_auto_save_triggered_by_hotkey_is_notified_only_once() {
+    let read_only = PathBuf::from(r"D:\只读");
+    let fake = fake().with_read_only_dir(&read_only);
+    let ctrl_f9 = Hotkey::new(Modifiers::CTRL, Key::F(9));
+    let mut request = capture(vec![
+        PostCaptureAction::CopyToClipboard,
+        PostCaptureAction::AutoSave,
+    ]);
+    request.output.save_dir = SaveDir::Custom(read_only.join("截图"));
+    let binding = HotkeyBinding {
+        hotkey: ctrl_f9,
+        capture: request,
+    };
+    let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
+    assert!(instance.register_hotkeys().is_empty());
+
+    let result = instance.handle(fake.press(ctrl_f9).unwrap());
+
+    assert!(result.is_err(), "{result:?}");
+    let titles: Vec<_> = fake.notifications().into_iter().map(|n| n.title).collect();
+    assert_eq!(titles, ["自动存储失败"]);
 }

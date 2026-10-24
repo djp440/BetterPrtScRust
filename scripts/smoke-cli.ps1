@@ -13,6 +13,8 @@
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
   默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存截图：结束时删除本次存下的文件
   （以剪贴板附带的文件为准），目录是本次新建且已空时一并删除。
+  本脚本启动的进程的 APPDATA 指向 -OutDir 下的临时目录，常驻实例首次运行生成的
+  config.toml 写在那里，不碰真实的 %APPDATA%。
   需要 STA 线程访问剪贴板，请用 Windows PowerShell 运行：
     powershell -NoProfile -STA -File scripts\smoke-cli.ps1 [-BinDir target\release]
 #>
@@ -118,6 +120,12 @@ $saveDir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'BetterPrtSc'
 $saveDirExisted = Test-Path -LiteralPath $saveDir
 $startedAt = Get-Date
 $savedFiles = @()
+# 子进程（bps 及它拉起的常驻实例）继承环境变量。
+$realAppData = $env:APPDATA
+$fakeAppData = Join-Path $OutDir 'appdata'
+if (Test-Path -LiteralPath $fakeAppData) { Remove-Item -Recurse -Force -LiteralPath $fakeAppData }
+New-Item -ItemType Directory -Force $fakeAppData | Out-Null
+$env:APPDATA = $fakeAppData
 try {
     $clip::Clear()
     $r = Invoke-Bps @('capture', 'display')
@@ -166,8 +174,13 @@ finally {
         }
     }
     "结束后常驻实例数：$((Get-Residents).Count)"
-    if ($backupImage) { $clip::SetImage($backupImage) }
-    elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    $env:APPDATA = $realAppData
+    # 剪贴板可能正被其他程序占用：恢复失败只警告，不影响后面的清理。
+    try {
+        if ($backupImage) { $clip::SetImage($backupImage) }
+        elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    }
+    catch { "警告：恢复剪贴板失败：$($_.Exception.Message)" }
     # 只删除本次运行存下的文件，以及本次新建且已空的存储目录。
     foreach ($f in $savedFiles) {
         if ($f -and (Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).CreationTime -ge $startedAt) {

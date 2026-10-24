@@ -142,6 +142,20 @@ fn bps_capture_copies_to_clipboard_when_no_hotkey_binding_uses_that_mode() {
 }
 
 #[test]
+fn bps_capture_without_matching_binding_uses_global_output_settings() {
+    let fake = two_displays_cursor_on_second().with_config_file("output_format = \"jpg\"\n");
+    let mut instance = ResidentInstance::start(fake.platform());
+    let mut channel = FakeResidentChannel::running(move |event| {
+        let _ = instance.handle(event);
+    });
+
+    let outcome = run_cli(["capture", "display"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
+    assert_eq!(fake.clipboard().formats(), ["JPEG", "DIB"]);
+}
+
+#[test]
 fn bps_reports_failure_when_resident_instance_cannot_complete_capture() {
     let no_displays = FakePlatform::new();
     let mut channel = FakeResidentChannel::running(resident_instance(&no_displays));
