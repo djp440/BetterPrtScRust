@@ -57,6 +57,38 @@ pub(crate) fn draw(
     }
 }
 
+/// 在实时画面上的遮罩（预乘 alpha 的透明交换链）上画一整帧（不含呈现）：先清成全透明，
+/// 再按顺序画场景里的元素，没有画到的地方露出底下实时变化的桌面。
+pub(crate) fn draw_transparent(
+    gpu: &Gpu,
+    target: &ID2D1Bitmap1,
+    origin: Point,
+    scene: &OverlayScene,
+) -> Result<(), PlatformError> {
+    let ctx = &gpu.d2d;
+    unsafe {
+        ctx.SetTarget(target);
+        ctx.BeginDraw();
+        ctx.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+        ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        ctx.Clear(Some(&D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }));
+        let drawn = scene
+            .items
+            .iter()
+            .try_for_each(|item| draw_item(gpu, origin, item));
+        let ended = ctx
+            .EndDraw(None, None)
+            .map_err(|e| win_error("绘制遮罩失败", e));
+        ctx.SetTarget(None);
+        drawn.and(ended)
+    }
+}
+
 fn draw_item(gpu: &Gpu, origin: Point, item: &OverlayItem) -> Result<(), PlatformError> {
     match item {
         OverlayItem::Fill { rect, color } => {

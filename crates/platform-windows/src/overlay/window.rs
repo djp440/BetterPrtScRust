@@ -51,15 +51,15 @@ use crate::event_loop::EventQueue;
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.SelectionOverlay");
 
 /// 窗口过程与 [`OverlayWindow`] 共享的状态；窗口过程会被同步重入，所以只用 `Cell`。
-struct Shared {
-    queue: EventQueue,
+pub(super) struct Shared {
+    pub queue: EventQueue,
     /// 窗口左上角在虚拟桌面中的位置：客户区坐标 + `origin` = 虚拟桌面坐标。
-    origin: Cell<Point>,
-    cursor: Cell<OverlayCursor>,
+    pub origin: Cell<Point>,
+    pub cursor: Cell<OverlayCursor>,
     /// 遮罩正显示着；只在这期间递交用户输入。
-    active: Cell<bool>,
+    pub active: Cell<bool>,
     /// 显示器布局变了，窗口和交换链需要重建。
-    stale: Cell<bool>,
+    pub stale: Cell<bool>,
 }
 
 pub(crate) struct OverlayWindow {
@@ -239,7 +239,7 @@ impl Drop for OverlayWindow {
 }
 
 /// 创建过程中出错时销毁已建好的窗口。
-struct PartialWindow(HWND);
+pub(super) struct PartialWindow(pub HWND);
 
 impl Drop for PartialWindow {
     fn drop(&mut self) {
@@ -250,7 +250,7 @@ impl Drop for PartialWindow {
     }
 }
 
-fn cloak(hwnd: HWND, on: bool) {
+pub(super) fn cloak(hwnd: HWND, on: bool) {
     let value = BOOL::from(on);
     unsafe {
         let _ = DwmSetWindowAttribute(
@@ -262,7 +262,7 @@ fn cloak(hwnd: HWND, on: bool) {
     }
 }
 
-fn apply_cursor(cursor: OverlayCursor) {
+pub(super) fn apply_cursor(cursor: OverlayCursor) {
     let id = match cursor {
         OverlayCursor::Crosshair => IDC_CROSS,
         OverlayCursor::Arrow => IDC_ARROW,
@@ -274,7 +274,7 @@ fn apply_cursor(cursor: OverlayCursor) {
     }
 }
 
-unsafe extern "system" fn window_proc(
+pub(super) unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,

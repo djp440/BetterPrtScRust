@@ -29,7 +29,7 @@ const ALT_PRINT_SCREEN: Hotkey = Hotkey::new(
 
 fn single_display() -> FakePlatform {
     FakePlatform::new()
-        .with_display(FakeDisplay::new(Rect::new(0, 0, 64, 48)).primary())
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 128, 96)).primary())
         .with_cursor_at(Point::new(30, 20))
 }
 
@@ -88,7 +88,7 @@ fn recording_runs_until_same_hotkey_pressed_again_and_is_saved_and_copied() {
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
     // 鼠标指针 (30, 20) 在区域内。
-    let region = Rect::new(20, 10, 20, 12);
+    let region = Rect::new(20, 10, 40, 36);
     feed(&mut instance, fake.select_region(region));
     assert!(!fake.overlay_visible(), "开始录制后遮罩应关闭");
     assert!(fake.capturing_video(), "确定区域后应开始录制");
@@ -108,7 +108,7 @@ fn recording_runs_until_same_hotkey_pressed_again_and_is_saved_and_copied() {
     );
     let video = decode::video(&fake.file(&path).unwrap());
     assert_eq!(video.format, VideoFormat::Mp4);
-    assert_eq!((video.width, video.height), (20, 12));
+    assert_eq!((video.width, video.height), (40, 36));
     assert_eq!(video.frame_rate, 30, "MP4 默认 30 fps");
     assert_eq!(video.frames.len(), 30, "录了 1 秒，30 fps");
     let timestamps: Vec<Duration> = video.frames.iter().map(|f| f.timestamp).collect();
@@ -165,11 +165,11 @@ fn solid(width: u32, height: u32, rgba: [u8; 4]) -> Image {
 #[test]
 fn recording_follows_live_screen_changes() {
     let fake = single_display().with_cursor_at(Point::new(0, 0));
-    let region = Rect::new(8, 8, 16, 10);
+    let region = Rect::new(8, 8, 40, 34);
     let mut instance = recording(&fake, region);
 
     record_for(&fake, &mut instance, Duration::from_millis(500));
-    fake.change_display_image(0, solid(64, 48, [9, 99, 199, 255]));
+    fake.change_display_image(0, solid(128, 96, [9, 99, 199, 255]));
     record_for(&fake, &mut instance, Duration::from_millis(500));
     let video = stop_and_read_video(&fake, &mut instance);
 
@@ -182,7 +182,7 @@ fn recording_follows_live_screen_changes() {
     assert!(
         after
             .iter()
-            .all(|f| f.image == solid(16, 10, [9, 99, 199, 255])),
+            .all(|f| f.image == solid(40, 34, [9, 99, 199, 255])),
         "画面变化后录到的是新画面"
     );
 }
@@ -209,7 +209,7 @@ fn binding_sets_frame_rate_and_hides_cursor() {
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
     // 鼠标指针 (30, 20) 在区域内，但不应被录进去。
-    let region = Rect::new(20, 10, 20, 12);
+    let region = Rect::new(20, 10, 40, 36);
     feed(&mut instance, fake.select_region(region));
 
     record_for(&fake, &mut instance, Duration::from_secs(1));
@@ -234,7 +234,7 @@ fn binding_sets_frame_rate_and_hides_cursor() {
 #[test]
 fn late_and_merged_ticks_keep_constant_frame_rate() {
     let fake = single_display();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
 
     // 事件循环忙了 0.7 秒才处理到一个节拍，之后节拍又挤在一起到达。
     fake.advance_clock(Duration::from_millis(700));
@@ -253,21 +253,21 @@ fn late_and_merged_ticks_keep_constant_frame_rate() {
 #[test]
 fn odd_sized_region_is_trimmed_to_even_size_for_mp4() {
     let fake = single_display().with_cursor_at(Point::new(0, 0));
-    let mut instance = recording(&fake, Rect::new(5, 7, 21, 13));
+    let mut instance = recording(&fake, Rect::new(5, 7, 41, 35));
 
     record_for(&fake, &mut instance, Duration::from_millis(100));
     let video = stop_and_read_video(&fake, &mut instance);
 
     assert_eq!(
         (video.width, video.height),
-        (20, 12),
+        (40, 34),
         "H.264 的宽高必须是偶数"
     );
     assert!(
         video
             .frames
             .iter()
-            .all(|f| f.image == desktop_pattern(Rect::new(5, 7, 20, 12))),
+            .all(|f| f.image == desktop_pattern(Rect::new(5, 7, 40, 34))),
         "去掉的是最右一列和最下一行"
     );
 }
@@ -275,7 +275,7 @@ fn odd_sized_region_is_trimmed_to_even_size_for_mp4() {
 #[test]
 fn stopping_right_after_start_still_saves_one_frame() {
     let fake = single_display();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
 
     let video = stop_and_read_video(&fake, &mut instance);
 
@@ -312,7 +312,7 @@ fn escape_while_framing_cancels_without_recording() {
 #[test]
 fn nothing_is_saved_when_no_frame_arrived_before_stop() {
     let fake = single_display().with_video_frames_delayed();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
     fake.advance_clock(Duration::from_millis(200));
     instance.handle(fake.tick().unwrap()).unwrap();
 
@@ -330,7 +330,7 @@ fn frames_arriving_late_fill_the_start_of_the_recording() {
     let fake = single_display()
         .with_cursor_at(Point::new(60, 40))
         .with_video_frames_delayed();
-    let region = Rect::new(0, 0, 16, 16);
+    let region = Rect::new(0, 0, 40, 40);
     let mut instance = recording(&fake, region);
     fake.advance_clock(Duration::from_millis(100));
     instance.handle(fake.tick().unwrap()).unwrap();
@@ -361,7 +361,7 @@ const SHIFT_PRINT_SCREEN: Hotkey = Hotkey::new(
 #[test]
 fn other_capture_hotkeys_are_refused_while_recording() {
     let fake = single_display();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
     record_for(&fake, &mut instance, Duration::from_millis(100));
 
     let result = instance.handle(fake.press(SHIFT_PRINT_SCREEN).unwrap());
@@ -409,7 +409,7 @@ fn pressing_record_hotkey_again_while_framing_keeps_the_overlay() {
 #[test]
 fn exiting_while_recording_saves_what_was_recorded() {
     let fake = single_display();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
     record_for(&fake, &mut instance, Duration::from_millis(200));
 
     let flow = instance.handle(PlatformEvent::ExitRequested).unwrap();
@@ -424,7 +424,7 @@ fn exiting_while_recording_saves_what_was_recorded() {
 #[test]
 fn recording_stops_and_is_saved_when_its_target_disappears() {
     let fake = single_display();
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
     record_for(&fake, &mut instance, Duration::from_millis(200));
 
     // 例如显示器被拔掉。
@@ -450,7 +450,7 @@ fn encoder_failure_is_reported_and_leaves_nothing_behind() {
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
 
-    let mut events = fake.select_region(Rect::new(0, 0, 16, 16));
+    let mut events = fake.select_region(Rect::new(0, 0, 40, 40));
     let confirm = events.pop().unwrap();
     feed(&mut instance, events);
     let result = instance.handle(confirm);
@@ -482,7 +482,7 @@ fn gif_recording_is_refused_before_framing() {
 fn existing_file_with_same_name_is_not_overwritten() {
     let existing = saved_recording(&FakePlatform::new(), "2000-01-01 00-00-00.mp4");
     let fake = single_display().with_file(&existing, b"old".to_vec());
-    let mut instance = recording(&fake, Rect::new(0, 0, 16, 16));
+    let mut instance = recording(&fake, Rect::new(0, 0, 40, 40));
     record_for(&fake, &mut instance, Duration::from_millis(100));
 
     instance
@@ -506,7 +506,7 @@ filename_template = "录屏 {HH-mm-ss} {mode}""#,
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
-    feed(&mut instance, fake.select_region(Rect::new(0, 0, 16, 16)));
+    feed(&mut instance, fake.select_region(Rect::new(0, 0, 40, 40)));
     record_for(&fake, &mut instance, Duration::from_millis(100));
 
     instance
@@ -526,7 +526,7 @@ fn unwritable_save_dir_fails_before_recording_starts() {
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
 
-    let mut events = fake.select_region(Rect::new(0, 0, 16, 16));
+    let mut events = fake.select_region(Rect::new(0, 0, 40, 40));
     let confirm = events.pop().unwrap();
     feed(&mut instance, events);
     let result = instance.handle(confirm);
@@ -546,7 +546,7 @@ fn bps_capture_region_with_record_binding_replies_after_recording_is_saved() {
     let mut channel = FakeResidentChannel::running(move |event| {
         instance.handle(event).unwrap();
         // 坐在屏幕前的用户：框选区域，录 0.2 秒，再按一次 Alt+PrtSc。
-        feed(&mut instance, user.select_region(Rect::new(0, 0, 16, 16)));
+        feed(&mut instance, user.select_region(Rect::new(0, 0, 40, 40)));
         record_for(&user, &mut instance, Duration::from_millis(200));
         instance
             .handle(user.press(ALT_PRINT_SCREEN).unwrap())
@@ -562,7 +562,7 @@ fn bps_capture_region_with_record_binding_replies_after_recording_is_saved() {
 
 #[test]
 fn display_mode_records_display_under_cursor_without_framing() {
-    let second = Rect::new(64, -10, 40, 30);
+    let second = Rect::new(128, -10, 40, 34);
     let fake = single_display()
         .with_display(FakeDisplay::new(second))
         .with_cursor_at(Point::new(200, 200));
@@ -572,7 +572,7 @@ fn display_mode_records_display_under_cursor_without_framing() {
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
     assert!(instance.register_hotkeys().is_empty());
-    fake.move_cursor(Point::new(70, 0));
+    fake.move_cursor(Point::new(130, 0));
 
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
@@ -582,7 +582,7 @@ fn display_mode_records_display_under_cursor_without_framing() {
     record_for(&fake, &mut instance, Duration::from_millis(100));
     let video = stop_and_read_video(&fake, &mut instance);
 
-    assert_eq!((video.width, video.height), (40, 30));
+    assert_eq!((video.width, video.height), (40, 34));
     assert!(
         video
             .frames
@@ -594,7 +594,7 @@ fn display_mode_records_display_under_cursor_without_framing() {
 #[test]
 fn virtual_desktop_mode_records_all_displays() {
     let fake = single_display()
-        .with_display(FakeDisplay::new(Rect::new(64, -10, 40, 30)))
+        .with_display(FakeDisplay::new(Rect::new(128, -10, 40, 34)))
         .with_cursor_at(Point::new(500, 500));
     let config = Config::parse(
         "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"virtual_desktop\"\nactions = [\"record\"]\n",
@@ -609,12 +609,45 @@ fn virtual_desktop_mode_records_all_displays() {
     record_for(&fake, &mut instance, Duration::from_millis(100));
     let video = stop_and_read_video(&fake, &mut instance);
 
-    // 虚拟桌面 (0, -10)–(104, 48)：104 × 58。
-    assert_eq!((video.width, video.height), (104, 58));
+    // 虚拟桌面 (0, -10)–(168, 96)：168 × 106。
+    assert_eq!((video.width, video.height), (168, 106));
     let frame = &video.frames[0].image;
     assert_eq!(
-        frame.pixel(70, 5),
-        desktop_pattern(Rect::new(70, -5, 1, 1)).pixel(0, 0)
+        frame.pixel(130, 5),
+        desktop_pattern(Rect::new(130, -5, 1, 1)).pixel(0, 0)
     );
     assert_eq!(frame.pixel(0, 0), [0, 0, 0, 0], "显示器之间的空隙是透明的");
+}
+
+#[test]
+fn region_smaller_than_mp4_minimum_is_refused() {
+    let fake = single_display();
+    let mut instance = resident(&fake);
+    instance
+        .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
+        .unwrap();
+
+    // 去掉最下一行后高 32：Windows 上的 H.264 编码器要求宽和高都大于 32 像素。
+    let region = Rect::new(10, 10, 40, 33);
+    let mut results: Vec<_> = fake
+        .select_region(region)
+        .into_iter()
+        .map(|event| instance.handle(event))
+        .collect();
+
+    assert_eq!(
+        results.pop().unwrap(),
+        Err(CoreError::RecordingRegionTooSmall {
+            region,
+            minimum: 34
+        })
+    );
+    assert!(!fake.overlay_visible());
+    assert_no_product(&fake);
+    let notifications = fake.notifications();
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(
+        notifications[0].body,
+        "区域 40 × 33 太小，无法录屏（宽和高至少 34 像素）"
+    );
 }

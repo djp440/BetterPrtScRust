@@ -346,12 +346,12 @@ fn denied_or(error: windows::core::Error, context: &str) -> PlatformError {
 }
 
 /// 在当前线程进入 COM 单线程套间；线程已经以其他模式初始化过 COM 时直接沿用。
-struct ComApartment {
+pub(crate) struct ComApartment {
     initialized: bool,
 }
 
 impl ComApartment {
-    fn enter() -> Result<Self, PlatformError> {
+    pub(crate) fn enter() -> Result<Self, PlatformError> {
         let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         if result == RPC_E_CHANGED_MODE {
             return Ok(Self { initialized: false });

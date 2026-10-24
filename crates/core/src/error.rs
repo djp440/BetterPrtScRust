@@ -26,8 +26,8 @@ pub enum CoreError {
     CaptureInProgress,
     /// 这种录屏格式尚未实现；捕获没有开始，不产生任何产物。
     UnsupportedRecordingFormat(RecordingFormat),
-    /// 框选的区域太小，录不成视频（例如 MP4 的宽和高至少 2 像素）。
-    RecordingRegionTooSmall(Rect),
+    /// 框选的区域太小，录不成视频：`minimum` 是这种格式要求的最小宽高（像素）。
+    RecordingRegionTooSmall { region: Rect, minimum: u32 },
     /// 停止录屏时还没有收到任何画面，没有可存储的内容。
     NothingRecorded,
     /// 正在录屏，这次捕获被拒绝；`stop_hotkey` 是停止录屏的热键（录屏由热键绑定开始时）。
@@ -67,9 +67,13 @@ impl CoreError {
                     },
                 )],
             ),
-            CoreError::RecordingRegionTooSmall(region) => texts.format(
+            CoreError::RecordingRegionTooSmall { region, minimum } => texts.format(
                 "error-recording-region-too-small",
-                &[("width", &region.width), ("height", &region.height)],
+                &[
+                    ("width", &region.width),
+                    ("height", &region.height),
+                    ("minimum", minimum),
+                ],
             ),
             CoreError::NothingRecorded => texts.get("error-nothing-recorded"),
             CoreError::RecordingInProgress {

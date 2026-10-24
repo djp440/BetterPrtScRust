@@ -6,18 +6,24 @@
 //! 显示器布局变化（DXGI 工厂失效或收到 `WM_DISPLAYCHANGE`）后，下一次打开时整体重建。
 //!
 //! 代价：交换链常驻显存（4K 双缓冲约 66 MB，不计入进程内存）。
+//!
+//! 实时画面上的遮罩（`Backdrop::Live`，录屏框选用）不拍冻结帧，每次打开时新建一个透明的
+//! DirectComposition 窗口（见 [`live`]），共用这里的 GPU 资源和绘制代码。
 
 mod draw;
 mod gpu;
+mod live;
 mod window;
 
 use bps_platform::{
-    Backdrop, Color, Corner, Display, DisplayId, Image, Label, OverlayItem, OverlayScene,
-    PlatformError, Point, Rect, SelectionOverlay,
+    Backdrop, Color, Corner, Display, DisplayId, FrameSource, Image, Label, OverlayItem,
+    OverlayScene, PlatformError, Point, Rect, SelectionOverlay,
 };
 
 use crate::event_loop::EventQueue;
+use crate::frame_source::DxgiFrameSource;
 use gpu::{FrozenDisplay, Gpu};
+use live::LiveWindow;
 use window::OverlayWindow;
 
 /// 选区遮罩。由 [`crate::EventLoop::selection_overlay`] 创建，必须在事件循环的线程上使用。
@@ -38,6 +44,8 @@ struct Resources {
 /// 一次打开期间的状态。
 struct Session {
     frozen: Vec<FrozenDisplay>,
+    /// 实时画面上的遮罩窗口（`Backdrop::Live` 时）；此时 `frozen` 为空。
+    live: Option<LiveWindow>,
     /// 已经显示出来了（第一次 `render` 之后）。
     shown: bool,
 }
@@ -102,6 +110,25 @@ impl D2dSelectionOverlay {
         Ok(self.resources.as_ref().expect("刚刚确保过"))
     }
 
+    /// 打开实时画面上的遮罩：不拍冻结帧，新建覆盖全部显示器的透明窗口。
+    fn open_live(&mut self) -> Result<Vec<Display>, PlatformError> {
+        let displays = DxgiFrameSource::new().displays()?;
+        let bounds = displays
+            .iter()
+            .map(|d| d.bounds)
+            .reduce(|a, b| a.union(b))
+            .ok_or_else(|| PlatformError::new("没有可用的显示器"))?;
+        let queue = self.queue.clone();
+        let resources = self.ensure_resources()?;
+        let live = LiveWindow::new(&resources.gpu, bounds, queue)?;
+        self.session = Some(Session {
+            frozen: Vec::new(),
+            live: Some(live),
+            shown: false,
+        });
+        Ok(displays)
+    }
+
     fn freeze(&mut self) -> Result<Vec<FrozenDisplay>, PlatformError> {
         let resources = self.ensure_resources()?;
         let frozen = resources.gpu.freeze()?;
@@ -118,16 +145,17 @@ impl D2dSelectionOverlay {
 
 impl SelectionOverlay for D2dSelectionOverlay {
     fn open(&mut self, backdrop: Backdrop) -> Result<Vec<Display>, PlatformError> {
-        if backdrop == Backdrop::Live {
-            return Err(PlatformError::new("实时画面上的遮罩尚未实现"));
-        }
         if self.session.is_some() {
             return Err(PlatformError::new("选区遮罩已经打开"));
+        }
+        if backdrop == Backdrop::Live {
+            return self.open_live();
         }
         let frozen = self.freeze().inspect_err(|_| self.broken = true)?;
         let displays = frozen.iter().map(|f| f.display.clone()).collect();
         self.session = Some(Session {
             frozen,
+            live: None,
             shown: false,
         });
         Ok(displays)
@@ -138,6 +166,11 @@ impl SelectionOverlay for D2dSelectionOverlay {
         else {
             return Err(PlatformError::new("选区遮罩没有打开"));
         };
+        if let Some(live) = &session.live {
+            return live
+                .render(&resources.gpu, scene)
+                .inspect_err(|_| self.broken = true);
+        }
         let window = &resources.window;
         window.set_cursor(scene.cursor);
         let result = (|| {

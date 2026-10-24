@@ -31,6 +31,9 @@ use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir, Te
 
 /// MP4 的默认帧率。
 const DEFAULT_MP4_FRAME_RATE: u32 = 30;
+/// MP4 的最小宽高（像素）。Windows 上的 H.264 编码器（硬件和系统自带的软件编码器）都不接受
+/// 宽或高不超过 32 像素的画面。
+const MP4_MIN_SIZE: u32 = 34;
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -116,15 +119,16 @@ impl Settings {
     }
 
     /// 实际录制的范围。H.264 按 2×2 像素块采样色度，MP4 的宽高必须是偶数：
-    /// 奇数时去掉最右一列 / 最下一行。
+    /// 奇数时去掉最右一列 / 最下一行；去掉之后仍要不小于 [`MP4_MIN_SIZE`]。
     fn video_rect(&self, region: Rect) -> Result<Rect, CoreError> {
-        let rect = match self.format {
-            VideoFormat::Mp4 => {
-                Rect::new(region.x, region.y, region.width & !1, region.height & !1)
-            }
+        let (rect, minimum) = match self.format {
+            VideoFormat::Mp4 => (
+                Rect::new(region.x, region.y, region.width & !1, region.height & !1),
+                MP4_MIN_SIZE,
+            ),
         };
-        if rect.width == 0 || rect.height == 0 {
-            return Err(CoreError::RecordingRegionTooSmall(region));
+        if rect.width < minimum || rect.height < minimum {
+            return Err(CoreError::RecordingRegionTooSmall { region, minimum });
         }
         Ok(rect)
     }

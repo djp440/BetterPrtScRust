@@ -25,11 +25,18 @@ fn main() {
         manifest.display()
     );
     // 常驻进程用不到的 DLL 改为延迟加载（第一次调用时才载入）：OpenGL 只有设置界面等窗口
-    // 子进程用；WinHTTP 只有开启“检查更新”后才用。
+    // 子进程用；WinHTTP 只有开启“检查更新”后才用；Media Foundation 和 DirectComposition 只有
+    // 录屏时才用。
     for dll in DELAY_LOADED {
         println!("cargo:rustc-link-arg-bin=BetterPrtSc=/DELAYLOAD:{dll}");
     }
     println!("cargo:rustc-link-arg-bin=BetterPrtSc=delayimp.lib");
 }
 
-const DELAY_LOADED: [&str; 2] = ["opengl32.dll", "winhttp.dll"];
+const DELAY_LOADED: [&str; 5] = [
+    "opengl32.dll",
+    "winhttp.dll",
+    "mfplat.dll",
+    "mfreadwrite.dll",
+    "dcomp.dll",
+];
