@@ -24,7 +24,10 @@ fn second_launch_activates_running_resident_instance_without_starting_another() 
     // 常驻实例照常运行：热键仍然注册着，也没有因为激活而捕获。
     assert_eq!(
         fake.registered_hotkeys(),
-        [Hotkey::new(Modifiers::SHIFT, Key::PrintScreen)]
+        [
+            Hotkey::new(Modifiers::SHIFT, Key::PrintScreen),
+            Hotkey::new(Modifiers::NONE, Key::PrintScreen),
+        ]
     );
     assert!(fake.clipboard().is_empty());
 }

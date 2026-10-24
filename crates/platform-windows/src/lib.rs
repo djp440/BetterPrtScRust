@@ -6,6 +6,7 @@
 //! - [`WindowsFileSystem`]：“图片”文件夹位置 + 不覆盖已有文件的写盘
 //! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
 //! - [`WindowsClock`]：本地时间
+//! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
 //!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
@@ -26,6 +27,7 @@ mod file_system;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod overlay;
 mod pipe;
 mod pixels;
 
@@ -36,6 +38,7 @@ pub use file_system::WindowsFileSystem;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use notifier::TrayNotifier;
+pub use overlay::D2dSelectionOverlay;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 
 use bps_platform::Platform;
@@ -49,5 +52,6 @@ pub fn platform(event_loop: &EventLoop) -> Platform {
         file_system: Box::new(WindowsFileSystem::new()),
         notifier: Box::new(event_loop.notifier()),
         clock: Box::new(WindowsClock::new()),
+        overlay: Box::new(event_loop.selection_overlay()),
     }
 }

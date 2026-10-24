@@ -18,6 +18,7 @@ mod geometry;
 mod hotkey;
 mod image;
 mod notifier;
+mod overlay;
 mod request;
 mod resident_channel;
 
@@ -31,6 +32,10 @@ pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers};
 pub use image::Image;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use overlay::{
+    Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
+    OverlayScene, PointerButton, SelectionOverlay,
+};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 
@@ -50,4 +55,6 @@ pub struct Platform {
     pub notifier: Box<dyn Notifier>,
     /// 本地时间，用于命名模板。
     pub clock: Box<dyn Clock>,
+    /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
+    pub overlay: Box<dyn SelectionOverlay>,
 }

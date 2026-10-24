@@ -10,6 +10,9 @@
 //!
 //! 跨显示器拼接以公共函数提供，供虚拟桌面与区域捕获共用：[`capture_rect`] 按虚拟桌面坐标矩形
 //! 截图，[`stitch`] 把已截下的各显示器画面（[`DesktopImage`]）按位置拼接并裁剪。
+//!
+//! 区域捕获要等用户在选区遮罩（`bps_platform::SelectionOverlay`）上框选：命令打开遮罩后即返回，
+//! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
 
 mod action;
 mod binding;
@@ -22,7 +25,9 @@ mod filename;
 mod forward;
 mod instance;
 mod output;
+mod region;
 mod request;
+mod selection;
 mod stitch;
 
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, default_bindings};

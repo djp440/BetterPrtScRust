@@ -11,7 +11,10 @@ fn exit_request_releases_hotkeys_and_stops_resident_instance() {
     assert!(instance.register_hotkeys().is_empty());
     assert_eq!(
         fake.registered_hotkeys(),
-        [Hotkey::new(Modifiers::SHIFT, Key::PrintScreen)]
+        [
+            Hotkey::new(Modifiers::SHIFT, Key::PrintScreen),
+            Hotkey::new(Modifiers::NONE, Key::PrintScreen),
+        ]
     );
 
     assert_eq!(

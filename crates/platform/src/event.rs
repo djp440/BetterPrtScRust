@@ -1,4 +1,4 @@
-use crate::{HotkeyId, IncomingRequest};
+use crate::{HotkeyId, IncomingRequest, OverlayInput};
 
 /// 平台事件循环递交给常驻实例的触发事件。
 ///
@@ -12,4 +12,6 @@ pub enum PlatformEvent {
     ExitRequested,
     /// 其他进程（`bps` CLI、再次启动的程序）经 [`crate::ResidentChannel`] 转交来一条请求。
     RequestReceived(IncomingRequest),
+    /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
+    OverlayInput(OverlayInput),
 }

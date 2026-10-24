@@ -38,6 +38,7 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
                 window_title: None,
             })
         }
+        // 区域需要用户在选区遮罩上框选，由 `region::RegionCapture` 跨多个事件完成，不走这里。
         CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
     }
 }

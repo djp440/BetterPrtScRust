@@ -8,10 +8,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use bps_core::{
-    CaptureMode, CaptureRequest, CliStatus, HotkeyBinding, ResidentInstance, default_bindings,
-    run_cli,
+    CaptureMode, CaptureRequest, CliStatus, Command, HotkeyBinding, PostCaptureAction,
+    ResidentInstance, default_bindings, run_cli,
 };
-use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
+use bps_platform::{Hotkey, Key, Modifiers, OverlayKey, PlatformEvent, Point, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel};
 
 fn primary_display() -> FakeDisplay {
@@ -86,23 +86,97 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
     );
 }
 
-#[test]
-fn bps_capture_accepts_every_capture_mode_and_reports_unimplemented_ones_as_unsupported() {
-    for mode in ["region", "window"] {
-        let fake = two_displays_cursor_on_second();
-        let mut channel = FakeResidentChannel::running(resident_instance(&fake));
-
-        let outcome = run_cli(["capture", mode], &mut channel);
-
-        assert_eq!(
-            outcome.status,
-            CliStatus::Unsupported,
-            "{mode}: {outcome:?}"
-        );
-        assert_eq!(outcome.status.exit_code(), 3);
-        assert!(outcome.stderr.contains("暂不支持"), "{mode}: {outcome:?}");
-        assert!(fake.clipboard().is_empty(), "{mode}");
+/// 用默认热键绑定启动的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
+/// 只要选区遮罩显示着，用户就在上面做 `gesture`。
+fn resident_instance_with_user(
+    fake: &FakePlatform,
+    gesture: impl Fn(&FakePlatform) -> Vec<PlatformEvent> + 'static,
+) -> impl FnMut(PlatformEvent) + 'static {
+    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    assert!(instance.register_hotkeys().is_empty());
+    let fake = fake.clone();
+    move |event| {
+        let _ = instance.handle(event);
+        if fake.overlay_visible() {
+            for event in gesture(&fake) {
+                let _ = instance.handle(event);
+            }
+        }
     }
+}
+
+#[test]
+fn bps_capture_region_replies_after_user_selects_region_on_overlay() {
+    let fake = two_displays_cursor_on_second();
+    let region = Rect::new(50, -5, 40, 30);
+    let mut channel =
+        FakeResidentChannel::running(resident_instance_with_user(&fake, move |fake| {
+            fake.select_region(region)
+        }));
+
+    let outcome = run_cli(["capture", "region"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
+    assert!(!fake.overlay_visible());
+    let png = fake.clipboard().png_image().unwrap();
+    assert_eq!((png.width(), png.height()), (40, 30));
+}
+
+#[test]
+fn bps_capture_region_reports_cancelled_when_user_presses_escape() {
+    let fake = two_displays_cursor_on_second();
+    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, |fake| {
+        vec![fake.press_key(OverlayKey::Escape)]
+    }));
+
+    let outcome = run_cli(["capture", "region"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Cancelled, "{outcome:?}");
+    assert_eq!(outcome.status.exit_code(), 5);
+    assert!(outcome.stderr.contains("取消"), "{outcome:?}");
+    assert!(!fake.overlay_visible());
+    assert!(fake.clipboard().is_empty());
+    assert!(fake.files().is_empty());
+}
+
+#[test]
+fn bps_capture_fails_while_previous_capture_is_still_selecting() {
+    let fake = two_displays_cursor_on_second();
+    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    instance
+        .execute(Command::Capture(CaptureRequest::new(
+            CaptureMode::Region,
+            vec![PostCaptureAction::CopyToClipboard],
+        )))
+        .unwrap();
+    let shared = Rc::new(std::cell::RefCell::new(instance));
+    let resident = shared.clone();
+    let mut channel = FakeResidentChannel::running(move |event| {
+        let _ = resident.borrow_mut().handle(event);
+    });
+
+    let outcome = run_cli(["capture", "display"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Failed, "{outcome:?}");
+    assert!(
+        outcome.stderr.contains("上一次捕获还没有结束"),
+        "{outcome:?}"
+    );
+    assert!(fake.clipboard().is_empty());
+    assert!(fake.overlay_visible(), "进行中的框选不受影响");
+}
+
+#[test]
+fn bps_capture_window_is_accepted_but_reported_as_unsupported_until_implemented() {
+    let fake = two_displays_cursor_on_second();
+    let mut channel = FakeResidentChannel::running(resident_instance(&fake));
+
+    let outcome = run_cli(["capture", "window"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Unsupported, "{outcome:?}");
+    assert_eq!(outcome.status.exit_code(), 3);
+    assert!(outcome.stderr.contains("暂不支持"), "{outcome:?}");
+    assert!(fake.clipboard().is_empty());
 }
 
 #[test]
