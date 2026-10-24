@@ -251,9 +251,7 @@ mod resident {
                 eprintln!("BetterPrtSc 已在运行，已激活该常驻实例");
                 Ok(())
             }
-            Reply::Unsupported(message) | Reply::Failed(message) => {
-                Err(format!("激活常驻实例失败：{message}").into())
-            }
+            Reply::Failed(message) => Err(format!("激活常驻实例失败：{message}").into()),
             Reply::Cancelled => Err("激活常驻实例失败：请求被取消".into()),
         }
     }

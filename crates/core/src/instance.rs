@@ -383,9 +383,6 @@ impl ResidentInstance {
         }
         let texts = self.texts();
         let title = match failure.error {
-            CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-                "notification-unsupported-title"
-            }
             CoreError::RecordingInProgress { .. } => "notification-recording-in-progress-title",
             _ => "notification-capture-failed-title",
         };
@@ -452,7 +449,7 @@ impl ResidentInstance {
         })
     }
 
-    /// 执行一次捕获：先确认捕获模式和截后动作都已实现，再捕获、执行截后动作。
+    /// 执行一次捕获：捕获、执行截后动作。
     ///
     /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::Pending`]），之后由遮罩上的输入推进。
     fn capture(&mut self, request: &CaptureRequest) -> Result<Progress, CaptureFailure> {
@@ -495,7 +492,6 @@ impl ResidentInstance {
                 notified: true,
             });
         }
-        ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
         let texts = self.texts();
         if request.actions.contains(&PostCaptureAction::Record) {
             let recording = Recording::start(&mut self.platform, request.clone(), texts)
@@ -992,27 +988,7 @@ impl ResidentInstance {
 
 /// 命令执行失败时给请求发起方的回复，说明文字用 `texts` 的语言。
 fn reply_for_error(error: &CoreError, texts: &Texts) -> Reply {
-    match error {
-        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-            Reply::Unsupported(error.localized(texts))
-        }
-        _ => Reply::Failed(error.localized(texts)),
-    }
-}
-
-/// 尚未实现的捕获模式或截后动作在捕获开始之前就拒绝整个请求，不产生任何产物。
-fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
-    if !capture::is_implemented(request.mode) {
-        return Err(CoreError::UnsupportedCaptureMode(request.mode));
-    }
-    match request
-        .actions
-        .iter()
-        .find(|a| !action::is_implemented(**a))
-    {
-        Some(action) => Err(CoreError::UnsupportedAction(*action)),
-        None => Ok(()),
-    }
+    Reply::Failed(error.localized(texts))
 }
 
 /// 不带修饰键的 PrtSc：系统截图工具占用的只有它。

@@ -10,7 +10,6 @@ tray-exit = 退出
 
 notification-hotkey-failed-title = 热键注册失败
 notification-hotkey-failed-line = { $hotkey }：{ $reason }
-notification-unsupported-title = 暂不支持
 notification-capture-failed-title = 捕获失败
 notification-saved-title = 截图已保存
 notification-save-failed-title = 自动存储失败
@@ -64,8 +63,6 @@ error-platform = 平台调用失败：{ $error }
 error-no-display = 没有可用的显示器
 error-encode = 截图编码失败：{ $error }
 error-too-many-same-name-files = 同名文件过多，找不到可用的文件名：{ $path }
-error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
-error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
 error-capture-in-progress = 上一次捕获还没有结束
 error-recording-region-too-small = 区域 { $width } × { $height } 太小，无法录屏（宽和高至少 { $minimum } 像素）

@@ -14,8 +14,6 @@ pub enum CliStatus {
     Failed,
     /// 参数有误。
     Usage,
-    /// 常驻实例暂不支持这条命令（例如尚未实现的捕获模式）。
-    Unsupported,
     /// 无法连接或拉起常驻实例。
     Unreachable,
     /// 用户取消了这次捕获（例如在选区遮罩上按了 Esc），没有任何产物。
@@ -28,7 +26,6 @@ impl CliStatus {
             CliStatus::Success => 0,
             CliStatus::Failed => 1,
             CliStatus::Usage => 2,
-            CliStatus::Unsupported => 3,
             CliStatus::Unreachable => 4,
             CliStatus::Cancelled => 5,
         }
@@ -85,9 +82,6 @@ where
     match forward(&request, channel, WhenNotRunning::Launch) {
         Ok(Reply::Done | Reply::Status(_)) => CliOutcome::new(CliStatus::Success),
         Ok(Reply::Cancelled) => CliOutcome::with_stderr(CliStatus::Cancelled, "已取消\n"),
-        Ok(Reply::Unsupported(message)) => {
-            CliOutcome::with_stderr(CliStatus::Unsupported, format!("{message}\n"))
-        }
         Ok(Reply::Failed(message)) => {
             CliOutcome::with_stderr(CliStatus::Failed, format!("执行失败：{message}\n"))
         }

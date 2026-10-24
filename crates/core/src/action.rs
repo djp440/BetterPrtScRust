@@ -17,20 +17,6 @@ use crate::{
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 
-/// 这个截后动作是否已经实现。实现新的截后动作时在这里登记，并在 [`run`] 里处理它。
-pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
-    matches!(
-        action,
-        PostCaptureAction::CopyToClipboard
-            | PostCaptureAction::AutoSave
-            | PostCaptureAction::Record
-            | PostCaptureAction::Annotate
-            | PostCaptureAction::Ocr
-            | PostCaptureAction::Translate
-            | PostCaptureAction::LongScreenshot
-    )
-}
-
 /// 对截图执行截后动作：先复制到剪贴板、自动存储，再打开结果面板做 OCR
 /// （标注、长截屏在此之前已由区域捕获、长截屏会话处理，这里忽略它们）。
 ///
