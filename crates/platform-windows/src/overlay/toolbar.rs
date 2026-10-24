@@ -83,7 +83,6 @@ impl RecordingToolbar for D2dRecordingToolbar {
         let scene = OverlayScene {
             items: view.items.clone(),
             cursor: OverlayCursor::Arrow,
-            ..OverlayScene::default()
         };
         let result = shown.window.render(&shown.gpu, None, &scene);
         let border = shown.set_border(view.border);

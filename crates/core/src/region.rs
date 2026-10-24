@@ -18,6 +18,7 @@ use crate::annotation::finish;
 use crate::annotation::session::{Annotator, Finish, Response};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
 use crate::selection::{RegionSelection, Step};
+use crate::snap::Snapping;
 use crate::stitch::{DesktopImage, stitch, virtual_desktop_bounds};
 use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action};
 
@@ -56,12 +57,18 @@ impl RegionCapture {
         texts: &'static Texts,
     ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
+        // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘。
+        let user_frames = matches!(request.mode, CaptureMode::Region | CaptureMode::Window);
+        let snapping = user_frames.then(|| Snapping::of_desktop(platform.window_source.as_ref()));
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
         let hint = texts.get("overlay-selected-hint");
         let Some(mut selection) = RegionSelection::new(displays.clone(), hint) else {
             platform.overlay.close();
             return Err(CoreError::NoDisplay);
         };
+        if let Some(snapping) = snapping {
+            selection = selection.with_snapping(snapping);
+        }
         let mut annotator = request
             .actions
             .contains(&PostCaptureAction::Annotate)
@@ -126,6 +133,10 @@ impl RegionCapture {
                 }
             }
         }
+        // 指针第一次进入某个窗口时取它的控件，供选区吸附到控件边缘。
+        self.selection
+            .snapping_mut()
+            .load_controls(input, platform.window_source.as_ref());
         match self.selection.handle(input) {
             Step::Continue => self.keep_going(platform),
             // 标注时 Enter 或双击选区等于点“复制”。
@@ -218,7 +229,6 @@ impl RegionCapture {
             window_title: None,
         };
         action::run(platform, &screenshot, &self.request, self.texts)
-            .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {

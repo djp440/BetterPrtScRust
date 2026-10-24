@@ -27,6 +27,7 @@ notification-config-reload-fallback = Keeping the last valid configuration. { $e
 notification-config-deleted-title = The configuration file was deleted
 notification-config-deleted-body = Keeping the current configuration; restart BetterPrtSc to recreate the default one.
 notification-settings-unavailable-title = Cannot open Settings
+notification-result-panel-unavailable-title = Cannot open the result panel
 notification-update-available-title = New version available: { $version }
 notification-update-available-body = You have { $current }. Click to open the release page and download it yourself.
 update-unrecognized-version = Cannot recognise the version “{ $version }” on GitHub Releases
@@ -183,3 +184,21 @@ annotation-auto-save = Auto-save
 annotation-copy = Copy
 save-as-file-type = { $format } image
 notification-save-as-failed-title = Could not save the screenshot
+
+## Result panel (OCR)
+
+result-panel-window-title = OCR result
+result-panel-language = Recognition language
+result-panel-recognizing = Recognizing…
+result-panel-recognized = Done
+result-panel-no-text = No text was recognized
+result-panel-failed = Recognition failed: { $error }
+result-panel-no-language-pack-title = No OCR language pack is installed
+result-panel-no-language-pack-body = BetterPrtSc uses the text recognition built into Windows, which needs the OCR component of each language you want to recognize. Open Settings > Time & language > Language & region and add the language (for example “English (United States)” or “中文(简体，中国)”); Windows installs its OCR component along with it. For a language you have already added, check under its Language options that “Optical character recognition” is installed. Then click “Recognize again” — no restart needed.
+result-panel-open-language-settings = Open language settings
+result-panel-recognize-again = Recognize again
+result-panel-copy = Copy
+result-panel-copied = Copied to the clipboard
+result-panel-copy-failed = Copy failed: { $error }
+result-panel-open-settings-failed = Cannot open Windows Settings: { $error }
+result-panel-close = Close

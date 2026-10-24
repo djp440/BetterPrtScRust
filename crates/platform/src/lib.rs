@@ -22,6 +22,7 @@ mod hotkey;
 mod image;
 mod language;
 mod notifier;
+mod ocr;
 mod overlay;
 mod recording_toolbar;
 mod request;
@@ -49,6 +50,7 @@ pub use hotkey::{
 pub use image::Image;
 pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use ocr::{RecognitionLanguage, RecognizedLine, TextRecognizer};
 pub use overlay::{
     Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
     OverlayScene, PointerButton, SelectionOverlay,

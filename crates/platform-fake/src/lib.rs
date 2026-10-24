@@ -8,6 +8,10 @@
 //! 开机自启登记、遮罩当前画的场景和画布、录屏控制条、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
 //! 检查更新发出的请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
+//! 结果面板子进程用的文字识别（OCR）不在 `Platform` 里：用 [`FakePlatform::text_recognizer`]
+//! 取得，识别结果用 [`FakePlatform::with_recognized_text`] 预先设置，
+//! [`FakePlatform::recognition_requests`] 查看识别过哪些图像。
+//!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
 //! [`FakePlatform::press_key`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
 //! 和真实平台“窗口过程把输入放进事件队列”的方式一致。
@@ -39,6 +43,7 @@ mod file_system;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod ocr;
 mod overlay;
 mod recording_toolbar;
 mod resident_channel;
@@ -55,8 +60,8 @@ use std::time::Duration;
 use bps_platform::{
     AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, Image, Key, LatestRelease,
     LocalDateTime, Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform,
-    PlatformError, PlatformEvent, Point, PointerButton, RecordingToolbarView, Rect, SaveAsOptions,
-    StandaloneWindow, SystemLanguage, TrayMenuItem,
+    PlatformError, PlatformEvent, Point, PointerButton, RecognitionLanguage, RecordingToolbarView,
+    Rect, SaveAsOptions, StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -75,6 +80,7 @@ use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
 use notifier::FakeNotifier;
+use ocr::{FakeTextRecognizer, OcrState};
 use overlay::{FakeOverlay, OverlayState};
 use recording_toolbar::FakeRecordingToolbar;
 use tray::FakeTrayMenu;
@@ -112,6 +118,7 @@ pub struct FakePlatform {
     recording_toolbar: Arc<Mutex<Option<RecordingToolbarView>>>,
     dialogs: Arc<Mutex<DialogState>>,
     window_source: Arc<Mutex<WindowSourceState>>,
+    ocr: Arc<Mutex<OcrState>>,
 }
 
 impl Default for FakePlatform {
@@ -135,6 +142,7 @@ impl Default for FakePlatform {
             recording_toolbar: Default::default(),
             dialogs: Default::default(),
             window_source: Default::default(),
+            ocr: Default::default(),
         }
     }
 }
@@ -513,6 +521,65 @@ impl FakePlatform {
             .iter()
             .find(|item| item.label == label)
             .map(|item| PlatformEvent::TrayMenuItemSelected(item.id))
+    }
+
+    /// 系统已为识别语言 `tag`（显示名 `name`）安装了 OCR 语言包。
+    pub fn with_recognition_language(self, tag: &str, name: &str) -> Self {
+        self.install_recognition_language(tag, name);
+        self
+    }
+
+    /// 模拟用户在系统设置里为 `tag` 安装了 OCR 语言包。
+    pub fn install_recognition_language(&self, tag: &str, name: &str) {
+        self.ocr
+            .lock()
+            .unwrap()
+            .languages
+            .push(RecognitionLanguage {
+                tag: tag.to_owned(),
+                name: name.to_owned(),
+            });
+    }
+
+    /// 用户的语言首选项里第一个已安装 OCR 语言包的语言是 `tag`（跟随系统的默认识别语言）。
+    pub fn with_default_recognition_language(self, tag: &str) -> Self {
+        self.ocr.lock().unwrap().default_language = Some(tag.to_owned());
+        self
+    }
+
+    /// 用识别语言 `language` 识别任何图像，都得到 `lines`（每行是按阅读顺序排列的词）。
+    pub fn with_recognized_text(self, language: &str, lines: &[&[&str]]) -> Self {
+        let lines = lines
+            .iter()
+            .map(|words| words.iter().map(|w| (*w).to_owned()).collect())
+            .collect();
+        self.ocr
+            .lock()
+            .unwrap()
+            .results
+            .insert(language.to_owned(), lines);
+        self
+    }
+
+    /// 识别文字会以 `message` 失败。
+    pub fn with_text_recognition_failing(self, message: &str) -> Self {
+        self.set_text_recognition_failing(Some(message));
+        self
+    }
+
+    /// 让之后的识别以 `message` 失败；`None` 恢复正常。
+    pub fn set_text_recognition_failing(&self, message: Option<&str>) {
+        self.ocr.lock().unwrap().failure = message.map(str::to_owned);
+    }
+
+    /// 结果面板子进程用的文字识别（OCR）能力。
+    pub fn text_recognizer(&self) -> Box<dyn TextRecognizer + Send + Sync> {
+        Box::new(FakeTextRecognizer(self.ocr.clone()))
+    }
+
+    /// 文字识别至今的每次识别：被识别的图像和所用的识别语言，按先后排列。
+    pub fn recognition_requests(&self) -> Vec<(Image, String)> {
+        self.ocr.lock().unwrap().requests.clone()
     }
 
     /// 至今打开过的独立窗口，按打开顺序排列。

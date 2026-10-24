@@ -65,7 +65,7 @@ fn toolbar(fake: &FakePlatform) -> RecordingToolbarView {
     fake.recording_toolbar().expect("录制期间应显示录屏控制条")
 }
 
-/// 矩形的右边界和下边界（不含）。
+/// 矩形的右边界（不含）。
 fn right(rect: Rect) -> i32 {
     rect.x + rect.width as i32
 }
@@ -282,4 +282,34 @@ fn toolbar_moves_above_region_touching_bottom_of_display() {
         view.bounds
     );
     assert!(Rect::new(0, 0, 640, 480).intersection(view.bounds) == Some(view.bounds));
+}
+
+#[test]
+fn toolbar_moves_beside_region_filling_display_height_and_stays_on_display() {
+    let fake = desktop();
+    // 上下都贴着显示器边缘、右边也贴边：只能放到左侧。
+    let region = Rect::new(300, 0, 340, 480);
+    let mut instance = recording(&fake, region);
+    record_for(&fake, &mut instance, Duration::from_millis(100));
+
+    let view = toolbar(&fake);
+    let border = view.border.unwrap().width as i32;
+    assert!(
+        right(view.bounds) <= region.x - border,
+        "上下右都没有空间，控制条换到区域左侧：{:?}",
+        view.bounds
+    );
+    assert!(Rect::new(0, 0, 640, 480).intersection(view.bounds) == Some(view.bounds));
+}
+
+#[test]
+fn toolbar_sits_inside_region_covering_whole_display() {
+    let fake = desktop();
+    let region = Rect::new(0, 0, 640, 480);
+    let mut instance = recording(&fake, region);
+    record_for(&fake, &mut instance, Duration::from_millis(100));
+
+    let view = toolbar(&fake);
+    assert!(region.intersection(view.bounds) == Some(view.bounds));
+    assert!(view.border.is_none(), "区域就是整块显示器时不画边框");
 }

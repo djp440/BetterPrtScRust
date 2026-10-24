@@ -10,3 +10,7 @@ publish.workspace = true
 bps-core.workspace = true
 bps-platform.workspace = true
 eframe.workspace = true
+
+# 只给 examples/result_panel_preview.rs 用：映射系统字体、读系统界面语言。
+[target.'cfg(windows)'.dev-dependencies]
+bps-platform-windows.workspace = true

@@ -465,3 +465,67 @@ impl Drop for RemoveDirOnDrop {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+#[test]
+#[ignore = "真机冒烟：闪现录屏控制条和区域边框"]
+fn recording_toolbar_and_border_are_excluded_from_capture_and_do_not_steal_focus() {
+    use bps_platform::{RecordingToolbar, RecordingToolbarView, RegionBorder};
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    assert!(dpi::ensure_per_monitor_v2());
+    let event_loop = EventLoop::new().unwrap();
+    let mut toolbar = event_loop.recording_toolbar();
+    let frames = DxgiFrameSource::new();
+    let primary = frames
+        .displays()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.is_primary)
+        .unwrap();
+    let region = Rect::new(primary.bounds.x + 300, primary.bounds.y + 300, 300, 200);
+    let bounds = Rect::new(region.x + 100, region.y + 200 + 12, 200, 40);
+    let red = Color::rgba(240, 40, 40, 255);
+    let view = RecordingToolbarView {
+        bounds,
+        items: vec![OverlayItem::Fill {
+            rect: bounds,
+            color: red,
+        }],
+        border: Some(RegionBorder {
+            rect: region,
+            width: 4,
+            color: red,
+        }),
+    };
+    let foreground = unsafe { GetForegroundWindow() };
+    toolbar.show(&view).unwrap();
+    toolbar.show(&view).unwrap();
+
+    let bar = own_window(w!("BetterPrtSc.LiveOverlay")).expect("应已创建控制条窗口");
+    let edge = own_window(w!("BetterPrtSc.RegionBorder")).expect("应已创建边框窗口");
+    for hwnd in [bar, edge] {
+        assert!(unsafe { IsWindowVisible(hwnd) }.as_bool());
+        let mut affinity = 0;
+        unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) }.unwrap();
+        assert_eq!(affinity, WDA_EXCLUDEFROMCAPTURE.0);
+    }
+    assert_eq!(
+        unsafe { GetForegroundWindow() },
+        foreground,
+        "控制条不能抢前台"
+    );
+    let shot = frames.capture_display(primary.id).unwrap();
+    let local =
+        |x: i32, y: i32| shot.pixel((x - primary.bounds.x) as u32, (y - primary.bounds.y) as u32);
+    let red = [240, 40, 40, 255];
+    assert_ne!(local(region.x - 2, region.y + 100), red, "截图里不应有边框");
+    assert_ne!(
+        local(bounds.x + 100, bounds.y + 20),
+        red,
+        "截图里不应有控制条"
+    );
+
+    toolbar.hide();
+    assert!(!unsafe { IsWindow(Some(bar)) }.as_bool());
+    assert!(!unsafe { IsWindow(Some(edge)) }.as_bool());
+}
