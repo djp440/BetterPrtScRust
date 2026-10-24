@@ -1,4 +1,4 @@
-//! 把 [`OverlayScene`] 画到遮罩窗口上：先画冻结帧，再按顺序画场景里的元素。
+//! 把 [`OverlayScene`] 画到遮罩窗口上：先画冻结帧，再画画布（有的话），最后按顺序画场景里的元素。
 //!
 //! 场景坐标是虚拟桌面物理像素，减去窗口左上角 `origin` 就是窗口内的像素坐标。
 //! 新的 [`OverlayItem`] 变体在 [`draw_item`] 里加一个分支。
@@ -14,12 +14,20 @@ use windows::Win32::Graphics::DirectWrite::{DWRITE_MEASURING_MODE_NATURAL, DWRIT
 use super::gpu::{FrozenDisplay, Gpu};
 use crate::error::win_error;
 
+/// 画布：盖在冻结帧上、由 `core` 提供像素的位图。
+pub(crate) struct Canvas {
+    /// 在虚拟桌面中的范围。
+    pub area: Rect,
+    pub bitmap: ID2D1Bitmap1,
+}
+
 /// 在 `target` 上画一整帧（不含呈现）。`origin` 是窗口左上角在虚拟桌面中的位置。
 pub(crate) fn draw(
     gpu: &Gpu,
     target: &ID2D1Bitmap1,
     origin: Point,
     frozen: &[FrozenDisplay],
+    canvas: Option<&Canvas>,
     scene: &OverlayScene,
 ) -> Result<(), PlatformError> {
     let ctx = &gpu.d2d;
@@ -39,6 +47,16 @@ pub(crate) fn draw(
             ctx.DrawBitmap(
                 &display.bitmap,
                 Some(&rect_f(display.display.bounds, origin)),
+                1.0,
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                None,
+                None,
+            );
+        }
+        if let Some(canvas) = canvas {
+            ctx.DrawBitmap(
+                &canvas.bitmap,
+                Some(&rect_f(canvas.area, origin)),
                 1.0,
                 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
                 None,
@@ -97,7 +115,37 @@ fn draw_item(gpu: &Gpu, origin: Point, item: &OverlayItem) -> Result<(), Platfor
             Ok(())
         }
         OverlayItem::Label(label) => draw_label(gpu, origin, label),
+        OverlayItem::Text {
+            rect,
+            text,
+            font_size,
+            color,
+        } => draw_centered_text(gpu, rect_f(*rect, origin), text, *font_size, *color),
     }
+}
+
+/// 在 `rect` 内居中画一行文字。
+fn draw_centered_text(
+    gpu: &Gpu,
+    rect: D2D_RECT_F,
+    text: &str,
+    font_size: f32,
+    color: Color,
+) -> Result<(), PlatformError> {
+    let format = gpu.centered_text_format(font_size)?;
+    let text: Vec<u16> = text.encode_utf16().collect();
+    unsafe {
+        gpu.brush.SetColor(&color_f(color));
+        gpu.d2d.DrawText(
+            &text,
+            &format,
+            &rect,
+            &gpu.brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
+    Ok(())
 }
 
 fn draw_label(gpu: &Gpu, origin: Point, label: &Label) -> Result<(), PlatformError> {

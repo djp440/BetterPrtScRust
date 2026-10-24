@@ -65,6 +65,8 @@ pub(crate) struct RegionSelection {
     /// 虚拟桌面范围：指针位置和选区都限制在其中。
     bounds: Rect,
     state: State,
+    /// 选区确定后显示操作提示（标注时由工具条代替）。
+    selected_hint: bool,
 }
 
 impl RegionSelection {
@@ -75,7 +77,28 @@ impl RegionSelection {
             displays,
             bounds,
             state: State::Idle,
+            selected_hint: true,
         })
+    }
+
+    /// 一开始就已框好 `region`（例如显示器模式下直接标注整块显示器）。
+    pub fn with_selected(mut self, region: Rect) -> Self {
+        self.state = State::Selected(region);
+        self
+    }
+
+    /// 选区确定后不显示操作提示。
+    pub fn without_selected_hint(mut self) -> Self {
+        self.selected_hint = false;
+        self
+    }
+
+    /// 已经框好、等待确定的选区；还没有选区或正在拖拽时为 `None`。
+    pub fn selected(&self) -> Option<Rect> {
+        match self.state {
+            State::Selected(region) => Some(region),
+            _ => None,
+        }
     }
 
     /// 处理一次用户输入。
@@ -213,7 +236,7 @@ impl RegionSelection {
                     border,
                     size,
                 )));
-                if matches!(self.state, State::Selected(_)) {
+                if self.selected_hint && matches!(self.state, State::Selected(_)) {
                     items.push(OverlayItem::Label(self.label_beside(
                         region,
                         Side::Below,
@@ -306,7 +329,7 @@ enum Side {
 }
 
 /// 以 `a`、`b` 两个像素为对角、同时包含它们的矩形。
-fn between(a: Point, b: Point) -> Rect {
+pub(crate) fn between(a: Point, b: Point) -> Rect {
     let (left, right) = (a.x.min(b.x), a.x.max(b.x));
     let (top, bottom) = (a.y.min(b.y), a.y.max(b.y));
     Rect::new(

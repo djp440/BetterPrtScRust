@@ -1,4 +1,4 @@
-//! 截后动作：复制到剪贴板、自动存储。
+//! 截后动作：复制到剪贴板、自动存储。标注的结束方式也经由这里输出（见 `annotation::finish`）。
 
 use std::path::PathBuf;
 
@@ -18,11 +18,13 @@ const MAX_NAME_SUFFIX: u32 = 9999;
 pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
     matches!(
         action,
-        PostCaptureAction::CopyToClipboard | PostCaptureAction::AutoSave
+        PostCaptureAction::CopyToClipboard
+            | PostCaptureAction::AutoSave
+            | PostCaptureAction::Annotate
     )
 }
 
-/// 对截图执行截后动作。
+/// 对截图执行截后动作（标注在此之前已由区域捕获处理，这里忽略它）。
 ///
 /// 复制到剪贴板和自动存储共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
 /// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。
@@ -95,6 +97,17 @@ fn copy_to_clipboard(
     Ok(())
 }
 
+/// 自动存储的目录（不一定已经存在）。
+pub(crate) fn save_dir(platform: &Platform, output: &OutputOptions) -> Result<PathBuf, CoreError> {
+    Ok(match &output.save_dir {
+        SaveDir::Default => platform
+            .file_system
+            .pictures_dir()?
+            .join(DEFAULT_SAVE_SUBDIR),
+        SaveDir::Custom(dir) => dir.clone(),
+    })
+}
+
 /// 把编码好的截图按命名模板写进存储目录，返回文件路径。
 ///
 /// 同名文件已存在时依次尝试 `名称-1`、`名称-2`……，从不覆盖已有文件。
@@ -104,13 +117,7 @@ fn auto_save(
     output: &OutputOptions,
     encoded: &[u8],
 ) -> Result<PathBuf, CoreError> {
-    let dir = match &output.save_dir {
-        SaveDir::Default => platform
-            .file_system
-            .pictures_dir()?
-            .join(DEFAULT_SAVE_SUBDIR),
-        SaveDir::Custom(dir) => dir.clone(),
-    };
+    let dir = save_dir(platform, output)?;
     platform.file_system.create_dir_all(&dir)?;
 
     let stem = output.filename_template.render(&FilenameFields {

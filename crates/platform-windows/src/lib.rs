@@ -12,6 +12,7 @@
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
+//! - [`WindowsFileDialog`]：系统“另存为”对话框，遮罩显示着时显示在遮罩之上
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
 //!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
@@ -30,6 +31,7 @@ mod display_config;
 pub mod dpi;
 mod error;
 mod event_loop;
+mod file_dialog;
 mod file_system;
 mod frame_source;
 mod hotkeys;
@@ -46,6 +48,7 @@ pub use clipboard::WindowsClipboard;
 pub use clock::WindowsClock;
 pub use config_file::WindowsConfigFile;
 pub use event_loop::{EventLoop, EventSender};
+pub use file_dialog::WindowsFileDialog;
 pub use file_system::WindowsFileSystem;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
@@ -76,5 +79,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
         overlay: Box::new(event_loop.selection_overlay()),
+        file_dialog: Box::new(WindowsFileDialog::new()),
     }
 }

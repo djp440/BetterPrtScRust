@@ -38,7 +38,7 @@ pub struct ResidentInstance {
     failures: Vec<HotkeyRegistrationFailure>,
     /// 已以管理员身份启动了接替本实例的新实例。
     restarting_as_administrator: bool,
-    /// 进行中的区域捕获。
+    /// 进行中的区域捕获（以及其他要在选区遮罩上标注的捕获）。
     region_capture: Option<RegionCapture>,
 }
 
@@ -358,7 +358,10 @@ impl ResidentInstance {
             });
         }
         ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
-        if request.mode == CaptureMode::Region {
+        // 要标注的捕获不论什么模式都在选区遮罩上进行。
+        if request.mode == CaptureMode::Region
+            || request.actions.contains(&PostCaptureAction::Annotate)
+        {
             let capture = RegionCapture::start(&mut self.platform, request.clone())
                 .map_err(CaptureFailure::before_actions)?;
             self.region_capture = Some(capture);

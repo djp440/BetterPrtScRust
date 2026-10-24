@@ -8,11 +8,12 @@
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
     2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
        `bps capture bogus` 是用法错误（退出码 2）
-    3. 默认配置下 `bps capture region` 用 PrtSc 的“区域 + 标注”，标注未实现 → 退出码 3；
+    3. 默认配置下 `bps capture region` 用 PrtSc 的“区域 + 标注”：框选 (100,100)→(299,199) 后
+       出现标注工具条，按 Enter（等于点“复制”）→ 退出码 0、剪贴板 PNG 为 200x100；
        在配置文件最前面加一条“区域 + 复制”绑定（Ctrl+Alt+Shift+F8）、等它重新加载后，
        `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
        再次打开后投递拖拽 (100,100)→(299,199) 与 Enter → 退出码 0、剪贴板 PNG 为 200x100
-       （遮罩会闪现两次，各不到 1 秒；期间请勿移动鼠标）
+       （遮罩会闪现三次，各不到 1 秒；期间请勿移动鼠标）
     4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
     5. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
@@ -204,8 +205,19 @@ try {
     $r = Invoke-Bps @('capture', 'bogus')
     Assert-That ($r.Code -eq 2) "bps capture bogus 退出码 2（实际 $($r.Code)）"
 
-    $r = Invoke-Bps @('capture', 'region')
-    Assert-That ($r.Code -eq 3 -and $r.Stderr -match '标注') "默认配置下 bps capture region 退出码 3 且提示标注暂不支持：$($r.Stderr.Trim())"
+    $overlay = Find-Overlay (Get-Residents)[0].Id
+    $clip::Clear()
+    $p = Start-Bps @('capture', 'region')
+    Assert-That (Wait-OverlayVisible $overlay $true) "默认配置下 bps capture region 打开了选区遮罩（区域 + 标注，$($p.Watch.ElapsedMilliseconds) ms）"
+    Send-Overlay $overlay $WM_LBUTTONDOWN $MK_LBUTTON (Point 100 100)
+    Send-Overlay $overlay $WM_MOUSEMOVE $MK_LBUTTON (Point 299 199)
+    Send-Overlay $overlay $WM_LBUTTONUP 0 (Point 299 199)
+    Send-Overlay $overlay $WM_KEYDOWN $VK_RETURN ([IntPtr]::Zero)
+    $r = Wait-Bps $p
+    $png = Get-ClipboardPngSize
+    Assert-That ($r.Code -eq 0 -and $png -eq '200x100') `
+        "标注时框选后按 Enter 复制：退出码 $($r.Code)，剪贴板 PNG $png（应为 200x100）$($r.Stderr)"
+    Assert-That (Wait-OverlayVisible $overlay $false) '复制后遮罩已隐藏'
 
     # 在常驻实例生成的配置文件最前面加一条“区域 + 复制”绑定，等它自动重新加载。
     $configPath = Join-Path $fakeAppData 'BetterPrtSc\config.toml'
@@ -214,7 +226,6 @@ try {
     [IO.File]::WriteAllText($configPath, $regionBinding + $config, (New-Object Text.UTF8Encoding $false))
     Start-Sleep -Seconds 2
 
-    $overlay = Find-Overlay (Get-Residents)[0].Id
     $clip::Clear()
     $p = Start-Bps @('capture', 'region')
     Assert-That (Wait-OverlayVisible $overlay $true) "bps capture region 打开了选区遮罩（$($p.Watch.ElapsedMilliseconds) ms）"

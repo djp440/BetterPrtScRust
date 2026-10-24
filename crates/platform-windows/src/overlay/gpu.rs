@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use bps_platform::{Display, Image, PlatformError, Rect};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_U, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES1,
@@ -30,8 +30,8 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
-    IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -87,8 +87,8 @@ pub(crate) struct Gpu {
     pub d2d: ID2D1DeviceContext,
     dwrite: IDWriteFactory,
     pub brush: ID2D1SolidColorBrush,
-    /// 每个字号一个文字格式（字号按 1/100 像素取整作键）。
-    text_formats: RefCell<Vec<(u32, IDWriteTextFormat)>>,
+    /// 每个字号、对齐方式一个文字格式（字号按 1/100 像素取整，与是否居中一起作键）。
+    text_formats: RefCell<Vec<((u32, bool), IDWriteTextFormat)>>,
 }
 
 impl Gpu {
@@ -292,6 +292,47 @@ impl Gpu {
         }
     }
 
+    /// 用 RGBA 图像新建画布位图（渲染显卡上，忽略 alpha）。
+    pub fn create_canvas(&self, image: &Image) -> Result<ID2D1Bitmap1, PlatformError> {
+        unsafe {
+            self.d2d
+                .CreateBitmap(
+                    D2D_SIZE_U {
+                        width: image.width(),
+                        height: image.height(),
+                    },
+                    Some(image.rgba().as_ptr().cast()),
+                    image.width() * 4,
+                    &bitmap_properties(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_BITMAP_OPTIONS_NONE),
+                )
+                .map_err(|e| win_error("创建画布位图失败", e))
+        }
+    }
+
+    /// 把 `patch` 复制到画布位图上以 `(left, top)`（位图内像素坐标）为左上角的位置。
+    pub fn update_canvas(
+        &self,
+        canvas: &ID2D1Bitmap1,
+        left: u32,
+        top: u32,
+        patch: &Image,
+    ) -> Result<(), PlatformError> {
+        if patch.width() == 0 || patch.height() == 0 {
+            return Ok(());
+        }
+        let rect = D2D_RECT_U {
+            left,
+            top,
+            right: left + patch.width(),
+            bottom: top + patch.height(),
+        };
+        unsafe {
+            canvas
+                .CopyFromMemory(Some(&rect), patch.rgba().as_ptr().cast(), patch.width() * 4)
+                .map_err(|e| win_error("更新画布失败", e))
+        }
+    }
+
     /// 冻结帧中这块显示器的画面（RGBA）。只读取已拍下的冻结帧，不重新截图。
     pub fn read_back(&self, frozen: &FrozenDisplay) -> Result<Image, PlatformError> {
         match &frozen.pixels {
@@ -325,9 +366,22 @@ impl Gpu {
         }
     }
 
-    /// 字号为 `font_size`（物理像素）的文字格式：微软雅黑 UI 半粗体、不换行。
+    /// 字号为 `font_size`（物理像素）的文字格式：微软雅黑 UI 半粗体、不换行、左上对齐。
     pub fn text_format(&self, font_size: f32) -> Result<IDWriteTextFormat, PlatformError> {
-        let key = (font_size * 100.0).round() as u32;
+        self.cached_text_format(font_size, false)
+    }
+
+    /// 同 [`text_format`](Self::text_format)，但在排版矩形内水平、垂直都居中。
+    pub fn centered_text_format(&self, font_size: f32) -> Result<IDWriteTextFormat, PlatformError> {
+        self.cached_text_format(font_size, true)
+    }
+
+    fn cached_text_format(
+        &self,
+        font_size: f32,
+        centered: bool,
+    ) -> Result<IDWriteTextFormat, PlatformError> {
+        let key = ((font_size * 100.0).round() as u32, centered);
         let mut formats = self.text_formats.borrow_mut();
         if let Some((_, format)) = formats.iter().find(|(k, _)| *k == key) {
             return Ok(format.clone());
@@ -348,6 +402,12 @@ impl Gpu {
             format
                 .SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)
                 .map_err(|e| win_error("设置文字格式失败", e))?;
+            if centered {
+                format
+                    .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)
+                    .and_then(|()| format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER))
+                    .map_err(|e| win_error("设置文字格式失败", e))?;
+            }
             format
         };
         formats.push((key, format.clone()));
