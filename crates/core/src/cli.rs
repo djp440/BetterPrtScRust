@@ -80,7 +80,7 @@ where
         }
     };
     match forward(&request, channel, WhenNotRunning::Launch) {
-        Ok(Reply::Done) => CliOutcome::new(CliStatus::Success),
+        Ok(Reply::Done | Reply::Status(_)) => CliOutcome::new(CliStatus::Success),
         Ok(Reply::Unsupported(message)) => {
             CliOutcome::with_stderr(CliStatus::Unsupported, format!("{message}\n"))
         }

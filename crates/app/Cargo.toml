@@ -22,3 +22,5 @@ bps-platform.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 bps-platform-windows.workspace = true
+# 设置界面等独立窗口（egui），只在 `--settings` 等界面子进程里初始化。
+bps-ui.workspace = true

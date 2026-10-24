@@ -16,6 +16,8 @@ pub enum NotificationClick {
     OpenFile(PathBuf),
     /// 在文件管理器中打开这个文件夹。
     OpenFolder(PathBuf),
+    /// 用默认浏览器打开这个网址（例如新版本的发布页面）。
+    OpenUrl(String),
 }
 
 /// 通知能力（Windows 上是托盘气泡）。

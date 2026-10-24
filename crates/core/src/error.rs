@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use bps_platform::PlatformError;
 
-use crate::{CaptureMode, PostCaptureAction};
+use crate::{CaptureMode, Locale, PostCaptureAction, Texts};
 
 /// 执行命令失败的原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,26 +24,35 @@ pub enum CoreError {
     InvalidRequest(String),
 }
 
+impl CoreError {
+    /// 用 `texts` 的语言说明失败原因。
+    pub fn localized(&self, texts: &Texts) -> String {
+        match self {
+            CoreError::Platform(e) => texts.format("error-platform", &[("error", e)]),
+            CoreError::NoDisplay => texts.get("error-no-display"),
+            CoreError::Encode(e) => texts.format("error-encode", &[("error", e)]),
+            CoreError::TooManySameNameFiles(path) => texts.format(
+                "error-too-many-same-name-files",
+                &[("path", &path.display())],
+            ),
+            CoreError::UnsupportedCaptureMode(mode) => texts.format(
+                "error-unsupported-capture-mode",
+                &[("mode", &mode.localized_label(texts))],
+            ),
+            CoreError::UnsupportedAction(action) => texts.format(
+                "error-unsupported-action",
+                &[("action", &action.localized_label(texts))],
+            ),
+            CoreError::InvalidRequest(message) => {
+                texts.format("error-invalid-request", &[("request", message)])
+            }
+        }
+    }
+}
+
 impl fmt::Display for CoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CoreError::Platform(e) => write!(f, "平台调用失败：{e}"),
-            CoreError::NoDisplay => f.write_str("没有可用的显示器"),
-            CoreError::Encode(e) => write!(f, "截图编码失败：{e}"),
-            CoreError::TooManySameNameFiles(path) => {
-                write!(f, "同名文件过多，找不到可用的文件名：{}", path.display())
-            }
-            CoreError::UnsupportedCaptureMode(mode) => {
-                write!(f, "暂不支持“{}”捕获模式", mode.label())
-            }
-            CoreError::UnsupportedAction(action) => {
-                write!(f, "暂不支持“{}”截后动作", action.label())
-            }
-            CoreError::InvalidRequest(message) => write!(
-                f,
-                "常驻实例无法识别请求“{message}”，请确认 bps 与 BetterPrtSc 的版本一致"
-            ),
-        }
+        f.write_str(&self.localized(Texts::of(Locale::ZhCn)))
     }
 }
 

@@ -24,11 +24,15 @@ mod encode;
 mod error;
 mod filename;
 mod forward;
+mod i18n;
 mod instance;
 mod location;
 mod output;
 mod request;
+mod settings;
+mod status;
 mod stitch;
+mod update;
 
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
 pub use cli::{CliOutcome, CliStatus, run_cli};
@@ -42,8 +46,12 @@ pub use filename::{
     DEFAULT_FILENAME_TEMPLATE, FilenameFields, FilenameTemplate, FilenameTemplateError,
 };
 pub use forward::{ForwardError, WhenNotRunning, forward};
+pub use i18n::{Language, Locale, Texts, UnknownLanguage};
 pub use instance::ResidentInstance;
 pub use location::{DataLocation, PORTABLE_MARKER};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{Reply, Request};
+pub use settings::{BindingSettings, Settings, SettingsDocument, SettingsProblem};
+pub use status::{BindingFailure, ResidentStatus, UpdateStatus};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};
+pub use update::VERSION;

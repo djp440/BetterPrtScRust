@@ -1,18 +1,21 @@
 //! 其他进程转交给常驻实例的请求、常驻实例的回复，以及它们在通道上的文本形式。
 //!
-//! 文本形式是 `bps` / 再次启动的程序与常驻实例之间的约定：一条请求、一条回复，UTF-8。
-//! - 请求：`capture <捕获模式名>`、`activate`
-//! - 回复：`ok`、`unsupported <说明>`、`failed <说明>`
+//! 文本形式是 `bps` / 再次启动的程序 / 设置界面与常驻实例之间的约定：一条请求、一条回复，UTF-8。
+//! - 请求：`capture <捕获模式名>`、`activate`、`status`
+//! - 回复：`ok`、`unsupported <说明>`、`failed <说明>`，以及对 `status` 的状态回复
+//!   （格式见 [`ResidentStatus`]）
 
-use crate::CaptureMode;
+use crate::{CaptureMode, ResidentStatus};
 
 /// 其他进程转交给常驻实例的请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// `bps capture <捕获模式>`：与按下该捕获模式的热键完全一致。
     Capture(CaptureMode),
-    /// 再次启动程序时，激活已在运行的常驻实例。
+    /// 再次启动程序时，激活已在运行的常驻实例（打开设置界面）。
     Activate,
+    /// 设置界面查询常驻实例的状态（注册失败的热键绑定、检查更新的结果）；只读，不执行命令。
+    Status,
 }
 
 /// 常驻实例对一条请求的回复。
@@ -24,37 +27,47 @@ pub enum Reply {
     Unsupported(String),
     /// 命令执行失败，附带给人看的说明。
     Failed(String),
+    /// 对 [`Request::Status`] 的回复。
+    Status(ResidentStatus),
 }
 
 impl Request {
-    pub(crate) fn encode(&self) -> String {
+    /// 通道上的文本形式。
+    pub fn encode(&self) -> String {
         match self {
             Request::Capture(mode) => format!("capture {}", mode_name(*mode)),
             Request::Activate => "activate".to_owned(),
+            Request::Status => "status".to_owned(),
         }
     }
 
     /// 解析请求文本；无法识别时返回 `None`。
-    pub(crate) fn decode(message: &str) -> Option<Request> {
+    pub fn decode(message: &str) -> Option<Request> {
         match message.split_once(' ') {
             Some(("capture", name)) => mode_from_name(name).map(Request::Capture),
             None if message == "activate" => Some(Request::Activate),
+            None if message == "status" => Some(Request::Status),
             _ => None,
         }
     }
 }
 
 impl Reply {
-    pub(crate) fn encode(&self) -> String {
+    /// 通道上的文本形式。
+    pub fn encode(&self) -> String {
         match self {
             Reply::Done => "ok".to_owned(),
             Reply::Unsupported(message) => format!("unsupported {message}"),
             Reply::Failed(message) => format!("failed {message}"),
+            Reply::Status(status) => status.encode(),
         }
     }
 
     /// 解析回复文本；无法识别的回复（例如版本不一致）当作失败。
-    pub(crate) fn decode(message: &str) -> Reply {
+    pub fn decode(message: &str) -> Reply {
+        if let Some(status) = ResidentStatus::decode(message) {
+            return Reply::Status(status);
+        }
         match message.split_once(' ') {
             None if message == "ok" => Reply::Done,
             Some(("unsupported", text)) => Reply::Unsupported(text.to_owned()),

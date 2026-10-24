@@ -3,8 +3,8 @@
 //! 用法：先用 [`FakeDisplay`] 和 [`FakePlatform`] 的构造方法描述“桌面”，
 //! 再用 [`FakePlatform::platform`] 生成交给 `bps-core` 的 [`Platform`]；
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
-//! 编辑配置文件）并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、
-//! 已注册的热键、配置文件内容）。
+//! 编辑配置文件、选托盘菜单）并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、
+//! 已注册的热键、配置文件内容、托盘菜单的文字、打开的窗口、检查更新发出的请求）。
 //!
 //! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
 //!
@@ -28,11 +28,17 @@ mod frame_source;
 mod hotkeys;
 mod notifier;
 mod resident_channel;
+mod tray;
+mod update;
+mod windows;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use bps_platform::{Clock, Hotkey, LocalDateTime, Notification, Platform, PlatformEvent, Point};
+use bps_platform::{
+    Clock, Hotkey, LatestRelease, LocalDateTime, Notification, Platform, PlatformError,
+    PlatformEvent, Point, StandaloneWindow, SystemLanguage, TrayMenuItem,
+};
 
 pub use clipboard::ClipboardContent;
 pub use config_file::FAKE_CONFIG_PATH;
@@ -46,9 +52,15 @@ use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
 use notifier::FakeNotifier;
+use tray::FakeTrayMenu;
+use update::{FakeUpdateService, UpdateState};
+use windows::{FakeWindowLauncher, WindowsState};
 
 /// 假时钟的默认时间。
 pub const DEFAULT_TIME: LocalDateTime = LocalDateTime::new(2000, 1, 1, 0, 0, 0);
+
+/// 假平台默认的系统界面语言。
+pub const DEFAULT_SYSTEM_LANGUAGE: &str = "zh-CN";
 
 /// 假平台的共享状态。克隆得到的是同一份状态的另一个句柄。
 #[derive(Clone)]
@@ -60,6 +72,10 @@ pub struct FakePlatform {
     notifications: Arc<Mutex<Vec<Notification>>>,
     time: Arc<Mutex<LocalDateTime>>,
     config_file: Arc<Mutex<ConfigFileState>>,
+    tray_menu: Arc<Mutex<Vec<TrayMenuItem>>>,
+    windows: Arc<Mutex<WindowsState>>,
+    system_languages: Arc<Mutex<Vec<String>>>,
+    updates: Arc<Mutex<UpdateState>>,
 }
 
 impl Default for FakePlatform {
@@ -72,13 +88,18 @@ impl Default for FakePlatform {
             notifications: Default::default(),
             time: Arc::new(Mutex::new(DEFAULT_TIME)),
             config_file: Default::default(),
+            tray_menu: Default::default(),
+            windows: Default::default(),
+            system_languages: Arc::new(Mutex::new(vec![DEFAULT_SYSTEM_LANGUAGE.to_owned()])),
+            updates: Default::default(),
         }
     }
 }
 
 impl FakePlatform {
     /// 没有任何显示器、鼠标位于 (0, 0)、剪贴板为空、只有一个空的“图片”文件夹
-    /// （[`DEFAULT_PICTURES_DIR`]）、时间为 [`DEFAULT_TIME`]、配置文件不存在的平台。
+    /// （[`DEFAULT_PICTURES_DIR`]）、时间为 [`DEFAULT_TIME`]、配置文件不存在、
+    /// 系统界面语言为 [`DEFAULT_SYSTEM_LANGUAGE`] 的平台。
     pub fn new() -> Self {
         Self::default()
     }
@@ -138,6 +159,19 @@ impl FakePlatform {
         self
     }
 
+    /// 系统的界面语言（按优先级排列），例如 `["en-US"]`。
+    pub fn with_system_languages(self, languages: &[&str]) -> Self {
+        *self.system_languages.lock().unwrap() =
+            languages.iter().map(|l| (*l).to_owned()).collect();
+        self
+    }
+
+    /// 让打开独立窗口失败（例如找不到程序文件）。
+    pub fn with_window_launch_failing(self) -> Self {
+        self.windows.lock().unwrap().fails = true;
+        self
+    }
+
     /// 模拟用户移动鼠标。
     pub fn move_cursor(&self, position: Point) {
         self.frames.lock().unwrap().cursor = position;
@@ -161,6 +195,10 @@ impl FakePlatform {
                 state: self.config_file.clone(),
                 path: self.config_file_path(),
             }),
+            tray_menu: Box::new(FakeTrayMenu(self.tray_menu.clone())),
+            windows: Box::new(FakeWindowLauncher(self.windows.clone())),
+            system_language: Box::new(FakeSystemLanguage(self.system_languages.clone())),
+            updates: Box::new(FakeUpdateService(self.updates.clone())),
         }
     }
 
@@ -225,6 +263,54 @@ impl FakePlatform {
     /// 当前已注册的全局热键。
     pub fn registered_hotkeys(&self) -> Vec<Hotkey> {
         self.hotkeys.lock().unwrap().hotkeys()
+    }
+
+    /// 托盘菜单当前各项的文字，按显示顺序排列。
+    pub fn tray_menu_labels(&self) -> Vec<String> {
+        let items = self.tray_menu.lock().unwrap();
+        items.iter().map(|item| item.label.clone()).collect()
+    }
+
+    /// 模拟用户在托盘菜单里选中文字为 `label` 的一项：返回平台事件循环会递交的事件，
+    /// 菜单里没有这一项时返回 `None`。
+    pub fn choose_tray_menu_item(&self, label: &str) -> Option<PlatformEvent> {
+        let items = self.tray_menu.lock().unwrap();
+        items
+            .iter()
+            .find(|item| item.label == label)
+            .map(|item| PlatformEvent::TrayMenuItemSelected(item.id))
+    }
+
+    /// 至今打开过的独立窗口，按打开顺序排列。
+    pub fn opened_windows(&self) -> Vec<StandaloneWindow> {
+        self.windows.lock().unwrap().opened.clone()
+    }
+
+    /// 检查更新至今发出的查询（每一项是被查询的仓库），即发出过的全部网络请求。
+    pub fn update_check_requests(&self) -> Vec<String> {
+        self.updates.lock().unwrap().requests.clone()
+    }
+
+    /// 让最早一个还没返回的检查更新查询以 `result` 结束：返回平台事件循环会递交的事件；
+    /// 没有正在进行的查询时返回 `None`。
+    pub fn finish_update_check(
+        &self,
+        result: Result<Option<LatestRelease>, PlatformError>,
+    ) -> Option<PlatformEvent> {
+        let mut state = self.updates.lock().unwrap();
+        if state.pending == 0 {
+            return None;
+        }
+        state.pending -= 1;
+        Some(PlatformEvent::LatestReleaseFetched(result))
+    }
+}
+
+struct FakeSystemLanguage(Arc<Mutex<Vec<String>>>);
+
+impl SystemLanguage for FakeSystemLanguage {
+    fn preferred_ui_languages(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
     }
 }
 

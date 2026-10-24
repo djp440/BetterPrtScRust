@@ -18,9 +18,13 @@ mod frame_source;
 mod geometry;
 mod hotkey;
 mod image;
+mod language;
 mod notifier;
 mod request;
 mod resident_channel;
+mod tray;
+mod update;
+mod window;
 
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use clock::{Clock, LocalDateTime};
@@ -30,11 +34,17 @@ pub use event::PlatformEvent;
 pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
-pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError};
+pub use hotkey::{
+    GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError, RegisterHotkeyError,
+};
 pub use image::Image;
+pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
+pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
+pub use update::{LatestRelease, UpdateService};
+pub use window::{StandaloneWindow, WindowLauncher};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -54,4 +64,12 @@ pub struct Platform {
     pub clock: Box<dyn Clock>,
     /// 配置文件的读写与变更监视；变更经平台事件循环以 [`PlatformEvent`] 递交。
     pub config_file: Box<dyn ConfigFile>,
+    /// 托盘图标的右键菜单；选中某项经平台事件循环以 [`PlatformEvent`] 递交。
+    pub tray_menu: Box<dyn TrayMenu>,
+    /// 打开设置界面等独立窗口（各在一个按需启动的子进程里）。
+    pub windows: Box<dyn WindowLauncher>,
+    /// 系统的界面语言，用于“跟随系统”的界面语言。
+    pub system_language: Box<dyn SystemLanguage>,
+    /// 检查更新；结果经平台事件循环以 [`PlatformEvent`] 递交。
+    pub updates: Box<dyn UpdateService>,
 }

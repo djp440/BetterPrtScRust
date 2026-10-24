@@ -56,13 +56,15 @@ impl Notifier for TrayNotifier {
     }
 }
 
-/// 执行通知的点击操作：用默认程序打开文件，或在资源管理器中打开文件夹。
+/// 执行通知的点击操作：用默认程序打开文件或网址，或在资源管理器中打开文件夹。
 pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
-    let (verb, path) = match click {
-        NotificationClick::OpenFile(path) => (w!("open"), path),
-        NotificationClick::OpenFolder(path) => (w!("explore"), path),
+    let (verb, target): (_, &std::ffi::OsStr) = match click {
+        NotificationClick::OpenFile(path) => (w!("open"), path.as_os_str()),
+        NotificationClick::OpenFolder(path) => (w!("explore"), path.as_os_str()),
+        // 只是让浏览器打开发布页面，本程序不下载任何东西。
+        NotificationClick::OpenUrl(url) => (w!("open"), url.as_ref()),
     };
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let wide: Vec<u16> = target.encode_wide().chain([0]).collect();
     let result = unsafe {
         ShellExecuteW(
             Some(hwnd),
@@ -77,7 +79,7 @@ pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
     if result.0 as usize <= 32 {
         eprintln!(
             "打开 {} 失败（ShellExecute 返回 {}）",
-            path.display(),
+            std::path::Path::new(target).display(),
             result.0 as usize
         );
     }
