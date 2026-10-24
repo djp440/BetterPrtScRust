@@ -28,6 +28,10 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   save_dir = 'D:\Screenshots'                    自动存储目录（Windows 路径用单引号）
 #   filename_template = "{yyyy-MM-dd HH-mm-ss}"    命名模板
 #   output_format = "png"                          截图的输出格式：png、jpg、webp、avif
+#   autostart = false                              开机自启：true / false
+#   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
+#                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
+#                                                  登录时不弹 UAC 提示
 #
 # 每个 [[bindings]] 是一条热键绑定：
 #   hotkey   热键：Ctrl、Alt、Shift、Win 与一个主键用 + 连接，
@@ -78,6 +82,11 @@ pub struct Config {
     pub output: OutputOptions,
     /// 按配置文件中的顺序排列的热键绑定，覆盖项已与全局设置合并。
     pub bindings: Vec<HotkeyBinding>,
+    /// 开机自启（默认关闭）。
+    pub autostart: bool,
+    /// 以管理员身份运行（默认关闭）：常驻实例以管理员权限运行，管理员权限的窗口在前台时
+    /// 热键也能生效；开机自启改用不弹 UAC 提示的方式。
+    pub run_as_admin: bool,
 }
 
 impl Config {
@@ -86,6 +95,8 @@ impl Config {
         Self {
             output: OutputOptions::default(),
             bindings,
+            autostart: false,
+            run_as_admin: false,
         }
     }
 
@@ -104,7 +115,12 @@ impl Config {
             .into_iter()
             .map(|binding| binding.resolve(&output, text))
             .collect::<Result<_, _>>()?;
-        Ok(Config { output, bindings })
+        Ok(Config {
+            output,
+            bindings,
+            autostart: raw.autostart.unwrap_or(false),
+            run_as_admin: raw.run_as_admin.unwrap_or(false),
+        })
     }
 }
 
@@ -171,6 +187,8 @@ struct RawConfig {
     filename_template: Option<FilenameTemplate>,
     #[serde(default, deserialize_with = "image_format")]
     output_format: Option<OutputFormat>,
+    autostart: Option<bool>,
+    run_as_admin: Option<bool>,
     #[serde(default)]
     bindings: Vec<RawBinding>,
 }

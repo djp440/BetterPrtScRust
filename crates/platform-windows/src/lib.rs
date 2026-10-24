@@ -7,6 +7,10 @@
 //! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
 //! - [`WindowsClock`]：本地时间
 //! - [`WindowsConfigFile`]：配置文件读写，所在目录变化时由 [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WindowsAutostart`]：开机自启（`HKCU\...\Run` 项，或以最高权限运行的计划任务）
+//! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
+//! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
+//!   [`EventLoop`] 递交 `PlatformEvent`
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
 //!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
@@ -17,6 +21,7 @@
 //! `cargo test -p bps-platform-windows -- --ignored`。
 #![cfg(windows)]
 
+mod autostart;
 mod clipboard;
 mod clock;
 mod config_file;
@@ -30,7 +35,11 @@ mod hotkeys;
 mod notifier;
 mod pipe;
 mod pixels;
+mod registry;
+mod screenshot_tool;
+mod token;
 
+pub use autostart::WindowsAutostart;
 pub use clipboard::WindowsClipboard;
 pub use clock::WindowsClock;
 pub use config_file::WindowsConfigFile;
@@ -40,6 +49,11 @@ pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use notifier::TrayNotifier;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
+pub use screenshot_tool::WindowsScreenshotTool;
+pub use token::{
+    RESTARTED_AS_ADMINISTRATOR_ARG, WindowsElevation, is_elevated,
+    run_self_as_administrator_and_wait,
+};
 
 use std::path::PathBuf;
 
@@ -55,5 +69,8 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
         notifier: Box::new(event_loop.notifier()),
         clock: Box::new(WindowsClock::new()),
         config_file: Box::new(event_loop.config_file(config_file)),
+        autostart: Box::new(WindowsAutostart::new()),
+        elevation: Box::new(WindowsElevation::new()),
+        system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
     }
 }

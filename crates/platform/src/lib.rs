@@ -8,6 +8,7 @@
 //! 新增一种能力时：在这里加 trait，在 [`Platform`] 里加一个字段，
 //! 然后分别在 `platform-windows` 和 `platform-fake` 里实现。
 
+mod autostart;
 mod clipboard;
 mod clock;
 mod config_file;
@@ -21,7 +22,9 @@ mod image;
 mod notifier;
 mod request;
 mod resident_channel;
+mod screenshot_tool;
 
+pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use clock::{Clock, LocalDateTime};
 pub use config_file::ConfigFile;
@@ -35,6 +38,7 @@ pub use image::Image;
 pub use notifier::{Notification, NotificationClick, Notifier};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
+pub use screenshot_tool::SystemScreenshotTool;
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -54,4 +58,10 @@ pub struct Platform {
     pub clock: Box<dyn Clock>,
     /// 配置文件的读写与变更监视；变更经平台事件循环以 [`PlatformEvent`] 递交。
     pub config_file: Box<dyn ConfigFile>,
+    /// 开机自启的登记与移除。
+    pub autostart: Box<dyn Autostart>,
+    /// 本进程的权限，以及以管理员身份重新启动。
+    pub elevation: Box<dyn Elevation>,
+    /// 系统自带截图工具对 PrtSc 键的占用（只读）；设置变化经平台事件循环以 [`PlatformEvent`] 递交。
+    pub system_screenshot_tool: Box<dyn SystemScreenshotTool>,
 }

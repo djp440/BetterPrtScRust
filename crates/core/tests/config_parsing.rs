@@ -263,3 +263,26 @@ fn binding_missing_mode_is_rejected() {
 
     assert!(message.contains("mode"), "{message}");
 }
+
+#[test]
+fn autostart_and_run_as_admin_are_off_unless_turned_on() {
+    let off = Config::parse(&binding_with("")).unwrap();
+    assert!(!off.autostart);
+    assert!(!off.run_as_admin);
+    assert!(!Config::default().autostart && !Config::default().run_as_admin);
+
+    let on = Config::parse(&format!(
+        "autostart = true\nrun_as_admin = true\n{}",
+        binding_with("")
+    ))
+    .unwrap();
+    assert!(on.autostart);
+    assert!(on.run_as_admin);
+}
+
+#[test]
+fn autostart_must_be_true_or_false() {
+    let (line, message) = parse_error("# 全局设置\nautostart = \"yes\"\n");
+
+    assert_eq!(line, Some(2), "{message}");
+}
