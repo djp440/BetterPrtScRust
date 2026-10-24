@@ -172,6 +172,11 @@ overlay-color-copied = Color copied
 overlay-color-copy-failed = Copy failed
 overlay-record-hint = Enter or double-click the selection: start recording   Esc: cancel
 
+## Recording toolbar
+recording-toolbar-pause = Pause
+recording-toolbar-resume = Resume
+recording-toolbar-stop = Stop
+
 ## Annotation
 
 annotation-rectangle = Rectangle

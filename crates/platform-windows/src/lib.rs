@@ -83,7 +83,7 @@ pub use hotkeys::WindowsHotkeys;
 pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
 pub use ocr::WindowsTextRecognizer;
-pub use overlay::D2dSelectionOverlay;
+pub use overlay::{D2dRecordingToolbar, D2dSelectionOverlay};
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 pub use screenshot_tool::WindowsScreenshotTool;
 pub use shell::{
@@ -125,6 +125,7 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         video_source: Box::new(WgcVideoSource::new()),
         video_encoder: Box::new(MfVideoEncoder::new()),
         ticker: Box::new(event_loop.ticker()),
+        recording_toolbar: Box::new(event_loop.recording_toolbar()),
         file_dialog: Box::new(WindowsFileDialog::new()),
         window_source: Box::new(WgcWindowSource::new()),
     }
