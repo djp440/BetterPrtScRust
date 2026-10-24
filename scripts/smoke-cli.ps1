@@ -14,9 +14,12 @@
        `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
        再次打开后投递拖拽 (100,100)→(299,199) 与 Enter → 退出码 0、剪贴板 PNG 为 200x100
        （遮罩会闪现三次，各不到 1 秒；期间请勿移动鼠标）
-    4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
+    4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，常驻实例仍只有 1 个；
+       激活让常驻实例以子进程（`BetterPrtSc.exe --settings`）打开设置界面，确认后随即关掉它
+       （设置窗口会闪现一下）
     5. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
-  最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
+  常驻实例与界面子进程是同一个程序，按命令行区分：带 `--settings` 的是界面子进程。
+  最后关掉本次打开的界面子进程，向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
   默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存截图：结束时删除本次存下的文件
   （以剪贴板附带的文件为准），目录是本次新建且已空时一并删除。
   本脚本启动的进程的 APPDATA 指向 -OutDir 下的临时目录，常驻实例首次运行生成的
@@ -61,9 +64,33 @@ $bps = (Resolve-Path (Join-Path $BinDir 'bps.exe')).Path
 $resident = (Resolve-Path (Join-Path $BinDir 'BetterPrtSc.exe')).Path
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-# 只认本次被测目录里的 BetterPrtSc.exe，不碰其他位置运行的实例。
-function Get-Residents {
-    @(Get-Process -Name BetterPrtSc -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $resident })
+# 本次被测目录里的 BetterPrtSc.exe 进程（不碰其他位置运行的实例）。$uiChild 为真时只取
+# 界面子进程（命令行带 `--settings`），否则只取常驻实例。Windows PowerShell 的
+# Process 对象没有命令行，借 Win32_Process 查。
+function Get-BetterPrtSc([bool]$uiChild) {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'BetterPrtSc.exe'" |
+        Where-Object { $_.ExecutablePath -eq $resident -and (($_.CommandLine -match '\s--settings(\s|$)') -eq $uiChild) } |
+        ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+}
+
+function Get-Residents { Get-BetterPrtSc $false }
+
+# 本次运行打开的界面子进程（开始前就有的不算，不碰用户自己开着的设置窗口）。
+function Get-UiChildren {
+    @(Get-BetterPrtSc $true | Where-Object { $preexistingUiChildren -notcontains $_.Id })
+}
+
+# 关掉界面子进程：向它的主窗口发 WM_CLOSE（设置未改动时直接退出），5 秒内没退出就强制结束。
+function Close-UiChild($p) {
+    for ($i = 0; $i -lt 50 -and -not $p.HasExited; $i++) {
+        $p.Refresh()
+        if ($p.MainWindowHandle -ne [IntPtr]::Zero) { $p.CloseMainWindow() | Out-Null; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $p.WaitForExit(5000)) {
+        Stop-Process -Id $p.Id -Force
+        "警告：已强制结束界面子进程 $($p.Id)"
+    }
 }
 
 # 按类名枚举常驻实例的隐藏窗口，只向属于 $processId 的那个投递 WM_CLOSE。
@@ -169,6 +196,7 @@ function Get-SavedFiles($data) {
 }
 
 if ((Get-Residents).Count -gt 0) { throw "已有 $resident 在运行，请先退出它再做冒烟测试" }
+$preexistingUiChildren = @(Get-BetterPrtSc $true | ForEach-Object { $_.Id })
 
 $clip = [System.Windows.Forms.Clipboard]
 $backupImage = if ($clip::ContainsImage()) { $clip::GetImage() } else { $null }
@@ -254,6 +282,12 @@ try {
     $secondLog = [string](Get-Content (Join-Path $OutDir 'second-stderr.log') -Raw -Encoding UTF8)
     Assert-That ($second.ExitCode -eq 0) "再次启动的进程退出码 0：$($secondLog.Trim())"
     Assert-That ((Get-Residents).Count -eq 1) '仍然只有一个常驻实例'
+    # 激活让常驻实例以子进程打开设置界面；确认后立即关掉，不让窗口留在桌面上。
+    for ($i = 0; $i -lt 50 -and (Get-UiChildren).Count -eq 0; $i++) { Start-Sleep -Milliseconds 100 }
+    $uiChildren = Get-UiChildren
+    Assert-That ($uiChildren.Count -eq 1) "再次启动打开了一个设置界面子进程（实际 $($uiChildren.Count) 个）"
+    foreach ($p in $uiChildren) { Close-UiChild $p }
+    Assert-That ((Get-UiChildren).Count -eq 0) '设置界面子进程已关闭'
 
     $clip::Clear()
     $r = Invoke-Bps @('capture', 'display')
@@ -263,6 +297,8 @@ try {
         "已运行时 bps capture display 退出码 0 且剪贴板有 PNG（$($r.Ms) ms）"
 }
 finally {
+    foreach ($p in Get-UiChildren) { Close-UiChild $p }
+    "结束后本次打开的界面子进程数：$((Get-UiChildren).Count)"
     foreach ($p in Get-Residents) {
         Close-Resident $p.Id
         if (-not $p.WaitForExit(5000)) {
