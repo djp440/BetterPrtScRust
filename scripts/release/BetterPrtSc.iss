@@ -107,3 +107,19 @@ begin
   CloseResidentInstance();
   Result := True;
 end;
+
+{ 删除程序文件之前，移除指向本程序的开机自启：注册表 HKCU Run 项，以及“以管理员身份运行”
+  时登记的计划任务（权限不足时程序会自行以管理员身份重试，弹出 UAC 提示）。
+  规则只在程序里实现一份（BetterPrtSc.exe --remove-autostart）；失败不阻止卸载。 }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  if not Exec(ExpandConstant('{app}\{#AppExeName}'), '--remove-autostart', ExpandConstant('{app}'),
+    SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('无法运行 {#AppExeName} --remove-autostart：' + SysErrorMessage(ResultCode))
+  else if ResultCode <> 0 then
+    Log('移除开机自启失败，退出码 ' + IntToStr(ResultCode));
+end;

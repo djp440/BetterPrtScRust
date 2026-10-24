@@ -8,12 +8,15 @@
 //!   连接、发送、等待回复；管道不存在时拉起 `BetterPrtSc.exe`。
 //!
 //! 管道只搬运文本，请求和回复的含义由 `core` 决定。
+//!
+//! 管道的访问权限显式授予本机系统、管理员组和当前用户：以管理员身份运行的常驻实例若用默认
+//! 权限创建管道，普通权限的 `bps` 和再次启动的程序都打不开它。
 
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,6 +26,10 @@ use windows::Win32::Foundation::{
     ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, ERROR_SEM_TIMEOUT,
     GetLastError, HANDLE,
 };
+use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAGS_AND_ATTRIBUTES, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
     ReadFile, WriteFile,
@@ -40,6 +47,7 @@ use windows::core::{HRESULT, PCWSTR};
 
 use crate::EventSender;
 use crate::error::win_error;
+use crate::token::current_user_sid;
 
 /// 一条请求的最大字节数；请求只有一行命令，远小于这个值。
 const MAX_REQUEST_BYTES: usize = 4096;
@@ -169,6 +177,11 @@ fn create_instance(name: &[u16], first: bool) -> Result<OwnedHandle, u32> {
     if first {
         open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
     }
+    let attributes = pipe_security_descriptor().map(|descriptor| SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: false.into(),
+    });
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name.as_ptr()),
@@ -178,13 +191,36 @@ fn create_instance(name: &[u16], first: bool) -> Result<OwnedHandle, u32> {
             MAX_REPLY_BYTES as u32,
             MAX_REQUEST_BYTES as u32,
             0,
-            None,
+            attributes.as_ref().map(|a| a as *const SECURITY_ATTRIBUTES),
         )
     };
     if handle.is_invalid() {
         return Err(unsafe { GetLastError() }.0);
     }
     Ok(unsafe { OwnedHandle::from_raw_handle(handle.0) })
+}
+
+/// 管道的安全描述符：本机系统、管理员组和当前用户可以完全访问。进程内只构造一次、不释放。
+/// 构造失败（取不到用户 SID 等）时返回 `None`，退回系统默认的权限。
+fn pipe_security_descriptor() -> Option<PSECURITY_DESCRIPTOR> {
+    // 指针不是 Send/Sync，按整数缓存。
+    static DESCRIPTOR: OnceLock<Option<usize>> = OnceLock::new();
+    let address = DESCRIPTOR.get_or_init(|| {
+        let sid = current_user_sid().ok()?;
+        let sddl = wide(&format!("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;{sid})"));
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl.as_ptr()),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .ok()?;
+        Some(descriptor.0 as usize)
+    });
+    address.map(|a| PSECURITY_DESCRIPTOR(a as *mut _))
 }
 
 /// CLI 一侧通往常驻实例的命名管道通道。

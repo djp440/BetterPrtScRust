@@ -32,6 +32,9 @@ pub enum RegistrationError {
     DuplicateOf(usize),
     /// 系统拒绝注册，例如热键已被其他程序占用。
     Platform(PlatformError),
+    /// 系统设置把 PrtSc 键交给了系统自带的截图工具（只影响不带修饰键的 PrtSc）。
+    /// 用户在系统设置里关闭后会自动重新注册。
+    TakenBySystemScreenshotTool,
 }
 
 impl fmt::Display for RegistrationError {
@@ -39,6 +42,9 @@ impl fmt::Display for RegistrationError {
         match self {
             RegistrationError::DuplicateOf(index) => {
                 write!(f, "与第 {} 条热键绑定的热键重复", index + 1)
+            }
+            RegistrationError::TakenBySystemScreenshotTool => {
+                f.write_str("已被系统截图工具占用（可在系统设置里关闭）")
             }
             RegistrationError::Platform(e) => write!(f, "{e}"),
         }

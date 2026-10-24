@@ -4,6 +4,7 @@
 //! 最近一条通知的点击操作（见 [`open_click_target`]）。
 
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::rc::Rc;
 
@@ -56,13 +57,19 @@ impl Notifier for TrayNotifier {
     }
 }
 
-/// 执行通知的点击操作：用默认程序打开文件，或在资源管理器中打开文件夹。
+/// “设置”应用里含“使用 Print Screen 键打开屏幕截图”开关的“键盘”页（Win10 / Win11 相同）。
+const PRINT_SCREEN_KEY_SETTINGS_URI: &str = "ms-settings:easeofaccess-keyboard";
+
+/// 执行通知的点击操作：用默认程序打开文件，在资源管理器中打开文件夹，或打开系统设置页面。
 pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
-    let (verb, path) = match click {
-        NotificationClick::OpenFile(path) => (w!("open"), path),
-        NotificationClick::OpenFolder(path) => (w!("explore"), path),
+    let (verb, target) = match click {
+        NotificationClick::OpenFile(path) => (w!("open"), path.as_os_str()),
+        NotificationClick::OpenFolder(path) => (w!("explore"), path.as_os_str()),
+        NotificationClick::OpenPrintScreenKeySettings => {
+            (w!("open"), OsStr::new(PRINT_SCREEN_KEY_SETTINGS_URI))
+        }
     };
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let wide: Vec<u16> = target.encode_wide().chain([0]).collect();
     let result = unsafe {
         ShellExecuteW(
             Some(hwnd),
@@ -77,7 +84,7 @@ pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
     if result.0 as usize <= 32 {
         eprintln!(
             "打开 {} 失败（ShellExecute 返回 {}）",
-            path.display(),
+            target.to_string_lossy(),
             result.0 as usize
         );
     }

@@ -12,6 +12,9 @@ pub enum PlatformEvent {
     ExitRequested,
     /// 用 [`crate::ConfigFile::watch`] 监视的配置文件被外部修改、替换或删除。
     ConfigFileChanged,
+    /// 用 [`crate::SystemScreenshotTool::watch`] 监视的“PrtSc 键交给系统截图工具”这项系统设置
+    /// 可能被修改了（也可能只是同一组设置里的其他项变了）。
+    PrintScreenKeySettingChanged,
     /// 其他进程（`bps` CLI、再次启动的程序）经 [`crate::ResidentChannel`] 转交来一条请求。
     RequestReceived(IncomingRequest),
 }
