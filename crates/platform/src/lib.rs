@@ -26,6 +26,7 @@ mod overlay;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
+mod text;
 mod tray;
 mod update;
 mod window;
@@ -53,6 +54,7 @@ pub use overlay::{
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
+pub use text::TextMask;
 pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
 pub use update::{LatestRelease, UpdateService};
 pub use window::{StandaloneWindow, WindowLauncher};

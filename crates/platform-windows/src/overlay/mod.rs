@@ -9,11 +9,12 @@
 
 mod draw;
 mod gpu;
+mod text;
 mod window;
 
 use bps_platform::{
     Backdrop, Color, Corner, Display, DisplayId, Image, Label, OverlayItem, OverlayScene,
-    PlatformError, Point, Rect, SelectionOverlay,
+    PlatformError, Point, Rect, SelectionOverlay, TextMask,
 };
 
 use crate::event_loop::EventQueue;
@@ -88,14 +89,16 @@ impl D2dSelectionOverlay {
         overlay
     }
 
-    /// 建好设备和窗口，真实拍一次冻结帧并在隐藏的窗口上画两帧（第二帧含文字）。
+    /// 建好设备和窗口，真实拍一次冻结帧并在隐藏的窗口上画两帧（第二帧含文字），
+    /// 再栅格化一段标注文字。
     fn prewarm(&mut self) -> Result<(), PlatformError> {
         let resources = Resources::create(&self.queue)?;
         let frozen = resources.gpu.freeze()?;
         let warm_up = warm_up_scene(&frozen);
         let drawn = resources
             .draw(&frozen, None, &OverlayScene::default())
-            .and_then(|()| resources.draw(&frozen, None, &warm_up));
+            .and_then(|()| resources.draw(&frozen, None, &warm_up))
+            .and_then(|()| text::rasterize(&resources.gpu, "标注 Aa", 22).map(drop));
         drop(frozen);
         resources.gpu.release_frames();
         drawn?;
@@ -155,6 +158,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
         };
         let window = &resources.window;
         window.set_cursor(scene.cursor);
+        window.set_text_caret(scene.text_caret);
         let result = (|| {
             if !session.shown {
                 window.place_cloaked()?;
@@ -217,6 +221,13 @@ impl SelectionOverlay for D2dSelectionOverlay {
         resources
             .gpu
             .update_canvas(&canvas.bitmap, left, top, patch)
+    }
+
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
+        let (Some(resources), Some(_)) = (self.resources.as_ref(), self.session.as_ref()) else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        text::rasterize(&resources.gpu, text, font_size)
     }
 
     fn close(&mut self) {

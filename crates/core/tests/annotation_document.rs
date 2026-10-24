@@ -3,8 +3,10 @@
 //! 坐标是截图的像素坐标（左上角为原点）。期望值来自几何定义（框的线条画在矩形以内、
 //! 箭头沿起点到终点的线段）和逐个写出的像素，不由被测代码推导。
 
+use std::sync::Arc;
+
 use bps_core::{Annotation, AnnotationDocument, Stroke};
-use bps_platform::{Color, Image, Point, Rect};
+use bps_platform::{Color, Image, Point, Rect, TextMask};
 use bps_platform_fake::desktop_pattern;
 
 const RED: Color = Color::rgba(255, 0, 0, 255);
@@ -183,4 +185,163 @@ fn diagonal_arrow_covers_the_line_between_its_ends() {
     for (x, y) in [(20, 5), (5, 20), (40, 10), (10, 40)] {
         assert_eq!(composed.pixel(x, y), base.pixel(x, y), "远离箭头 ({x},{y})");
     }
+}
+
+fn mosaic(rect: Rect, block: u32) -> Annotation {
+    Annotation::Mosaic { rect, block }
+}
+
+/// 每个像素颜色都由 `color_at(x, y)` 给出的不透明截图。
+fn image_from(width: u32, height: u32, color_at: impl Fn(u32, u32) -> [u8; 3]) -> Image {
+    let mut pixels = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            let [r, g, b] = color_at(x, y);
+            pixels.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+    Image::from_rgba(width, height, pixels)
+}
+
+#[test]
+fn mosaic_fills_each_block_with_the_average_color_of_that_block() {
+    // 左边 4×4 一块：左两列黑、右两列白；右边 4×4 一块是纯色。
+    let base = image_from(10, 6, |x, _| match x {
+        0..=1 => [0, 0, 0],
+        2..=3 => [255, 255, 255],
+        _ => [10, 20, 30],
+    });
+    let mut document = AnnotationDocument::new();
+    document.add(mosaic(Rect::new(0, 0, 8, 4), 4));
+
+    let composed = document.compose(&base);
+
+    // 黑白各一半：平均值 127.5 四舍五入为 128。
+    for (x, y) in [(0, 0), (1, 3), (2, 1), (3, 3)] {
+        assert_eq!(composed.pixel(x, y), [128, 128, 128, 255], "({x},{y})");
+    }
+    assert_eq!(composed.pixel(5, 2), [10, 20, 30, 255]);
+    // 马赛克以外不变。
+    for (x, y) in [(0, 4), (3, 5), (8, 0), (9, 3)] {
+        assert_eq!(composed.pixel(x, y), base.pixel(x, y), "({x},{y})");
+    }
+}
+
+#[test]
+fn mosaic_cannot_be_reversed_because_details_inside_a_block_are_lost() {
+    // 两张截图只在每个 6×6 块内部的像素排列上不同（左右镜像），块的平均颜色相同。
+    let original = screenshot(36, 24);
+    let mirrored = image_from(36, 24, |x, y| {
+        let mirror_x = x - x % 6 + (5 - x % 6);
+        let [r, g, b, _] = original.pixel(mirror_x, y);
+        [r, g, b]
+    });
+    assert!(original != mirrored);
+    let mut document = AnnotationDocument::new();
+    document.add(mosaic(Rect::new(0, 0, 36, 24), 6));
+
+    let from_original = document.compose(&original);
+    let from_mirrored = document.compose(&mirrored);
+
+    assert!(
+        from_original == from_mirrored,
+        "块内细节不同的两张截图打上马赛克后应完全相同"
+    );
+    for block_y in (0..24).step_by(6) {
+        for block_x in (0..36).step_by(6) {
+            let first = from_original.pixel(block_x, block_y);
+            for (dx, dy) in [(5, 0), (0, 5), (3, 2), (5, 5)] {
+                assert_eq!(
+                    from_original.pixel(block_x + dx, block_y + dy),
+                    first,
+                    "块 ({block_x},{block_y}) 内应是同一种颜色"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mosaic_edge_block_averages_the_whole_block_even_beyond_the_mosaic() {
+    // 马赛克宽 5、块边长 4：第二列块只有 1 列在马赛克里，颜色仍取整个 4×4 块的平均，
+    // 不会把那 1 列像素原样（或按列）泄露出来。
+    let base = image_from(8, 4, |x, _| if x == 4 { [200, 0, 0] } else { [0, 0, 0] });
+    let mut document = AnnotationDocument::new();
+    document.add(mosaic(Rect::new(0, 0, 5, 4), 4));
+
+    let composed = document.compose(&base);
+
+    assert_eq!(composed.pixel(4, 0), [50, 0, 0, 255]);
+    assert_eq!(composed.pixel(5, 0), [0, 0, 0, 255], "马赛克以外不变");
+}
+
+#[test]
+fn mosaic_also_hides_annotations_drawn_before_it() {
+    let base = image_from(16, 16, |_, _| [255, 255, 255]);
+    let mut document = AnnotationDocument::new();
+    // 1 像素宽的红色竖线，落在 8×8 块的第一列。
+    document.add(rectangle(Rect::new(0, 0, 1, 16), 1, RED));
+    document.add(mosaic(Rect::new(0, 0, 16, 16), 8));
+
+    let composed = document.compose(&base);
+
+    // 每块 64 个像素里有 8 个红：(255×56 + 0×8) / 64 ≈ 223。
+    assert_eq!(composed.pixel(0, 0), [255, 223, 223, 255]);
+    assert_eq!(composed.pixel(7, 7), [255, 223, 223, 255]);
+    assert_eq!(composed.pixel(8, 0), [255, 255, 255, 255]);
+}
+
+/// 字号 2 的一个“字”：蒙版 3×2，比排版框向左多伸出 1 列。
+fn tiny_text(origin: Point, color: Color) -> Annotation {
+    let mask = TextMask::new(
+        Rect::new(-1, 0, 3, 2),
+        vec![255, 0, 128, 0, 255, 0],
+        Rect::new(0, 0, 2, 2),
+        Rect::new(2, 0, 1, 2),
+    );
+    Annotation::Text {
+        origin,
+        text: "x".to_owned(),
+        size: 2,
+        color,
+        mask: Arc::new(mask),
+    }
+}
+
+#[test]
+fn text_is_its_glyph_coverage_painted_in_its_color_at_its_origin() {
+    let base = Image::from_rgba(8, 6, [0, 0, 255, 255].repeat(48));
+    let mut document = AnnotationDocument::new();
+    document.add(tiny_text(Point::new(3, 2), RED));
+
+    let composed = document.compose(&base);
+
+    // 蒙版左上角在排版坐标 (-1,0)，即截图的 (2,2)。
+    assert_eq!(composed.pixel(2, 2), rgba(RED), "完全覆盖");
+    assert_eq!(composed.pixel(4, 3), [0, 0, 255, 255], "覆盖率 0");
+    assert_eq!(composed.pixel(3, 3), rgba(RED));
+    let [r, g, b, a] = composed.pixel(4, 2);
+    assert!(
+        (127..=129).contains(&r) && g == 0 && (126..=128).contains(&b) && a == 255,
+        "覆盖一半时与底色各占一半：{r},{g},{b},{a}"
+    );
+    for (x, y) in [(1, 2), (5, 2), (3, 1), (3, 4)] {
+        assert_eq!(composed.pixel(x, y), [0, 0, 255, 255], "蒙版以外 ({x},{y})");
+    }
+}
+
+#[test]
+fn text_partly_outside_the_screenshot_is_clipped() {
+    let base = Image::from_rgba(4, 4, [0, 0, 255, 255].repeat(16));
+    let mut document = AnnotationDocument::new();
+    // 蒙版占截图的 x = -1..=1、y = 3..=4：左边一列和下边一行在截图以外。
+    document.add(tiny_text(Point::new(0, 3), RED));
+
+    let composed = document.compose(&base);
+
+    assert_eq!((composed.width(), composed.height()), (4, 4));
+    assert_eq!(composed.pixel(0, 3), [0, 0, 255, 255], "覆盖率 0");
+    let [r, _, _, _] = composed.pixel(1, 3);
+    assert!((127..=129).contains(&r), "覆盖一半：{r}");
+    assert_eq!(composed.pixel(0, 2), [0, 0, 255, 255]);
 }

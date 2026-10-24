@@ -5,7 +5,7 @@
 //! [`PlatformEvent::OverlayInput`](crate::PlatformEvent::OverlayInput) 递交回来。
 //! 所有坐标都是虚拟桌面物理像素，与 [`crate::FrameSource`] 一致。
 
-use crate::{Display, DisplayId, Image, Modifiers, PlatformError, Point, Rect};
+use crate::{Display, DisplayId, Image, Modifiers, PlatformError, Point, Rect, TextMask};
 
 /// 遮罩底下显示什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,11 @@ pub trait SelectionOverlay {
     /// 在下一次 [`render`](Self::render) 时显示。
     fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError>;
 
+    /// 用平台的字体把 `text` 排版并栅格化成覆盖率蒙版：字号 `font_size`（物理像素），
+    /// 灰度抗锯齿，遇到换行符换行、不自动换行。标注里的文字用它：遮罩画布上和最终截图里的
+    /// 文字都来自同一个蒙版（ADR 0006）。遮罩打开期间可用。
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError>;
+
     /// 隐藏遮罩并释放冻结帧和画布；没有打开时什么也不做。
     fn close(&mut self);
 }
@@ -60,6 +65,10 @@ pub struct OverlayScene {
     pub items: Vec<OverlayItem>,
     /// 鼠标指针在遮罩上的形状。
     pub cursor: OverlayCursor,
+    /// 正在输入文字时插入点的位置（虚拟桌面物理像素）。`Some` 时遮罩接受文字输入：平台打开
+    /// 输入法、把输入法的组字和候选窗口放在插入点旁边，输入的文字以 [`OverlayInput::Character`]
+    /// 递交；`None` 时关闭输入法。插入点本身由 `core` 画在 `items` 里。
+    pub text_caret: Option<Rect>,
 }
 
 impl OverlayScene {
@@ -149,6 +158,8 @@ pub enum OverlayCursor {
     #[default]
     Crosshair,
     Arrow,
+    /// 文字输入（I 形）。
+    IBeam,
 }
 
 /// 用户在遮罩上的输入，坐标为虚拟桌面物理像素。
@@ -174,6 +185,9 @@ pub enum OverlayInput {
         key: OverlayKey,
         modifiers: Modifiers,
     },
+    /// 输入了一个字符：键盘直接输入的或输入法确认的文字，逐字递交。只递交可打印字符；
+    /// 回车、退格等以 [`OverlayInput::KeyPressed`] 递交。
+    Character(char),
     /// 平台不得不中断这次遮罩，例如显示器布局变了、冻结帧已经失效。
     Interrupted,
 }
@@ -189,4 +203,5 @@ pub enum PointerButton {
 pub enum OverlayKey {
     Escape,
     Enter,
+    Backspace,
 }

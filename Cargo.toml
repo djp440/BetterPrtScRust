@@ -29,6 +29,8 @@ serde = { version = "1", default-features = false, features = ["std", "derive"] 
 serde_json = { version = "1", default-features = false, features = ["std"] }
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 windows = { version = "0.62", default-features = false }
+# Direct2D 的 DrawTextLayout 要它的 Vector2；windows 本身已经依赖它，不增加体积。
+windows-numerics = { version = "0.3", default-features = false }
 
 # 输出格式编码器（bps-core）。
 jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }

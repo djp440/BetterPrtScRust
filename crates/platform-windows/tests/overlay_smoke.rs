@@ -1,4 +1,5 @@
 //! 选区遮罩真机冒烟：会在屏幕上闪现几次半透明遮罩（每次不到 1 秒），默认忽略。
+//! 不碰剪贴板，不注册热键。
 //!
 //! 运行：`cargo test -p bps-platform-windows --test overlay_smoke -- --ignored --nocapture`
 //! 输入用 `PostMessage` 直接投递给遮罩窗口，不模拟真实键鼠。
@@ -13,10 +14,11 @@ use bps_platform::{
 use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows::Win32::UI::Input::Ime::{ImmGetContext, ImmReleaseContext};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
-    PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
+    PostMessageW, WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN,
 };
 use windows::core::w;
 
@@ -141,4 +143,117 @@ fn selection_overlay_shows_frozen_frame_and_delivers_input() {
             "关闭后不应再递交输入"
         );
     }
+}
+
+/// 文字输入：`WM_CHAR`（含代理对）与退格转换成遮罩输入；场景要求输入文字时才打开输入法；
+/// 用 DirectWrite 栅格化标注文字。
+#[test]
+#[ignore = "真机冒烟：在屏幕上闪现选区遮罩"]
+fn overlay_accepts_text_input_and_rasterizes_text() {
+    assert!(dpi::ensure_per_monitor_v2());
+    let event_loop = EventLoop::new().unwrap();
+    let mut overlay = event_loop.selection_overlay();
+    let hwnd = own_overlay_window();
+    overlay.open(Backdrop::FrozenFrame).unwrap();
+    overlay.render(&dim_scene()).unwrap();
+    let ime_open = || {
+        let context = unsafe { ImmGetContext(hwnd) };
+        let open = !context.is_invalid();
+        if open {
+            let _ = unsafe { ImmReleaseContext(hwnd, context) };
+        }
+        open
+    };
+    assert!(!ime_open(), "不输入文字时输入法关闭");
+    let mut window = Default::default();
+    unsafe { GetWindowRect(hwnd, &mut window) }.unwrap();
+    let caret = bps_platform::Rect::new(window.left + 200, window.top + 150, 1, 30);
+    overlay
+        .render(&OverlayScene {
+            text_caret: Some(caret),
+            ..dim_scene()
+        })
+        .unwrap();
+    assert!(ime_open(), "输入文字时输入法打开");
+
+    // “你”、一个代理对表示的表情、回车和退格产生的控制字符（应忽略），再按一次退格键。
+    for unit in [0x4F60u16, 0xD83D, 0xDE00, 0x0D, 0x08] {
+        unsafe { PostMessageW(Some(hwnd), WM_CHAR, WPARAM(unit as usize), LPARAM(0)) }.unwrap();
+    }
+    unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_BACK.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
+    // 真实鼠标的操作也会递交进来，只看键盘和文字输入。
+    let mut received = Vec::new();
+    while let Some(PlatformEvent::OverlayInput(input)) =
+        event_loop.wait_event(Duration::from_millis(500))
+    {
+        if matches!(
+            input,
+            OverlayInput::Character(_) | OverlayInput::KeyPressed { .. }
+        ) {
+            received.push(input);
+        }
+    }
+    assert_eq!(
+        received,
+        [
+            OverlayInput::Character('你'),
+            OverlayInput::Character('😀'),
+            OverlayInput::KeyPressed {
+                key: OverlayKey::Backspace,
+                modifiers: bps_platform::Modifiers::NONE,
+            },
+        ]
+    );
+
+    let started = Instant::now();
+    let one_line = overlay.rasterize_text("标注文字 Text，你好！", 44).unwrap();
+    eprintln!("栅格化一行文字：{:?}，{one_line:?}", started.elapsed());
+    let inked = one_line.coverage().iter().filter(|&&c| c > 128).count();
+    assert!(inked > 500, "应画出字形：{inked} 个像素");
+    let layout = one_line.layout();
+    assert!(layout.width > 300 && layout.height >= 44, "{layout:?}");
+    let area = one_line.area();
+    assert!(
+        area.x <= 0 && area.y <= 0 && area.width >= layout.width,
+        "蒙版应包住排版框：{one_line:?}"
+    );
+    let end = one_line.caret();
+    assert!(
+        (end.x - layout.width as i32).abs() <= 1 && end.y == 0 && end.height >= 44,
+        "插入点在行尾：{one_line:?}"
+    );
+
+    let two_lines = overlay.rasterize_text("第一行\n2", 44).unwrap();
+    assert!(
+        two_lines.layout().height >= 2 * layout.height - 2,
+        "{two_lines:?}"
+    );
+    let new_line = overlay.rasterize_text("第一行\n", 44).unwrap();
+    assert!(
+        new_line.caret().x == 0 && new_line.caret().y >= end.height as i32 - 2,
+        "换行后插入点在第二行开头：{new_line:?}"
+    );
+    let empty = overlay.rasterize_text("", 44).unwrap();
+    assert!(
+        empty.area().width == 0 && empty.caret().x == 0 && empty.caret().height >= 44,
+        "{empty:?}"
+    );
+    if let Some(dir) = std::env::var_os("BPS_SMOKE_SHOTS") {
+        let path = std::path::Path::new(&dir).join("text-mask.pgm");
+        let mut pgm = format!("P5 {} {} 255\n", area.width, area.height).into_bytes();
+        pgm.extend_from_slice(one_line.coverage());
+        std::fs::write(path, pgm).unwrap();
+    }
+
+    overlay.render(&dim_scene()).unwrap();
+    assert!(!ime_open(), "结束输入后输入法关闭");
+    overlay.close();
 }

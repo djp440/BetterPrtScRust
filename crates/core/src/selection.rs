@@ -249,6 +249,7 @@ impl RegionSelection {
         OverlayScene {
             items,
             cursor: OverlayCursor::Crosshair,
+            text_caret: None,
         }
     }
 

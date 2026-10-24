@@ -164,6 +164,8 @@ overlay-selected-hint = Enter or double-click the selection: done   Esc: cancel
 
 annotation-rectangle = Rectangle
 annotation-arrow = Arrow
+annotation-mosaic = Mosaic
+annotation-text = Text
 annotation-cancel = Cancel
 annotation-save-as = Save as
 annotation-auto-save = Auto-save

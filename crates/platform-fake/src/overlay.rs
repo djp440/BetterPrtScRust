@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use bps_platform::{
-    Backdrop, Display, DisplayId, Image, OverlayScene, PlatformError, Point, Rect, SelectionOverlay,
+    Backdrop, Display, DisplayId, Image, OverlayScene, PlatformError, Point, Rect,
+    SelectionOverlay, TextMask,
 };
 
 use crate::frame_source::FrameState;
@@ -122,6 +123,13 @@ impl SelectionOverlay for FakeOverlay {
         }
         *image = Image::from_rgba(area.width, area.height, pixels);
         Ok(())
+    }
+
+    fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
+        if !self.state.lock().unwrap().open {
+            return Err(PlatformError::new("假遮罩没有打开"));
+        }
+        Ok(crate::text::text_mask(text, font_size))
     }
 
     fn close(&mut self) {
