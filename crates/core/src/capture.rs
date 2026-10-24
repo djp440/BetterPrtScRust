@@ -40,7 +40,10 @@ impl CaptureFailure {
 pub(crate) fn is_implemented(mode: CaptureMode) -> bool {
     matches!(
         mode,
-        CaptureMode::Display | CaptureMode::VirtualDesktop | CaptureMode::Region
+        CaptureMode::Display
+            | CaptureMode::VirtualDesktop
+            | CaptureMode::Region
+            | CaptureMode::Window
     )
 }
 
@@ -70,7 +73,8 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
                 window_title: None,
             })
         }
-        // 区域需要用户在选区遮罩上框选，由 `region::RegionCapture` 跨多个事件完成，不走这里。
+        // 区域、窗口需要用户在选区遮罩上框选或选择，由 `region::RegionCapture`、
+        // `window::WindowCapture` 跨多个事件完成，不走这里。
         CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
     }
 }
