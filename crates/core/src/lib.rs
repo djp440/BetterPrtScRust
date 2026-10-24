@@ -35,6 +35,7 @@
 //! 窗口布局），单击后关闭遮罩，再截取这个窗口的完整内容。
 
 mod action;
+mod active;
 mod annotation;
 mod autostart;
 mod binding;
