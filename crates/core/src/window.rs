@@ -103,7 +103,6 @@ impl WindowCapture {
             window_title: Some(window.title.clone()),
         };
         action::run(platform, &screenshot, &self.request, self.texts)
-            .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {

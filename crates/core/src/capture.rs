@@ -1,6 +1,6 @@
 use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform, Point};
 
-use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, stitch};
+use crate::{CaptureMode, CoreError, stitch};
 
 /// 一次捕获的产物（截图）及其来源信息。
 pub(crate) struct Screenshot {
@@ -24,14 +24,6 @@ impl CaptureFailure {
         Self {
             error: error.into(),
             notified: false,
-        }
-    }
-
-    /// 截后动作失败：做了自动存储时，截后动作已经就结果发过通知（“截图已保存”或“自动存储失败”）。
-    pub fn in_actions(error: CoreError, request: &CaptureRequest) -> Self {
-        Self {
-            error,
-            notified: request.actions.contains(&PostCaptureAction::AutoSave),
         }
     }
 }

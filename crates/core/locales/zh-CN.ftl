@@ -27,6 +27,7 @@ notification-config-reload-fallback = 继续使用上一次有效的配置。{ $
 notification-config-deleted-title = 配置文件已被删除
 notification-config-deleted-body = 继续使用当前的配置；重启 BetterPrtSc 后会重新生成默认配置。
 notification-settings-unavailable-title = 无法打开设置界面
+notification-result-panel-unavailable-title = 无法打开结果面板
 notification-update-available-title = 发现新版本 { $version }
 notification-update-available-body = 当前版本 { $current }。点击打开发布页面，自行下载。
 update-unrecognized-version = 无法识别 GitHub Releases 上的版本号“{ $version }”
@@ -177,3 +178,21 @@ annotation-auto-save = 自动存储
 annotation-copy = 复制
 save-as-file-type = { $format } 图像
 notification-save-as-failed-title = 另存为失败
+
+## 结果面板（OCR）
+
+result-panel-window-title = OCR 结果
+result-panel-language = 识别语言
+result-panel-recognizing = 正在识别…
+result-panel-recognized = 识别完成
+result-panel-no-text = 没有识别到文字
+result-panel-failed = 识别失败：{ $error }
+result-panel-no-language-pack-title = 系统没有可用的 OCR 语言包
+result-panel-no-language-pack-body = BetterPrtSc 使用 Windows 自带的文字识别，需要系统装有对应语言的 OCR 组件。请打开系统设置的“时间和语言 > 语言和区域”，添加要识别的语言（例如“中文(简体，中国)”“English (United States)”），Windows 会一并安装它的 OCR 组件；已经添加的语言，可在它的“语言选项”里确认“光学字符识别”已安装。装好后点“重新识别”即可，无需重启。
+result-panel-open-language-settings = 打开语言设置
+result-panel-recognize-again = 重新识别
+result-panel-copy = 复制
+result-panel-copied = 已复制到剪贴板
+result-panel-copy-failed = 复制失败：{ $error }
+result-panel-open-settings-failed = 无法打开系统设置：{ $error }
+result-panel-close = 关闭

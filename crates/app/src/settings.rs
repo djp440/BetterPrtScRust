@@ -10,9 +10,12 @@ use std::sync::Arc;
 use bps_core::{Reply, Request, WhenNotRunning, forward};
 use bps_platform_windows::{
     PipeChannel, WindowsClock, map_system_font, open_with_default_program, pick_folder,
-    resident_pipe_name, standard_user_can_write, user_ui_languages,
+    read_clipboard_text, resident_pipe_name, standard_user_can_write, user_ui_languages,
+    write_clipboard_text,
 };
-use bps_ui::{SettingsEnvironment, UiEnvironment, UiFont, WindowIcon, run_settings_window};
+use bps_ui::{
+    SettingsEnvironment, SystemClipboard, UiEnvironment, UiFont, WindowIcon, run_settings_window,
+};
 
 use crate::{data_location, icon};
 
@@ -37,7 +40,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// 所有界面窗口共用的环境。#23 等新窗口复用它。
+/// 所有界面窗口共用的环境（设置界面、结果面板）。
 pub fn ui_environment() -> UiEnvironment {
     let tray = icon::tray_icon();
     UiEnvironment {
@@ -49,6 +52,10 @@ pub fn ui_environment() -> UiEnvironment {
         }),
         system_languages: user_ui_languages(),
         open: Arc::new(|target| open_with_default_program(target).map_err(|e| e.to_string())),
+        clipboard: SystemClipboard {
+            read_text: Arc::new(|| read_clipboard_text().ok().flatten()),
+            write_text: Arc::new(|text| write_clipboard_text(text).map_err(|e| e.to_string())),
+        },
     }
 }
 

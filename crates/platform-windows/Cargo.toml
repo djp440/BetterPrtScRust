@@ -17,10 +17,19 @@ serde_json.workspace = true
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [
+    # WinRT：窗口截取用 Graphics_Capture、Graphics_DirectX*；文字识别（只在结果面板子进程里用）
+    # 用 Media_Ocr、Globalization、Graphics_Imaging、Security_Cryptography、Storage_Streams、
+    # Foundation_Collections。
     "Foundation",
+    "Foundation_Collections",
+    "Globalization",
     "Graphics_Capture",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Security_Cryptography",
+    "Storage_Streams",
     "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Globalization",

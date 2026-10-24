@@ -7,12 +7,15 @@ use std::thread;
 use std::time::Duration;
 
 use bps_platform::{Clipboard, ClipboardItem, PlatformError};
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HWND};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::{CF_DIB, CF_HDROP};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
+use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
 use windows::core::{PCWSTR, w};
 
 use crate::EventLoop;
@@ -66,6 +69,45 @@ impl Clipboard for WindowsClipboard {
             })?;
         }
         Ok(())
+    }
+}
+
+/// 把文字放进剪贴板（`CF_UNICODETEXT`），换行转换成 Windows 的 CRLF。
+/// 界面子进程的文本框用它与其他程序互相复制粘贴。
+pub fn write_clipboard_text(text: &str) -> Result<(), PlatformError> {
+    let _open = OpenedClipboard::open(None)?;
+    unsafe { EmptyClipboard() }.map_err(|e| win_error("清空剪贴板失败", e))?;
+    let crlf = text.replace("\r\n", "\n").replace('\n', "\r\n");
+    let bytes: Vec<u8> = crlf
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    set_data(u32::from(CF_UNICODETEXT.0), &bytes)
+        .map_err(|e| PlatformError::new(format!("写入剪贴板文字失败：{e}")))
+}
+
+/// 剪贴板里的文字（`CF_UNICODETEXT`），换行统一成 LF；剪贴板里没有文字时为 `None`。
+pub fn read_clipboard_text() -> Result<Option<String>, PlatformError> {
+    let _open = OpenedClipboard::open(None)?;
+    let format = u32::from(CF_UNICODETEXT.0);
+    if unsafe { IsClipboardFormatAvailable(format) }.is_err() {
+        return Ok(None);
+    }
+    let handle =
+        unsafe { GetClipboardData(format) }.map_err(|e| win_error("读取剪贴板文字失败", e))?;
+    let memory = HGLOBAL(handle.0);
+    unsafe {
+        let units = GlobalSize(memory) / 2;
+        let data = GlobalLock(memory) as *const u16;
+        if data.is_null() {
+            return Err(PlatformError::new("读取剪贴板文字失败：无法锁定内存"));
+        }
+        let all = std::slice::from_raw_parts(data, units);
+        let end = all.iter().position(|&unit| unit == 0).unwrap_or(all.len());
+        let text = String::from_utf16_lossy(&all[..end]);
+        let _ = GlobalUnlock(memory);
+        Ok(Some(text.replace("\r\n", "\n")))
     }
 }
 
