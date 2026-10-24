@@ -248,4 +248,9 @@ pub enum OverlayKey {
     /// 字母键 C（与大小写、输入法无关）。
     C,
     Backspace,
+    /// Delete 键。
+    Delete,
+    /// 字母键 Z、Y（撤销、重做的快捷键，与大小写、输入法无关）。
+    Z,
+    Y,
 }

@@ -799,6 +799,11 @@ impl FakePlatform {
         })
     }
 
+    /// 在遮罩上按住 `modifiers` 按一个键（例如 Ctrl+Z）。
+    pub fn press_key_with(&self, key: OverlayKey, modifiers: Modifiers) -> PlatformEvent {
+        self.overlay_input(OverlayInput::KeyPressed { key, modifiers })
+    }
+
     /// 在遮罩上打字：`text` 的每个字符依次以 [`OverlayInput::Character`] 递交，包括用输入法
     /// 输入、确认后的中文（平台逐字递交）。只能含可打印字符，换行用 [`press_key`](Self::press_key)
     /// 按 Enter。

@@ -9,6 +9,9 @@
 //! - 框、箭头、马赛克靠拖拽画出；文字工具在单击处开始输入（打开输入法），Enter 换行、
 //!   退格删字，Esc、单击别处、换工具或结束捕获时这段文字定下来。改颜色和线宽只影响之后画的
 //!   标注，以及正在输入的这段文字。
+//! - “选择”工具点中已画好的标注（最上面那个）：拖动它移动（整个拖动是一步历史），工具条上
+//!   的颜色、线宽按钮改它的样式，Delete 删除它。Ctrl+Z 撤销、Ctrl+Y（或 Ctrl+Shift+Z）重做，
+//!   工具条上也有“撤销”“重做”按钮；添加、移动、改样式、删除都能撤销和重做。
 //! - 点“复制”“自动存储”“另存为”结束（[`Response::Finish`]）；点“取消”或按 Esc 取消。
 //!
 //! 标注的坐标是截图的像素坐标：屏幕坐标减去区域左上角。比屏幕还高的长截屏缩小显示在区域里
@@ -33,6 +36,10 @@ use crate::selection::between;
 /// 输入文字时文字框的边框：内白外黑两层，深浅背景上都看得见。
 const TEXT_BOX_INNER: Color = Color::rgba(255, 255, 255, 200);
 const TEXT_BOX_OUTER: Color = Color::rgba(0, 0, 0, 140);
+/// “选择”工具点击时，离标注多近算点中（100% 缩放下的物理像素）。
+const HIT_TOLERANCE: f64 = 4.0;
+/// 选中标注的框的颜色。
+const SELECTION_COLOR: Color = Color::rgba(30, 144, 255, 255);
 /// 文字框离文字的距离（100% 缩放下的物理像素）。
 const TEXT_BOX_PADDING: f64 = 3.0;
 
@@ -88,6 +95,10 @@ struct Canvas {
     draft: Option<Draft>,
     /// 正在输入的文字。
     typing: Option<Typing>,
+    /// 选中的标注在文档里的下标（“选择”工具点中的）。
+    selected: Option<usize>,
+    /// 正在拖动的选中标注。
+    moving: Option<Moving>,
     /// 遮罩画布上正显示着的标注（屏幕上的尺寸）；画布还没显示时为 `None`。
     shown: Option<Vec<Annotation>>,
 }
@@ -97,6 +108,14 @@ struct View {
     scale_x: f64,
     scale_y: f64,
     base: Image,
+}
+
+/// 正在拖动的选中标注：从 `start`（屏幕坐标）拖起，已经拖了 `delta`（截图像素）。
+struct Moving {
+    index: usize,
+    start: Point,
+    original: Annotation,
+    delta: (i32, i32),
 }
 
 /// 正在拖拽画出的框、箭头或马赛克。
@@ -135,7 +154,7 @@ impl Draft {
                 rect: between(self.start, self.end),
                 block: self.thickness.mosaic_block_at(self.scale),
             }),
-            Tool::Text => None,
+            Tool::Text | Tool::Select => None,
         }
     }
 }
@@ -190,6 +209,11 @@ impl Canvas {
     /// 现在应显示的标注：已画好的加上正在画的和正在输入的。
     fn annotations(&self) -> Vec<Annotation> {
         let mut annotations = self.document.annotations().to_vec();
+        if let Some(moving) = &self.moving
+            && let Some(slot) = annotations.get_mut(moving.index)
+        {
+            *slot = moving.original.translated(moving.delta.0, moving.delta.1);
+        }
         annotations.extend(self.draft.and_then(|d| d.annotation()));
         annotations.extend(self.typing.as_ref().and_then(Typing::annotation));
         annotations
@@ -198,6 +222,7 @@ impl Canvas {
     /// 把正在拖拽画出的标注定下来。
     fn commit_draft(&mut self) {
         if let Some(annotation) = self.draft.take().and_then(|d| d.annotation()) {
+            self.selected = None;
             self.document.add(annotation);
         }
     }
@@ -205,6 +230,7 @@ impl Canvas {
     /// 结束输入：有文字时定下来，没有文字就不留下任何东西。
     fn commit_typing(&mut self) {
         if let Some(annotation) = self.typing.take().and_then(|t| t.annotation()) {
+            self.selected = None;
             self.document.add(annotation);
         }
     }
@@ -262,6 +288,54 @@ impl Canvas {
                 .collect(),
             None => annotations,
         }
+    }
+
+    /// 指针移到屏幕上的 `position`：正在拖动选中的标注时跟着移动。
+    fn drag_selected(&mut self, position: Point) {
+        let Some(start) = self.moving.as_ref().map(|m| m.start) else {
+            return;
+        };
+        let delta = self.image_delta(start, position);
+        if let Some(moving) = self.moving.as_mut() {
+            moving.delta = delta;
+        }
+    }
+
+    /// 松开鼠标：拖动的位移定下来，整个拖动是一步历史。
+    fn commit_move(&mut self) {
+        if let Some(moving) = self.moving.take() {
+            let moved = moving.original.translated(moving.delta.0, moving.delta.1);
+            self.document.replace(moving.index, moved);
+        }
+    }
+
+    /// 屏幕上的 `position` 是否在某个标注上（“选择”工具的指针形状用）。
+    fn hits_annotation(&self, position: Point, scale: f64) -> bool {
+        let tolerance = (HIT_TOLERANCE * self.to_image_scale(scale)).round() as u32;
+        let point = self.to_image(position);
+        self.document
+            .annotations()
+            .iter()
+            .any(|annotation| annotation.hit(point, tolerance))
+    }
+
+    /// 屏幕上的 `to` 相对 `from` 在截图上移动了多少像素。
+    fn image_delta(&self, from: Point, to: Point) -> (i32, i32) {
+        let (sx, sy) = self
+            .view
+            .as_ref()
+            .map_or((1.0, 1.0), |view| (view.scale_x, view.scale_y));
+        (
+            (f64::from(to.x - from.x) / sx).round() as i32,
+            (f64::from(to.y - from.y) / sy).round() as i32,
+        )
+    }
+
+    /// 选中的标注现在占的范围（截图坐标，含正在拖动的位移，限制在截图以内）。
+    fn selection_bounds(&self) -> Option<Rect> {
+        let annotation = self.annotations().into_iter().nth(self.selected?)?;
+        let image = full(&self.base);
+        annotation.bounds().intersection(image)
     }
 
     /// 屏幕上显示的底图。
@@ -330,6 +404,20 @@ impl Annotator {
                 Response::Handled
             }
             OverlayInput::KeyPressed {
+                key: OverlayKey::Delete,
+                ..
+            } if locked => {
+                self.delete_selected();
+                Response::Handled
+            }
+            OverlayInput::KeyPressed {
+                key: key @ (OverlayKey::Z | OverlayKey::Y),
+                modifiers,
+            } if locked && modifiers.ctrl && !modifiers.alt => {
+                self.step_history(key == OverlayKey::Y || modifiers.shift);
+                Response::Handled
+            }
+            OverlayInput::KeyPressed {
                 key: OverlayKey::Escape,
                 ..
             } if locked => Response::Cancel,
@@ -340,13 +428,14 @@ impl Annotator {
             OverlayInput::PointerMoved { position, .. } => {
                 self.pointer = Some(position);
                 self.hovered = toolbar.button_at(position);
-                if let Some(canvas) = self.canvas.as_mut()
-                    && canvas.draft.is_some()
-                {
-                    let end = canvas.to_image(position);
-                    if let Some(draft) = canvas.draft.as_mut() {
-                        draft.end = end;
+                if let Some(canvas) = self.canvas.as_mut() {
+                    if canvas.draft.is_some() {
+                        let end = canvas.to_image(position);
+                        if let Some(draft) = canvas.draft.as_mut() {
+                            draft.end = end;
+                        }
                     }
+                    canvas.drag_selected(position);
                 }
                 // 选区状态机也要看到鼠标移动（拖拽框选时）；锁定后它不再参与。
                 if locked {
@@ -387,6 +476,8 @@ impl Annotator {
                         Response::Handled
                     }
                 } else if let Some(canvas) = self.canvas.as_mut() {
+                    canvas.drag_selected(position);
+                    canvas.commit_move();
                     if canvas.draft.is_some() {
                         let end = canvas.to_image(position);
                         if let Some(draft) = canvas.draft.as_mut() {
@@ -438,6 +529,25 @@ impl Annotator {
         let Some(tool) = tool.filter(|_| region.contains(position)) else {
             return Ok(());
         };
+        if tool == Tool::Select {
+            // 点中最上面的那个标注；点空白处取消选中。
+            let tolerance = (HIT_TOLERANCE * scale).round() as u32;
+            canvas.selected = canvas
+                .document
+                .annotations()
+                .iter()
+                .rposition(|annotation| annotation.hit(point, tolerance));
+            canvas.moving = canvas.selected.and_then(|index| {
+                Some(Moving {
+                    index,
+                    start: position,
+                    original: canvas.document.annotations().get(index)?.clone(),
+                    delta: (0, 0),
+                })
+            });
+            return Ok(());
+        }
+        canvas.selected = None;
         if tool == Tool::Text {
             let mut typing = Typing {
                 origin: point,
@@ -480,6 +590,83 @@ impl Annotator {
         Ok(())
     }
 
+    /// 撤销（`redo` 为假）或重做一步修改。正在拖拽画标注或拖动标注时不处理。
+    fn step_history(&mut self, redo: bool) {
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        if canvas.draft.is_some() || canvas.moving.is_some() {
+            return;
+        }
+        let changed = if redo {
+            canvas.document.redo()
+        } else {
+            canvas.document.undo()
+        };
+        if changed {
+            canvas.selected = None;
+        }
+    }
+
+    /// 删除选中的标注。
+    fn delete_selected(&mut self) {
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        if canvas.moving.is_some() {
+            return;
+        }
+        if let Some(index) = canvas.selected.take() {
+            canvas.document.remove(index);
+        }
+    }
+
+    /// 把选中的标注换成 `edit` 改过的样子（`edit` 返回 `None` 表示不适用）。
+    fn restyle_selected(&mut self, edit: impl FnOnce(&Annotation) -> Option<Annotation>) {
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(index) = canvas.selected else {
+            return;
+        };
+        if let Some(edited) = canvas.document.annotations().get(index).and_then(edit) {
+            canvas.document.replace(index, edited);
+        }
+    }
+
+    /// 选中的标注改用这一档线宽（文字是字号，要重新栅格化）。
+    fn resize_selected(
+        &mut self,
+        platform: &Platform,
+        thickness: Thickness,
+    ) -> Result<(), PlatformError> {
+        let Some(canvas) = self.canvas.as_ref() else {
+            return Ok(());
+        };
+        let Some(annotation) = canvas
+            .selected
+            .and_then(|index| canvas.document.annotations().get(index))
+        else {
+            return Ok(());
+        };
+        // 线宽、字号按标注所在显示器的缩放比例定，与新画的标注一致。
+        let bounds = canvas.to_screen(annotation.bounds());
+        let scale = canvas.to_image_scale(self.scale_at(Point::new(bounds.x, bounds.y)));
+        let edited = match annotation {
+            Annotation::Text { text, .. } => {
+                let size = thickness.font_size_at(scale);
+                let mask = Arc::new(platform.overlay.rasterize_text(text, size)?);
+                annotation.with_text_mask(size, mask)
+            }
+            Annotation::Mosaic { .. } => {
+                annotation.with_line_width(thickness.mosaic_block_at(scale))
+            }
+            _ => annotation.with_line_width(thickness.stroke_width_at(scale)),
+        };
+        self.restyle_selected(|_| edited);
+        Ok(())
+    }
+
     /// 结束输入，文字定下来。
     fn finish_typing(&mut self) {
         if let Some(canvas) = self.canvas.as_mut() {
@@ -494,27 +681,42 @@ impl Annotator {
         button: Button,
         region: Rect,
     ) -> Result<Response, PlatformError> {
-        let typing = self.canvas.as_mut().and_then(|c| c.typing.as_mut());
         Ok(match button {
             Button::Tool(tool) => {
                 self.finish_typing();
                 self.lock(platform, region)?;
                 self.tool = Some(tool);
+                if tool != Tool::Select
+                    && let Some(canvas) = self.canvas.as_mut()
+                {
+                    canvas.selected = None;
+                }
                 Response::Handled
             }
             Button::Color(color) => {
                 self.color = color;
-                if let Some(typing) = typing {
+                let canvas = self.canvas.as_mut();
+                if let Some(typing) = canvas.and_then(|c| c.typing.as_mut()) {
                     typing.color = color;
+                } else {
+                    self.restyle_selected(|annotation| annotation.with_color(color));
                 }
                 Response::Handled
             }
             Button::Thickness(thickness) => {
                 self.thickness = thickness;
-                if let Some(typing) = typing {
+                let canvas = self.canvas.as_mut();
+                if let Some(typing) = canvas.and_then(|c| c.typing.as_mut()) {
                     typing.thickness = thickness;
                     typing.rasterize(platform.overlay.as_ref())?;
+                } else {
+                    self.resize_selected(platform, thickness)?;
                 }
+                Response::Handled
+            }
+            Button::Undo | Button::Redo => {
+                self.finish_typing();
+                self.step_history(button == Button::Redo);
                 Response::Handled
             }
             Button::Cancel => Response::Cancel,
@@ -552,6 +754,8 @@ impl Annotator {
             document: AnnotationDocument::new(),
             draft: None,
             typing: None,
+            selected: None,
+            moving: None,
             shown: None,
         });
     }
@@ -661,6 +865,36 @@ impl Annotator {
             ]);
             scene.text_caret = Some(caret);
         }
+        if let Some(canvas) = self.canvas.as_ref()
+            && let Some(bounds) = canvas.selection_bounds()
+        {
+            let scale = self.scale_at(Point::new(region.x, region.y));
+            let line = (scale.round() as i32).max(1);
+            let frame = canvas.to_screen(bounds);
+            let outer = Rect::new(
+                frame.x - 2 * line,
+                frame.y - 2 * line,
+                frame.width + 4 * line as u32,
+                frame.height + 4 * line as u32,
+            );
+            scene.items.extend([
+                OverlayItem::Frame {
+                    rect: outer,
+                    width: line as u32,
+                    color: TEXT_BOX_INNER,
+                },
+                OverlayItem::Frame {
+                    rect: Rect::new(
+                        outer.x + line,
+                        outer.y + line,
+                        outer.width - 2 * line as u32,
+                        outer.height - 2 * line as u32,
+                    ),
+                    width: line as u32,
+                    color: SELECTION_COLOR,
+                },
+            ]);
+        }
         let toolbar = self.toolbar(region);
         scene.items.extend(toolbar.items(&ToolbarState {
             tool: self.tool,
@@ -674,6 +908,19 @@ impl Annotator {
             && self.pointer.is_some_and(|p| region.contains(p));
         if over_toolbar || (self.canvas.is_some() && !drawing_here) {
             scene.cursor = OverlayCursor::Arrow;
+        } else if drawing_here && self.tool == Some(Tool::Select) {
+            let over = self
+                .canvas
+                .as_ref()
+                .zip(self.pointer)
+                .is_some_and(|(canvas, pointer)| {
+                    canvas.hits_annotation(pointer, self.scale_at(pointer))
+                });
+            scene.cursor = if over || self.canvas.as_ref().is_some_and(|c| c.moving.is_some()) {
+                OverlayCursor::Move
+            } else {
+                OverlayCursor::Arrow
+            };
         } else if drawing_here && self.tool == Some(Tool::Text) {
             scene.cursor = OverlayCursor::IBeam;
         } else if drawing_here {

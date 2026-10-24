@@ -37,8 +37,8 @@ use windows::Win32::UI::Input::Ime::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_BACK, VK_C,
-    VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN,
-    VK_SHIFT, VK_UP,
+    VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT,
+    VK_RWIN, VK_SHIFT, VK_UP, VK_Y, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
@@ -520,6 +520,9 @@ fn key(wparam: WPARAM) -> Option<OverlayKey> {
         VK_DOWN => Some(OverlayKey::Down),
         VK_C => Some(OverlayKey::C),
         VK_BACK => Some(OverlayKey::Backspace),
+        VK_DELETE => Some(OverlayKey::Delete),
+        VK_Z => Some(OverlayKey::Z),
+        VK_Y => Some(OverlayKey::Y),
         _ => None,
     }
 }

@@ -11,7 +11,8 @@ use bps_core::{
     LongScreenshot, PostCaptureAction, ResidentInstance, run_cli,
 };
 use bps_platform::{
-    Hotkey, Image, Key, Modifiers, OverlayItem, OverlayKey, PlatformEvent, Point, Rect,
+    Hotkey, Image, Key, Modifiers, OverlayItem, OverlayKey, PlatformEvent, Point, PointerButton,
+    Rect,
 };
 use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel, decode, desktop_pattern};
 
@@ -582,4 +583,111 @@ fn bps_capture_region_with_long_screenshot_binding_replies_after_user_finishes()
         (copied.width(), copied.height()),
         (VIEWPORT.width, VIEWPORT.height)
     );
+}
+
+#[test]
+fn selecting_moving_and_undoing_work_on_the_scaled_down_long_screenshot() {
+    let doc = document(1000);
+    let window = desktop_with_window(doc.clone(), VIEWPORT);
+    let fake = &window.fake;
+    let mut instance = start(
+        fake,
+        long_screenshot(&[
+            PostCaptureAction::Annotate,
+            PostCaptureAction::CopyToClipboard,
+        ]),
+    );
+    feed(&mut instance, drag_region(fake, VIEWPORT));
+    feed(&mut instance, fake.click_text("开始"));
+    for offset in (0..=600).step_by(30) {
+        window.scroll_to(&mut instance, offset);
+    }
+    feed(&mut instance, fake.click_text("完成"));
+    let (view, _) = fake.overlay_canvas().expect("应显示长截屏");
+    let scale = 750.0 / f64::from(view.height);
+    let red = |p: [u8; 4]| p[0] > 200 && p[1] < 80 && p[2] < 80;
+    let (view_x, view_y) = (view.x, view.y);
+
+    // 在缩小的视图里画一个框（屏幕 4..20 × 4..30），再用“选择”抓住它的左边线向右下拖 (10,12)。
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(
+            Point::new(view_x + 4, view_y + 4),
+            Point::new(view_x + 20, view_y + 30),
+        ),
+    );
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.drag(
+            Point::new(view_x + 5, view_y + 17),
+            Point::new(view_x + 15, view_y + 29),
+        ),
+    );
+    // 画布上也移动了，并且以缩小的比例显示。
+    let (_, shown) = fake.overlay_canvas().unwrap();
+    assert!(
+        red(shown.pixel(15, 35)),
+        "缩小的视图里，框的左边线跟着拖到了新位置"
+    );
+    assert!(!red(shown.pixel(5, 17)), "原位置空了");
+
+    // 一次 Ctrl+Z 回到拖动前；再 Ctrl+Y 重做。
+    instance
+        .handle(fake.press_key_with(OverlayKey::Z, Modifiers::CTRL))
+        .unwrap();
+    let (_, shown) = fake.overlay_canvas().unwrap();
+    assert!(red(shown.pixel(5, 17)) && !red(shown.pixel(15, 35)));
+    instance
+        .handle(fake.press_key_with(OverlayKey::Y, Modifiers::CTRL))
+        .unwrap();
+
+    // 复制：原尺寸的长截屏上，框左边线整体移动了 (10,12) 个屏幕像素 = 乘缩小比例的像素。
+    feed(&mut instance, fake.click_text("复制"));
+    let copied = fake.clipboard().png_image().unwrap();
+    assert_eq!((copied.width(), copied.height()), (120, 750));
+    let at = |x: f64, y: f64| copied.pixel((x * scale) as u32, (y * scale) as u32);
+    assert!(red(at(15.5, 35.5)), "移动后的左边线");
+    assert!(!red(at(5.5, 17.5)), "原位置没有框");
+}
+
+#[test]
+fn deleting_the_selection_on_the_scaled_down_long_screenshot_restores_the_stitched_image() {
+    let doc = document(1000);
+    let window = desktop_with_window(doc.clone(), VIEWPORT);
+    let fake = &window.fake;
+    let mut instance = start(
+        fake,
+        long_screenshot(&[
+            PostCaptureAction::Annotate,
+            PostCaptureAction::CopyToClipboard,
+        ]),
+    );
+    feed(&mut instance, drag_region(fake, VIEWPORT));
+    feed(&mut instance, fake.click_text("开始"));
+    for offset in (0..=600).step_by(30) {
+        window.scroll_to(&mut instance, offset);
+    }
+    feed(&mut instance, fake.click_text("完成"));
+    let (view, _) = fake.overlay_canvas().unwrap();
+
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(
+            Point::new(view.x + 4, view.y + 4),
+            Point::new(view.x + 20, view.y + 30),
+        ),
+    );
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(view.x + 5, view.y + 17)),
+    );
+    instance.handle(fake.press_key(OverlayKey::Delete)).unwrap();
+    feed(&mut instance, fake.click_text("复制"));
+
+    let copied = fake.clipboard().png_image().unwrap();
+    assert_same(&copied, &rows(&doc, 0, 750));
 }
