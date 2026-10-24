@@ -147,6 +147,7 @@ pub fn video(bytes: &[u8]) -> FakeVideo {
     };
     let format = match take(4) {
         b"mp4\0" => VideoFormat::Mp4,
+        b"gif\0" => VideoFormat::Gif,
         other => panic!("未知的假视频格式 {other:?}"),
     };
     let mut u32_field = || u32::from_le_bytes(take(4).try_into().unwrap());

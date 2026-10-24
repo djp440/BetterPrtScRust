@@ -463,19 +463,78 @@ fn encoder_failure_is_reported_and_leaves_nothing_behind() {
     assert!(notifications[0].body.contains("没有可用的 H.264 编码器"));
 }
 
-#[test]
-fn gif_recording_is_refused_before_framing() {
-    let fake = single_display();
-    let mut instance = resident_with_record_binding(&fake, "output_format = \"gif\"");
-
-    let result = instance.handle(fake.press(ALT_PRINT_SCREEN).unwrap());
-
-    assert!(
-        matches!(result, Err(CoreError::UnsupportedRecordingFormat(_))),
-        "{result:?}"
+/// 输出格式为 GIF 的录屏绑定：框选 `region` 后录 `duration` 再停止，读回存下的视频。
+fn record_gif(fake: &FakePlatform, overrides: &str, region: Rect, duration: Duration) -> FakeVideo {
+    let mut instance = resident_with_record_binding(
+        fake,
+        &format!(
+            "output_format = \"gif\"
+{overrides}"
+        ),
     );
-    assert!(!fake.overlay_visible(), "不开遮罩");
-    assert_eq!(fake.notifications()[0].title, "暂不支持");
+    instance
+        .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
+        .unwrap();
+    feed(&mut instance, fake.select_region(region));
+    assert!(fake.capturing_video(), "确定区域后应开始录制");
+    record_for(fake, &mut instance, duration);
+    stop_and_read_video(fake, &mut instance)
+}
+
+#[test]
+fn gif_binding_records_gif_file_at_15_fps_by_default() {
+    let fake = single_display();
+    // 奇数宽高：GIF 没有 MP4 的偶数限制，不裁剪。
+    let region = Rect::new(20, 10, 41, 35);
+
+    let video = record_gif(&fake, "", region, Duration::from_secs(1));
+
+    let path = saved_recording(&fake, "2000-01-01 00-00-00.gif");
+    assert_eq!(fake.files(), [path], "只留下录好的 GIF，没有临时文件");
+    assert_eq!(video.format, VideoFormat::Gif);
+    assert_eq!((video.width, video.height), (41, 35));
+    assert_eq!(video.frame_rate, 15, "GIF 默认 15 fps");
+    assert_eq!(video.frames.len(), 15);
+    assert_eq!(video.frames[3].timestamp, Duration::from_millis(200));
+    let expected = draw_fake_cursor(
+        &desktop_pattern(region),
+        Point::new(region.x, region.y),
+        Point::new(30, 20),
+    );
+    assert!(video.frames.iter().all(|f| f.image == expected));
+    assert_eq!(fake.notifications()[0].title, "录屏已保存");
+}
+
+#[test]
+fn gif_accepts_regions_smaller_than_mp4_minimum() {
+    let fake = single_display();
+
+    let video = record_gif(
+        &fake,
+        "",
+        Rect::new(20, 10, 10, 8),
+        Duration::from_millis(400),
+    );
+
+    assert_eq!((video.width, video.height), (10, 8));
+    assert_eq!(video.frames.len(), 6);
+}
+
+#[test]
+fn frame_rate_binding_applies_to_gif() {
+    let fake = single_display();
+
+    let video = record_gif(
+        &fake,
+        "frame_rate = 5",
+        Rect::new(20, 10, 40, 36),
+        Duration::from_secs(1),
+    );
+
+    assert_eq!(video.format, VideoFormat::Gif);
+    assert_eq!(video.frame_rate, 5);
+    assert_eq!(video.frames.len(), 5);
+    assert_eq!(video.frames[1].timestamp, Duration::from_millis(200));
 }
 
 #[test]

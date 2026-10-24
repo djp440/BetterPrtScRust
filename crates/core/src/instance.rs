@@ -371,9 +371,9 @@ impl ResidentInstance {
         }
         let texts = self.texts();
         let title = match failure.error {
-            CoreError::UnsupportedCaptureMode(_)
-            | CoreError::UnsupportedAction(_)
-            | CoreError::UnsupportedRecordingFormat(_) => "notification-unsupported-title",
+            CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+                "notification-unsupported-title"
+            }
             CoreError::RecordingInProgress { .. } => "notification-recording-in-progress-title",
             _ => "notification-capture-failed-title",
         };
@@ -934,9 +934,9 @@ impl ResidentInstance {
 /// 命令执行失败时给请求发起方的回复，说明文字用 `texts` 的语言。
 fn reply_for_error(error: &CoreError, texts: &Texts) -> Reply {
     match error {
-        CoreError::UnsupportedCaptureMode(_)
-        | CoreError::UnsupportedAction(_)
-        | CoreError::UnsupportedRecordingFormat(_) => Reply::Unsupported(error.localized(texts)),
+        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+            Reply::Unsupported(error.localized(texts))
+        }
         _ => Reply::Failed(error.localized(texts)),
     }
 }

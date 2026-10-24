@@ -43,7 +43,7 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   actions  按顺序执行的截后动作：copy_to_clipboard（复制到剪贴板）、auto_save（自动存储）、
 #            annotate（标注）、record（录屏）、long_screenshot（长截屏）、ocr（OCR）、translate（翻译）
 # 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif）、
-#   frame_rate（录屏帧率）、show_cursor（录屏时是否显示鼠标指针：true / false）
+#   frame_rate（录屏帧率，MP4 默认 30、GIF 默认 15）、show_cursor（录屏时是否显示鼠标指针：true / false）
 
 [[bindings]]
 hotkey = "PrintScreen"

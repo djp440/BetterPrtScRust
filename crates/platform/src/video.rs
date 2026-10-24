@@ -68,6 +68,8 @@ pub trait VideoFrame {
 pub enum VideoFormat {
     /// H.264 视频的 MP4 文件，只有画面、没有声音。
     Mp4,
+    /// GIF 动图，纯 CPU 编码；每帧最多 256 色，没有声音。
+    Gif,
 }
 
 /// 一段视频的编码参数。

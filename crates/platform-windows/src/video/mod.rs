@@ -5,6 +5,7 @@
 //! 设备只在录屏期间存在：视频流和编码器都释放后，设备随之释放，常驻进程不长期占用显存。
 
 mod capture;
+mod gif;
 mod mp4;
 
 use std::any::Any;
@@ -60,7 +61,7 @@ impl VideoSource for WgcVideoSource {
     }
 }
 
-/// 录屏的编码器：Media Foundation Sink Writer，MP4 里是 H.264 视频（优先硬件编码）。
+/// 录屏的编码器：Media Foundation Sink Writer，MP4 里是 H.264 视频（优先硬件编码）；GIF 由纯 Rust 编码器在 CPU 上编码。
 #[derive(Debug, Default)]
 pub struct MfVideoEncoder;
 
@@ -82,6 +83,7 @@ impl VideoEncoder for MfVideoEncoder {
                 path,
                 settings,
             )?)),
+            VideoFormat::Gif => Ok(Box::new(gif::GifWriter::start(path, settings)?)),
         }
     }
 }
