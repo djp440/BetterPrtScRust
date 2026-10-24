@@ -19,16 +19,16 @@ fn unimplemented_capture_mode_is_reported_without_producing_anything() {
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
     let result = instance.execute(Command::Capture(CaptureRequest::new(
-        CaptureMode::Region,
+        CaptureMode::Window,
         vec![PostCaptureAction::CopyToClipboard],
     )));
 
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedCaptureMode(CaptureMode::Region))
+        Err(CoreError::UnsupportedCaptureMode(CaptureMode::Window))
     );
     assert!(fake.clipboard().is_empty());
-    assert_eq!(result.unwrap_err().to_string(), "暂不支持“区域”捕获模式");
+    assert_eq!(result.unwrap_err().to_string(), "暂不支持“窗口”捕获模式");
 }
 
 #[test]
@@ -61,14 +61,16 @@ fn pressing_unimplemented_default_binding_notifies_unsupported_and_keeps_running
         .expect("默认绑定应注册 PrtSc");
     let result = instance.handle(print_screen);
 
+    // 默认的 PrtSc 是“区域 + 标注”：标注还没实现，在打开选区遮罩之前就整体拒绝。
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedCaptureMode(CaptureMode::Region))
+        Err(CoreError::UnsupportedAction(PostCaptureAction::Annotate))
     );
     let notifications = fake.notifications();
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert_eq!(notifications[0].title, "暂不支持");
-    assert_eq!(notifications[0].body, "暂不支持“区域”捕获模式");
+    assert_eq!(notifications[0].body, "暂不支持“标注”截后动作");
+    assert!(!fake.overlay_visible(), "不应打开选区遮罩");
     assert!(fake.clipboard().is_empty());
     assert_eq!(
         instance.handle(bps_platform::PlatformEvent::ExitRequested),

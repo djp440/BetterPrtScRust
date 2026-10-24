@@ -11,6 +11,7 @@
 //! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
+//! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
 //! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
 //!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
@@ -33,6 +34,7 @@ mod file_system;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod overlay;
 mod pipe;
 mod pixels;
 mod registry;
@@ -48,6 +50,7 @@ pub use file_system::WindowsFileSystem;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use notifier::TrayNotifier;
+pub use overlay::D2dSelectionOverlay;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 pub use screenshot_tool::WindowsScreenshotTool;
 pub use token::{
@@ -72,5 +75,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf) -> Platform {
         autostart: Box::new(WindowsAutostart::new()),
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
+        overlay: Box::new(event_loop.selection_overlay()),
     }
 }

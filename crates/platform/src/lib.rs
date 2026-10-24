@@ -20,6 +20,7 @@ mod geometry;
 mod hotkey;
 mod image;
 mod notifier;
+mod overlay;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
@@ -36,6 +37,10 @@ pub use geometry::{Point, Rect};
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError};
 pub use image::Image;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use overlay::{
+    Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
+    OverlayScene, PointerButton, SelectionOverlay,
+};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
@@ -64,4 +69,6 @@ pub struct Platform {
     pub elevation: Box<dyn Elevation>,
     /// 系统自带截图工具对 PrtSc 键的占用（只读）；设置变化经平台事件循环以 [`PlatformEvent`] 递交。
     pub system_screenshot_tool: Box<dyn SystemScreenshotTool>,
+    /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
+    pub overlay: Box<dyn SelectionOverlay>,
 }

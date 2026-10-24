@@ -3,7 +3,8 @@
 //! 热键（`WM_HOTKEY`）、托盘菜单、关闭请求、配置文件变更都转换成 [`PlatformEvent`]
 //! 放进队列，由 [`EventLoop::run`] 在窗口过程之外逐个交给处理函数，
 //! 因此处理函数里执行耗时的捕获不会重入窗口过程。
-//! 其他线程（命名管道等）经 [`EventSender`] 投递事件，同样进入这个队列。
+//! 其他线程（命名管道等）经 [`EventSender`] 投递事件，同样进入这个队列；
+//! 同一线程上的选区遮罩窗口把用户输入直接放进这个队列（[`EventQueue`]）。
 //!
 //! 配置文件和 PrtSc 键系统设置的监视不另开线程：循环用 `MsgWaitForMultipleObjectsEx` 同时等待
 //! 消息、目录变更通知句柄和注册表变更事件，有变化后用定时器合并短时间内的多次变化，再递交事件。
@@ -46,7 +47,9 @@ use crate::config_file::ChangeNotification;
 use crate::error::win_error;
 use crate::notifier::{PendingClick, open_click_target};
 use crate::registry::RegistryWatch;
-use crate::{TrayNotifier, WindowsConfigFile, WindowsHotkeys, WindowsScreenshotTool};
+use crate::{
+    D2dSelectionOverlay, TrayNotifier, WindowsConfigFile, WindowsHotkeys, WindowsScreenshotTool,
+};
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
@@ -72,7 +75,7 @@ pub struct EventLoop {
 }
 
 struct WindowState {
-    events: RefCell<VecDeque<PlatformEvent>>,
+    events: EventQueue,
     /// 其他线程投递的事件，收到 `WM_SENT_EVENT` 时移进 `events`。
     sent: mpsc::Receiver<PlatformEvent>,
     tray: RefCell<Option<TrayIcon>>,
@@ -111,13 +114,34 @@ impl EventSender {
     }
 }
 
+/// 待处理事件的队列，只在事件循环所在的线程上使用。
+#[derive(Clone, Default)]
+pub(crate) struct EventQueue(Rc<RefCell<VecDeque<PlatformEvent>>>);
+
+impl EventQueue {
+    pub(crate) fn push_back(&self, event: PlatformEvent) {
+        self.0.borrow_mut().push_back(event);
+    }
+
+    fn pop_front(&self) -> Option<PlatformEvent> {
+        self.0.borrow_mut().pop_front()
+    }
+
+    /// 丢掉还没递交的遮罩输入：遮罩关闭后它们已经没有意义。
+    pub(crate) fn discard_overlay_input(&self) {
+        self.0
+            .borrow_mut()
+            .retain(|event| !matches!(event, PlatformEvent::OverlayInput(_)));
+    }
+}
+
 impl WindowState {
     fn push(&self, event: PlatformEvent) {
-        self.events.borrow_mut().push_back(event);
+        self.events.push_back(event);
     }
 
     fn pop(&self) -> Option<PlatformEvent> {
-        self.events.borrow_mut().pop_front()
+        self.events.pop_front()
     }
 }
 
@@ -153,7 +177,7 @@ impl EventLoop {
             .map_err(|e| win_error("创建隐藏窗口失败", e))?;
             let (sender, sent) = mpsc::channel();
             let state = Box::new(WindowState {
-                events: RefCell::new(VecDeque::new()),
+                events: EventQueue::default(),
                 sent,
                 tray: RefCell::new(None),
                 balloon_click: PendingClick::default(),
@@ -210,6 +234,13 @@ impl EventLoop {
     /// [`PlatformEvent::PrintScreenKeySettingChanged`]。
     pub fn system_screenshot_tool(&self) -> WindowsScreenshotTool {
         WindowsScreenshotTool::new(self.state.shared.clone())
+    }
+
+    /// 选区遮罩；用户在遮罩上的输入由本循环以 [`PlatformEvent::OverlayInput`] 递交。
+    ///
+    /// 遮罩窗口和 D3D11 / Direct2D 设备在这里就建好并预热（约几百毫秒），之后每次打开遮罩不再新建。
+    pub fn selection_overlay(&self) -> D2dSelectionOverlay {
+        D2dSelectionOverlay::new(self.state.events.clone())
     }
 
     pub(crate) fn hwnd(&self) -> HWND {

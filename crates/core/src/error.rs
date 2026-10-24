@@ -22,6 +22,8 @@ pub enum CoreError {
     UnsupportedAction(PostCaptureAction),
     /// 转交来的请求无法识别（例如 `bps` 与常驻实例的版本不一致），附带原始请求文本。
     InvalidRequest(String),
+    /// 上一次捕获还没有结束（例如选区遮罩还开着），这次捕获被拒绝。
+    CaptureInProgress,
 }
 
 impl fmt::Display for CoreError {
@@ -43,6 +45,7 @@ impl fmt::Display for CoreError {
                 f,
                 "常驻实例无法识别请求“{message}”，请确认 bps 与 BetterPrtSc 的版本一致"
             ),
+            CoreError::CaptureInProgress => f.write_str("上一次捕获还没有结束"),
         }
     }
 }
