@@ -21,8 +21,13 @@
 //!
 //! 区域捕获要等用户在选区遮罩（`bps_platform::SelectionOverlay`）上框选：命令打开遮罩后即返回，
 //! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
+//!
+//! 截后动作包含标注时，框好区域后旁边浮现标注工具条，用户在遮罩上画标注，最后选择复制到
+//! 剪贴板、自动存储或另存为结束捕获。标注文档模型 [`AnnotationDocument`] 把标注列表合成为
+//! 最终截图；遮罩上显示的也是它合成的像素（遮罩的画布），屏幕上看到的就是最终产物。
 
 mod action;
+mod annotation;
 mod autostart;
 mod binding;
 mod capture;
@@ -45,6 +50,7 @@ mod status;
 mod stitch;
 mod update;
 
+pub use annotation::{Annotation, AnnotationDocument, Stroke};
 pub use autostart::remove_autostart;
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
 pub use cli::{CliOutcome, CliStatus, run_cli};

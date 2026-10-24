@@ -50,6 +50,18 @@ use crate::event_loop::EventQueue;
 /// 遮罩窗口的类名。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.SelectionOverlay");
 
+thread_local! {
+    /// 本线程上正显示着的遮罩窗口，供文件对话框作为所有者窗口（对话框因此显示在遮罩之上）。
+    static VISIBLE: Cell<Option<isize>> = const { Cell::new(None) };
+}
+
+/// 本线程上正显示着的遮罩窗口。
+pub(crate) fn visible_overlay_window() -> Option<HWND> {
+    VISIBLE
+        .with(Cell::get)
+        .map(|hwnd| HWND(hwnd as *mut c_void))
+}
+
 /// 窗口过程与 [`OverlayWindow`] 共享的状态；窗口过程会被同步重入，所以只用 `Cell`。
 struct Shared {
     queue: EventQueue,
@@ -209,6 +221,7 @@ impl OverlayWindow {
         unsafe {
             let _ = DwmFlush();
             self.shared.active.set(true);
+            VISIBLE.with(|v| v.set(Some(self.hwnd.0 as isize)));
             cloak(self.hwnd, false);
             let _ = SetForegroundWindow(self.hwnd);
             let _ = SetFocus(Some(self.hwnd));
@@ -219,6 +232,7 @@ impl OverlayWindow {
     /// 隐藏窗口（不销毁），停止递交输入。
     pub fn hide(&self) {
         self.shared.active.set(false);
+        VISIBLE.with(|v| v.set(None));
         unsafe {
             if GetCapture() == self.hwnd {
                 let _ = ReleaseCapture();
@@ -231,6 +245,9 @@ impl OverlayWindow {
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
+        if visible_overlay_window() == Some(self.hwnd) {
+            VISIBLE.with(|v| v.set(None));
+        }
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             let _ = DestroyWindow(self.hwnd);

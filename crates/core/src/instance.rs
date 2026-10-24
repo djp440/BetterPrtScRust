@@ -50,7 +50,7 @@ pub struct ResidentInstance {
     update: UpdateStatus,
     /// 本次运行中已经提示过的新版本，同一个版本只提示一次。
     announced_version: Option<String>,
-    /// 进行中的区域捕获。
+    /// 进行中的区域捕获（以及其他要在选区遮罩上标注的捕获）。
     region_capture: Option<RegionCapture>,
 }
 
@@ -431,8 +431,11 @@ impl ResidentInstance {
             });
         }
         ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
+        // 要标注的捕获不论什么模式都在选区遮罩上进行。
         let texts = self.texts();
-        if request.mode == CaptureMode::Region {
+        if request.mode == CaptureMode::Region
+            || request.actions.contains(&PostCaptureAction::Annotate)
+        {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.region_capture = Some(capture);

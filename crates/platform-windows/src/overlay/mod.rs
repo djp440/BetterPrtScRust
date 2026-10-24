@@ -17,8 +17,11 @@ use bps_platform::{
 };
 
 use crate::event_loop::EventQueue;
+use draw::Canvas;
 use gpu::{FrozenDisplay, Gpu};
 use window::OverlayWindow;
+
+pub(crate) use window::visible_overlay_window;
 
 /// 选区遮罩。由 [`crate::EventLoop::selection_overlay`] 创建，必须在事件循环的线程上使用。
 pub struct D2dSelectionOverlay {
@@ -38,6 +41,7 @@ struct Resources {
 /// 一次打开期间的状态。
 struct Session {
     frozen: Vec<FrozenDisplay>,
+    canvas: Option<Canvas>,
     /// 已经显示出来了（第一次 `render` 之后）。
     shown: bool,
 }
@@ -50,10 +54,22 @@ impl Resources {
     }
 
     /// 画一帧并呈现。
-    fn draw(&self, frozen: &[FrozenDisplay], scene: &OverlayScene) -> Result<(), PlatformError> {
+    fn draw(
+        &self,
+        frozen: &[FrozenDisplay],
+        canvas: Option<&Canvas>,
+        scene: &OverlayScene,
+    ) -> Result<(), PlatformError> {
         let bounds = self.window.bounds();
         let origin = Point::new(bounds.x, bounds.y);
-        draw::draw(&self.gpu, &self.window.target, origin, frozen, scene)?;
+        draw::draw(
+            &self.gpu,
+            &self.window.target,
+            origin,
+            frozen,
+            canvas,
+            scene,
+        )?;
         self.window.present()
     }
 }
@@ -78,8 +94,8 @@ impl D2dSelectionOverlay {
         let frozen = resources.gpu.freeze()?;
         let warm_up = warm_up_scene(&frozen);
         let drawn = resources
-            .draw(&frozen, &OverlayScene::default())
-            .and_then(|()| resources.draw(&frozen, &warm_up));
+            .draw(&frozen, None, &OverlayScene::default())
+            .and_then(|()| resources.draw(&frozen, None, &warm_up));
         drop(frozen);
         resources.gpu.release_frames();
         drawn?;
@@ -126,6 +142,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
         let displays = frozen.iter().map(|f| f.display.clone()).collect();
         self.session = Some(Session {
             frozen,
+            canvas: None,
             shown: false,
         });
         Ok(displays)
@@ -142,7 +159,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
             if !session.shown {
                 window.place_cloaked()?;
             }
-            resources.draw(&session.frozen, scene)
+            resources.draw(&session.frozen, session.canvas.as_ref(), scene)
         })();
         if let Err(e) = result {
             self.broken = true;
@@ -166,6 +183,40 @@ impl SelectionOverlay for D2dSelectionOverlay {
             .find(|f| f.display.id == display)
             .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))?;
         resources.gpu.read_back(frozen)
+    }
+
+    fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError> {
+        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_mut())
+        else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        if (image.width(), image.height()) != (area.width, area.height) {
+            return Err(PlatformError::new("画布内容的尺寸与画布范围不一致"));
+        }
+        session.canvas = None;
+        let bitmap = resources.gpu.create_canvas(image)?;
+        session.canvas = Some(Canvas { area, bitmap });
+        Ok(())
+    }
+
+    fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError> {
+        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
+        else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        let canvas = session
+            .canvas
+            .as_ref()
+            .ok_or_else(|| PlatformError::new("还没有画布"))?;
+        let target = Rect::new(at.x, at.y, patch.width(), patch.height());
+        if canvas.area.intersection(target) != Some(target) {
+            return Err(PlatformError::new("画布更新超出了画布范围"));
+        }
+        let left = (at.x - canvas.area.x) as u32;
+        let top = (at.y - canvas.area.y) as u32;
+        resources
+            .gpu
+            .update_canvas(&canvas.bitmap, left, top, patch)
     }
 
     fn close(&mut self) {

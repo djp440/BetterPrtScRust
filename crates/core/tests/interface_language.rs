@@ -1,4 +1,4 @@
-//! 界面语言：默认跟随系统，可在配置里指定；切换后常驻实例里的文本（托盘菜单、通知、选区遮罩上的提示）
+//! 界面语言：默认跟随系统，可在配置里指定；切换后常驻实例里的文本（托盘菜单、通知、选区遮罩上的提示、标注工具条）
 //! 随之更新。
 
 use bps_core::{
@@ -198,4 +198,42 @@ fn selection_overlay_hint_follows_the_interface_language() {
             "Enter or double-click the selection: done   Esc: cancel"
         ]
     );
+}
+
+#[test]
+fn annotation_toolbar_follows_the_interface_language() {
+    let fake = FakePlatform::new()
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 400, 300)).primary())
+        .with_system_languages(&["zh-CN"])
+        .with_config_file(&with_language("en"));
+    let mut instance = ResidentInstance::start(fake.platform());
+
+    instance
+        .execute(Command::Capture(CaptureRequest::new(
+            CaptureMode::Region,
+            vec![PostCaptureAction::Annotate],
+        )))
+        .unwrap();
+    for event in fake.drag(Point::new(20, 40), Point::new(119, 89)) {
+        instance.handle(event).unwrap();
+    }
+
+    let scene = fake.overlay_scene().unwrap();
+    for text in [
+        "Rectangle",
+        "Arrow",
+        "Cancel",
+        "Save as",
+        "Auto-save",
+        "Copy",
+    ] {
+        assert!(scene.text_rect(text).is_some(), "工具条上应有“{text}”");
+    }
+    assert!(scene.text_rect("复制").is_none());
+    for event in fake.click_text("Copy") {
+        instance.handle(event).unwrap();
+    }
+    assert!(!fake.overlay_visible());
+    let image = fake.clipboard().png_image().expect("应复制了截图");
+    assert_eq!((image.width(), image.height()), (100, 50));
 }

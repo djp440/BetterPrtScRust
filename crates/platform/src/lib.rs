@@ -14,6 +14,7 @@ mod clock;
 mod config_file;
 mod error;
 mod event;
+mod file_dialog;
 mod file_system;
 mod frame_source;
 mod geometry;
@@ -35,6 +36,7 @@ pub use clock::{Clock, LocalDateTime};
 pub use config_file::ConfigFile;
 pub use error::PlatformError;
 pub use event::PlatformEvent;
+pub use file_dialog::{FileDialog, FileType, SaveAsOptions};
 pub use file_system::{FileSystem, NewFile};
 pub use frame_source::{Display, DisplayId, FrameSource};
 pub use geometry::{Point, Rect};
@@ -89,4 +91,6 @@ pub struct Platform {
     pub updates: Box<dyn UpdateService>,
     /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
     pub overlay: Box<dyn SelectionOverlay>,
+    /// 文件对话框（另存为）。
+    pub file_dialog: Box<dyn FileDialog>,
 }

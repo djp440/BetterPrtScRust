@@ -159,3 +159,14 @@ settings-cancel = 取消
 
 ## 选区遮罩
 overlay-selected-hint = Enter 或双击选区：完成　Esc：取消
+
+## 标注
+
+annotation-rectangle = 矩形
+annotation-arrow = 箭头
+annotation-cancel = 取消
+annotation-save-as = 另存为
+annotation-auto-save = 自动存储
+annotation-copy = 复制
+save-as-file-type = { $format } 图像
+notification-save-as-failed-title = 另存为失败
