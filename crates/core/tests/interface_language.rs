@@ -141,3 +141,24 @@ fn language_names_in_config_round_trip() {
     assert_eq!("zh-cn".parse::<Language>(), Ok(Language::ZhCn));
     assert!("fr".parse::<Language>().is_err());
 }
+
+#[test]
+fn print_screen_and_administrator_notices_follow_the_interface_language() {
+    let fake = FakePlatform::new()
+        .with_print_screen_key_taken_by_system_screenshot_tool()
+        .with_administrator_restart_declined()
+        .with_config_file(
+            "language = \"en\"\nrun_as_admin = true\n\n[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nactions = [\"copy_to_clipboard\"]\n",
+        );
+
+    let _instance = ResidentInstance::start(fake.platform());
+
+    let titles: Vec<String> = fake.notifications().into_iter().map(|n| n.title).collect();
+    assert_eq!(
+        titles,
+        [
+            "Could not run as administrator",
+            "The PrtSc key is taken by the Windows screenshot tool",
+        ]
+    );
+}

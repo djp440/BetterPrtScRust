@@ -18,7 +18,9 @@ fn reports_the_preferred_interface_languages() {
 
     assert!(!languages.is_empty());
     assert!(
-        languages.iter().all(|tag| tag.contains('-') || tag.len() == 2),
+        languages
+            .iter()
+            .all(|tag| tag.contains('-') || tag.len() == 2),
         "{languages:?}"
     );
 }
@@ -39,7 +41,10 @@ fn maps_the_interface_fonts_read_only() {
 fn tells_whether_standard_users_can_write_a_folder() {
     assert_eq!(standard_user_can_write(&std::env::temp_dir()), Some(true));
     let windows = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| r"C:\Windows".into()));
-    assert_eq!(standard_user_can_write(&windows.join("System32")), Some(false));
+    assert_eq!(
+        standard_user_can_write(&windows.join("System32")),
+        Some(false)
+    );
     assert_eq!(
         standard_user_can_write(&windows.join("System32").join("notepad.exe")),
         Some(false)

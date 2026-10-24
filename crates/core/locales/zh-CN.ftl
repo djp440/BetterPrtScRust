@@ -28,6 +28,18 @@ notification-settings-unavailable-title = 无法打开设置界面
 notification-update-available-title = 发现新版本 { $version }
 notification-update-available-body = 当前版本 { $current }。点击打开发布页面，自行下载。
 update-unrecognized-version = 无法识别 GitHub Releases 上的版本号“{ $version }”
+notification-prtsc-taken-title = PrtSc 键被系统截图工具占用
+notification-prtsc-taken-body = 点击打开系统设置，关闭“使用 Print Screen 键打开屏幕截图”后，BetterPrtSc 会立即接管 PrtSc 键，无需重启。
+notification-prtsc-available-title = PrtSc 键已可用
+notification-prtsc-available-body = 系统截图工具不再占用 PrtSc 键，相应的热键绑定已生效。
+notification-not-elevated-title = 未能以管理员身份运行
+notification-not-elevated-body = { $reason }。本次以普通权限运行：管理员权限的窗口在前台时，热键不会生效。
+not-elevated-after-restart = 以管理员身份重新启动后仍然没有管理员权限
+notification-autostart-unreadable-title = 无法读取开机自启状态
+notification-autostart-enabled-portable-title = 已开启开机自启
+notification-autostart-enabled-portable-body = 便携模式下，开机自启指向当前位置的程序：移动程序目录后需要重新开启（从新位置启动一次 BetterPrtSc 即可）。
+notification-autostart-enable-failed-title = 无法开启开机自启
+notification-autostart-disable-failed-title = 无法关闭开机自启
 
 ## 捕获模式与截后动作
 
@@ -57,6 +69,7 @@ error-invalid-request = 常驻实例无法识别请求“{ $request }”，请�
 
 registration-duplicate = 与第 { $index } 条热键绑定的热键重复
 registration-taken = 已被其他程序占用
+registration-taken-by-system-screenshot-tool = 已被系统截图工具占用（可在系统设置里关闭）
 
 ## 配置文件与设置的错误
 

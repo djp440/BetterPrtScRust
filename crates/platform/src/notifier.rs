@@ -18,6 +18,9 @@ pub enum NotificationClick {
     OpenFolder(PathBuf),
     /// 用默认浏览器打开这个网址（例如新版本的发布页面）。
     OpenUrl(String),
+    /// 打开系统设置中控制“PrtSc 键交给系统截图工具”的页面
+    /// （Windows：“键盘”设置页里的“使用 Print Screen 键打开屏幕截图”）。
+    OpenPrintScreenKeySettings,
 }
 
 /// 通知能力（Windows 上是托盘气泡）。

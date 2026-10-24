@@ -163,3 +163,24 @@ fn system_error_text_with_tabs_and_line_breaks_survives_the_channel() {
         UpdateStatus::Failed("无法连接 GitHub".to_owned())
     );
 }
+
+#[test]
+fn print_screen_taken_by_the_system_screenshot_tool_is_reported_as_such() {
+    let fake = FakePlatform::new()
+        .with_print_screen_key_taken_by_system_screenshot_tool()
+        .with_config_file(
+            "[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nactions = [\"copy_to_clipboard\"]\n",
+        );
+    let instance = ResidentInstance::start(fake.platform());
+
+    let (status, _) = query_status(instance);
+
+    assert_eq!(
+        status.registration_failures,
+        [BindingFailure {
+            index: 0,
+            hotkey: Hotkey::new(Modifiers::NONE, Key::PrintScreen),
+            error: RegistrationError::TakenBySystemScreenshotTool,
+        }]
+    );
+}

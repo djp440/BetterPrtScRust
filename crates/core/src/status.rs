@@ -3,6 +3,7 @@
 //!
 //! 回复的文本形式：第一行 `status`，之后每行一项，字段用制表符分隔：
 //! - `failure <下标> <热键> taken`
+//! - `failure <下标> <热键> system-screenshot-tool`
 //! - `failure <下标> <热键> duplicate <与之重复的下标>`
 //! - `failure <下标> <热键> platform <系统给出的说明>`
 //! - `update disabled` / `update checking` / `update up-to-date`
@@ -62,6 +63,9 @@ impl ResidentStatus {
         for failure in &self.registration_failures {
             let reason = match &failure.error {
                 RegistrationError::TakenByOtherProgram => "taken".to_owned(),
+                RegistrationError::TakenBySystemScreenshotTool => {
+                    "system-screenshot-tool".to_owned()
+                }
                 RegistrationError::DuplicateOf(first) => format!("duplicate\t{first}"),
                 RegistrationError::Platform(e) => format!("platform\t{}", one_field(e.message())),
             };
@@ -100,6 +104,9 @@ impl ResidentStatus {
                     };
                     let error = match reason {
                         ["taken"] => RegistrationError::TakenByOtherProgram,
+                        ["system-screenshot-tool"] => {
+                            RegistrationError::TakenBySystemScreenshotTool
+                        }
                         ["duplicate", first] => match first.parse() {
                             Ok(first) => RegistrationError::DuplicateOf(first),
                             Err(_) => continue,

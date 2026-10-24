@@ -34,6 +34,9 @@ pub enum RegistrationError {
     TakenByOtherProgram,
     /// 系统因其他原因拒绝注册。
     Platform(PlatformError),
+    /// 系统设置把 PrtSc 键交给了系统自带的截图工具（只影响不带修饰键的 PrtSc）。
+    /// 用户在系统设置里关闭后会自动重新注册。
+    TakenBySystemScreenshotTool,
 }
 
 impl RegistrationError {
@@ -44,6 +47,9 @@ impl RegistrationError {
                 texts.format("registration-duplicate", &[("index", &(index + 1))])
             }
             RegistrationError::TakenByOtherProgram => texts.get("registration-taken"),
+            RegistrationError::TakenBySystemScreenshotTool => {
+                texts.get("registration-taken-by-system-screenshot-tool")
+            }
             RegistrationError::Platform(e) => e.to_string(),
         }
     }

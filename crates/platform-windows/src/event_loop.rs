@@ -6,8 +6,8 @@
 //! 因此处理函数里执行耗时的捕获不会重入窗口过程。
 //! 其他线程（命名管道等）经 [`EventSender`] 投递事件，同样进入这个队列。
 //!
-//! 配置文件的监视不另开线程：循环用 `MsgWaitForMultipleObjectsEx` 同时等待消息和
-//! 目录变更通知句柄，目录有变化后用定时器合并短时间内的多次变化，再递交事件。
+//! 配置文件和 PrtSc 键系统设置的监视不另开线程：循环用 `MsgWaitForMultipleObjectsEx` 同时等待
+//! 消息、目录变更通知句柄和注册表变更事件，有变化后用定时器合并短时间内的多次变化，再递交事件。
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -48,7 +48,8 @@ use windows::core::{HSTRING, PCWSTR, w};
 use crate::config_file::ChangeNotification;
 use crate::error::win_error;
 use crate::notifier::{PendingClick, open_click_target};
-use crate::{TrayNotifier, WindowsConfigFile, WindowsHotkeys};
+use crate::registry::RegistryWatch;
+use crate::{TrayNotifier, WindowsConfigFile, WindowsHotkeys, WindowsScreenshotTool};
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
@@ -60,6 +61,9 @@ pub(crate) const TRAY_ICON_ID: u32 = 1;
 /// 配置文件所在目录变化后，等这么久没有新的变化才递交事件。
 const CONFIG_SETTLE_TIMER: usize = 1;
 const CONFIG_SETTLE_DELAY_MS: u32 = 300;
+/// PrtSc 键的系统设置变化后，等这么久再递交事件：给系统留出释放 PrtSc 热键的时间。
+const KEYBOARD_SETTLE_TIMER: usize = 2;
+const KEYBOARD_SETTLE_DELAY_MS: u32 = 1000;
 
 /// 常驻实例的消息循环。一个线程只应创建一个。
 pub struct EventLoop {
@@ -97,11 +101,13 @@ impl TrayMenu for WindowsTrayMenu {
     }
 }
 
-/// 事件循环与它创建的配置文件对象共享的状态。
+/// 事件循环与它创建的配置文件、系统截图工具对象共享的状态。
 #[derive(Default)]
 pub(crate) struct Shared {
     /// 配置文件所在目录的变更通知。
     pub config_watch: RefCell<Option<ChangeNotification>>,
+    /// PrtSc 键系统设置所在注册表键的变更通知。
+    pub keyboard_watch: RefCell<Option<RegistryWatch>>,
 }
 
 /// 从其他线程向 [`EventLoop`] 投递事件的句柄，可以克隆、跨线程传递。
@@ -226,6 +232,12 @@ impl EventLoop {
         WindowsConfigFile::new(path, self.state.shared.clone())
     }
 
+    /// 系统截图工具对 PrtSc 键的占用；开始监视后，本循环递交
+    /// [`PlatformEvent::PrintScreenKeySettingChanged`]。
+    pub fn system_screenshot_tool(&self) -> WindowsScreenshotTool {
+        WindowsScreenshotTool::new(self.state.shared.clone())
+    }
+
     pub(crate) fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -258,16 +270,14 @@ impl EventLoop {
         }
     }
 
-    /// 等到有消息或配置目录变化（或超时），然后处理掉它们；收到 `WM_QUIT` 时返回 `false`。
+    /// 等到有消息、配置目录或 PrtSc 键系统设置变化（或超时），然后处理掉它们；
+    /// 收到 `WM_QUIT` 时返回 `false`。
     fn pump(&self, timeout: Option<Duration>) -> bool {
-        let watch: Option<HANDLE> = self
-            .state
-            .shared
-            .config_watch
-            .borrow()
-            .as_ref()
-            .map(|w| w.0);
-        let handles: Vec<HANDLE> = watch.into_iter().collect();
+        let shared = &self.state.shared;
+        let config_watch: Option<HANDLE> = shared.config_watch.borrow().as_ref().map(|w| w.0);
+        let keyboard_watch: Option<HANDLE> =
+            shared.keyboard_watch.borrow().as_ref().map(|w| w.handle());
+        let handles: Vec<HANDLE> = config_watch.into_iter().chain(keyboard_watch).collect();
         // INFINITE 是 u32::MAX；有限的等待时间不能恰好等于它。
         let millis = timeout.map_or(u32::MAX, |t| {
             t.as_millis().min(u128::from(u32::MAX - 1)) as u32
@@ -275,8 +285,12 @@ impl EventLoop {
         let woken = unsafe {
             MsgWaitForMultipleObjectsEx(Some(&handles), millis, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
         };
-        if let Some(handle) = watch
-            && woken == WAIT_OBJECT_0
+        let signaled = woken
+            .0
+            .checked_sub(WAIT_OBJECT_0.0)
+            .and_then(|i| handles.get(i as usize).copied());
+        if let Some(handle) = signaled
+            && signaled == config_watch
         {
             // 重新布防，再用定时器合并编辑器保存时的连续多次变化。
             let _ = unsafe { FindNextChangeNotification(handle) };
@@ -285,6 +299,20 @@ impl EventLoop {
                     Some(self.hwnd),
                     CONFIG_SETTLE_TIMER,
                     CONFIG_SETTLE_DELAY_MS,
+                    None,
+                )
+            };
+        } else if signaled.is_some() && signaled == keyboard_watch {
+            if let Some(watch) = shared.keyboard_watch.borrow().as_ref()
+                && watch.rearm().is_err()
+            {
+                eprintln!("重新监视 PrtSc 键的系统设置失败");
+            }
+            unsafe {
+                SetTimer(
+                    Some(self.hwnd),
+                    KEYBOARD_SETTLE_TIMER,
+                    KEYBOARD_SETTLE_DELAY_MS,
                     None,
                 )
             };
@@ -349,6 +377,11 @@ unsafe extern "system" fn window_proc(
             WM_TIMER if wparam.0 == CONFIG_SETTLE_TIMER => {
                 let _ = unsafe { KillTimer(Some(hwnd), CONFIG_SETTLE_TIMER) };
                 state.push(PlatformEvent::ConfigFileChanged);
+                return LRESULT(0);
+            }
+            WM_TIMER if wparam.0 == KEYBOARD_SETTLE_TIMER => {
+                let _ = unsafe { KillTimer(Some(hwnd), KEYBOARD_SETTLE_TIMER) };
+                state.push(PlatformEvent::PrintScreenKeySettingChanged);
                 return LRESULT(0);
             }
             WM_CLOSE => {

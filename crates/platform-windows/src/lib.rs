@@ -7,6 +7,10 @@
 //! - [`TrayNotifier`]：托盘气泡通知，点击后由 [`EventLoop`] 打开文件或文件夹
 //! - [`WindowsClock`]：本地时间
 //! - [`WindowsConfigFile`]：配置文件读写，所在目录变化时由 [`EventLoop`] 递交 `PlatformEvent`
+//! - [`WindowsAutostart`]：开机自启（`HKCU\...\Run` 项，或以最高权限运行的计划任务）
+//! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
+//! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
+//!   [`EventLoop`] 递交 `PlatformEvent`
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
 //! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面
@@ -23,6 +27,7 @@
 //! `cargo test -p bps-platform-windows -- --ignored`。
 #![cfg(windows)]
 
+mod autostart;
 mod child_windows;
 mod clipboard;
 mod clock;
@@ -39,9 +44,13 @@ mod language;
 mod notifier;
 mod pipe;
 mod pixels;
+mod registry;
+mod screenshot_tool;
 mod shell;
+mod token;
 mod update;
 
+pub use autostart::WindowsAutostart;
 pub use child_windows::{ChildProcessWindows, window_argument};
 pub use clipboard::WindowsClipboard;
 pub use clock::WindowsClock;
@@ -54,9 +63,14 @@ pub use hotkeys::WindowsHotkeys;
 pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
+pub use screenshot_tool::WindowsScreenshotTool;
 pub use shell::{
     allow_any_process_to_set_foreground, open_with_default_program, pick_folder,
     standard_user_can_write,
+};
+pub use token::{
+    RESTARTED_AS_ADMINISTRATOR_ARG, WindowsElevation, is_elevated,
+    run_self_as_administrator_and_wait,
 };
 pub use update::{GitHubReleases, latest_release};
 
@@ -79,5 +93,8 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         windows: Box::new(ChildProcessWindows::new(ui_exe)),
         system_language: Box::new(WindowsSystemLanguage),
         updates: Box::new(GitHubReleases::new(event_loop.sender())),
+        autostart: Box::new(WindowsAutostart::new()),
+        elevation: Box::new(WindowsElevation::new()),
+        system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
     }
 }

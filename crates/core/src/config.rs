@@ -31,8 +31,10 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   output_format = "png"                          截图的输出格式：png、jpg、webp、avif
 #   language = "auto"                              界面语言：auto（跟随系统）、zh-CN、en
 #   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
-#   autostart = false                              开机自启
-#   run_as_admin = false                           以管理员身份运行
+#   autostart = false                              开机自启：true / false
+#   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
+#                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
+#                                                  登录时不弹 UAC 提示
 #
 # 每个 [[bindings]] 是一条热键绑定：
 #   hotkey   热键：Ctrl、Alt、Shift、Win 与一个主键用 + 连接，
@@ -87,9 +89,10 @@ pub struct Config {
     pub language: Language,
     /// 是否检查更新，默认关闭（ADR 0004）：开启后只查询 GitHub Releases 上的最新版本并提示。
     pub check_for_updates: bool,
-    /// 开机自启，默认关闭。应用这一设置的逻辑归开机自启功能（#15）。
+    /// 开机自启（默认关闭）。
     pub autostart: bool,
-    /// 以管理员身份运行，默认关闭。应用这一设置的逻辑归开机自启功能（#15）。
+    /// 以管理员身份运行（默认关闭）：常驻实例以管理员权限运行，管理员权限的窗口在前台时
+    /// 热键也能生效；开机自启改用不弹 UAC 提示的方式。
     pub run_as_admin: bool,
 }
 

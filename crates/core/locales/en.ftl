@@ -28,6 +28,18 @@ notification-settings-unavailable-title = Cannot open Settings
 notification-update-available-title = New version available: { $version }
 notification-update-available-body = You have { $current }. Click to open the release page and download it yourself.
 update-unrecognized-version = Cannot recognise the version “{ $version }” on GitHub Releases
+notification-prtsc-taken-title = The PrtSc key is taken by the Windows screenshot tool
+notification-prtsc-taken-body = Click to open Windows Settings and turn off “Use the Print screen key to open screen capture”; BetterPrtSc then takes over the PrtSc key right away, no restart needed.
+notification-prtsc-available-title = The PrtSc key is available
+notification-prtsc-available-body = The Windows screenshot tool no longer uses the PrtSc key; the hotkey bindings for it are active now.
+notification-not-elevated-title = Could not run as administrator
+notification-not-elevated-body = { $reason }. Running without administrator rights this time: hotkeys do not work while a window running as administrator is in front.
+not-elevated-after-restart = Still no administrator rights after restarting as administrator
+notification-autostart-unreadable-title = Cannot read the start-with-Windows registration
+notification-autostart-enabled-portable-title = BetterPrtSc now starts when you sign in
+notification-autostart-enabled-portable-body = In portable mode this starts the program at its current location: if you move the program folder, turn it on again (start BetterPrtSc once from the new location).
+notification-autostart-enable-failed-title = Cannot turn on start with Windows
+notification-autostart-disable-failed-title = Cannot turn off start with Windows
 
 ## Capture modes and post-capture actions
 
@@ -57,6 +69,7 @@ error-invalid-request = The resident instance did not understand the request “
 
 registration-duplicate = Same hotkey as binding { $index }
 registration-taken = Already in use by another program
+registration-taken-by-system-screenshot-tool = Taken by the Windows screenshot tool (you can turn this off in Windows Settings)
 
 ## Configuration file and settings errors
 

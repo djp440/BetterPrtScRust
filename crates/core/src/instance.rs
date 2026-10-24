@@ -1,7 +1,7 @@
 use bps_platform::{
-    HotkeyId, IncomingRequest, LatestRelease, Notification, NotificationClick, Platform,
-    PlatformError, PlatformEvent, RegisterHotkeyError, StandaloneWindow, TrayMenuItem,
-    TrayMenuItemId,
+    AutostartMethod, Hotkey, HotkeyId, IncomingRequest, Key, LatestRelease, Modifiers,
+    Notification, NotificationClick, Platform, PlatformError, PlatformEvent, RegisterHotkeyError,
+    StandaloneWindow, TrayMenuItem, TrayMenuItemId,
 };
 
 use crate::{
@@ -15,19 +15,31 @@ const MENU_SETTINGS: TrayMenuItemId = TrayMenuItemId(1);
 /// 托盘菜单“退出”。
 const MENU_EXIT: TrayMenuItemId = TrayMenuItemId(2);
 
+/// 宿主启动常驻实例时提供的运行环境。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    /// 以便携模式运行：开启开机自启时提醒用户，移动程序目录后需要重新开启。
+    pub portable: bool,
+    /// 本进程是为了以管理员身份运行而重新启动的：如果仍然没有管理员权限，不再重试。
+    pub restarted_as_administrator: bool,
+}
+
 /// 常驻实例的核心：持有平台能力和配置，把触发事件转换成命令并执行。
 ///
-/// 宿主（`app` 里的平台事件循环）用 [`start`](Self::start) 创建它，把
+/// 宿主（`app` 里的平台事件循环）用 [`start_with`](Self::start_with) 创建它，把
 /// [`PlatformEvent`] 交给 [`handle`](Self::handle)，在返回 [`Flow::Exit`] 时退出循环。
 pub struct ResidentInstance {
     platform: Platform,
     config: Config,
+    options: StartOptions,
     /// 界面语言（由配置和系统语言决定），托盘菜单和通知都用它。
     locale: Locale,
     /// 已成功注册的热键。
     registered: Vec<HotkeyId>,
     /// 最近一次注册热键时失败的绑定。
     failures: Vec<HotkeyRegistrationFailure>,
+    /// 已以管理员身份启动了接替本实例的新实例。
+    restarting_as_administrator: bool,
     /// 检查更新的状态。
     update: UpdateStatus,
     /// 本次运行中已经提示过的新版本，同一个版本只提示一次。
@@ -35,7 +47,8 @@ pub struct ResidentInstance {
 }
 
 impl ResidentInstance {
-    /// 用给定的热键绑定创建常驻实例，不读写配置文件、不注册热键、不设置托盘菜单。
+    /// 用给定的热键绑定创建常驻实例，不读写配置文件、不注册热键、不动开机自启、
+    /// 不设置托盘菜单。
     pub fn new(platform: Platform, bindings: Vec<HotkeyBinding>) -> Self {
         let config = Config::with_bindings(bindings);
         let locale = config
@@ -44,25 +57,45 @@ impl ResidentInstance {
         Self {
             platform,
             config,
+            options: StartOptions::default(),
             locale,
             registered: Vec::new(),
             failures: Vec::new(),
+            restarting_as_administrator: false,
             update: UpdateStatus::Disabled,
             announced_version: None,
         }
     }
 
-    /// 启动常驻实例：读取配置文件（不存在时写入默认配置），按界面语言设置托盘菜单，
-    /// 注册热键，并开始监视配置文件；开启了检查更新时查询一次最新版本。
+    /// 以默认的运行环境（非便携模式）启动常驻实例，见 [`start_with`](Self::start_with)。
+    pub fn start(platform: Platform) -> Self {
+        Self::start_with(platform, StartOptions::default())
+    }
+
+    /// 启动常驻实例：读取配置文件（不存在时写入默认配置），按界面语言设置托盘菜单；
+    /// 配置要求以管理员身份运行而本进程没有管理员权限时，以管理员身份重新启动（见
+    /// [`restarting_as_administrator`](Self::restarting_as_administrator)）；否则注册热键，
+    /// 按配置登记或移除开机自启，开始监视配置文件和 PrtSc 键的系统设置，
+    /// 开启了检查更新时查询一次最新版本。
     ///
     /// 不会失败：配置文件有错误、热键注册失败等问题都通过通知告诉用户，
     /// 有问题的部分用默认值代替或跳过。
-    pub fn start(platform: Platform) -> Self {
+    pub fn start_with(platform: Platform, options: StartOptions) -> Self {
         let mut instance = Self::new(platform, Vec::new());
+        instance.options = options;
         // 配置出错时的通知用系统语言（`new` 已按系统语言选好）。
         instance.config = instance.load_config_at_startup();
         instance.apply_language();
+        if instance.config.run_as_admin && !instance.platform.elevation.is_elevated() {
+            if options.restarted_as_administrator {
+                let reason = instance.texts().get("not-elevated-after-restart");
+                instance.notify_not_elevated(&reason);
+            } else if instance.restart_as_administrator() {
+                return instance;
+            }
+        }
         let _ = instance.register_hotkeys();
+        instance.apply_autostart();
         if let Err(e) = instance.platform.config_file.watch() {
             let texts = instance.texts();
             instance.notify_with_config_link(
@@ -70,10 +103,18 @@ impl ResidentInstance {
                 texts.format("notification-config-unwatchable-body", &[("error", &e)]),
             );
         }
+        // 监视失败只是少了“关闭系统设置后立即接管 PrtSc”，重启后照样生效，不打扰用户。
+        let _ = instance.platform.system_screenshot_tool.watch();
         if instance.config.check_for_updates {
             instance.check_for_updates();
         }
         instance
+    }
+
+    /// 本实例已以管理员身份启动了接替它的新实例：宿主应立即退出、让出单实例，
+    /// 不再进入事件循环。此时本实例没有注册任何热键。
+    pub fn restarting_as_administrator(&self) -> bool {
+        self.restarting_as_administrator
     }
 
     /// 当前生效的配置。
@@ -104,43 +145,68 @@ impl ResidentInstance {
 
     /// 按当前配置（重新）注册全部热键，返回注册失败的绑定。
     ///
-    /// 失败的绑定不影响其他绑定；有失败时发出一条通知，并可用
-    /// [`registration_failures`](Self::registration_failures) 查询。
+    /// 失败的绑定不影响其他绑定；有失败时发出通知，并可用
+    /// [`registration_failures`](Self::registration_failures) 查询。PrtSc 被系统截图工具
+    /// 占用时另发一条引导通知，点击打开对应的系统设置页面。
     pub fn register_hotkeys(&mut self) -> &[HotkeyRegistrationFailure] {
         self.unregister_hotkeys();
         self.failures.clear();
-        let bindings = &self.config.bindings;
-        for (index, binding) in bindings.iter().enumerate() {
-            let error = match bindings[..index]
+        for index in 0..self.config.bindings.len() {
+            let hotkey = self.config.bindings[index].hotkey;
+            let error = match self.config.bindings[..index]
                 .iter()
-                .position(|earlier| earlier.hotkey == binding.hotkey)
+                .position(|earlier| earlier.hotkey == hotkey)
             {
                 Some(first) => RegistrationError::DuplicateOf(first),
-                None => match self
-                    .platform
-                    .hotkeys
-                    .register(hotkey_id(index), binding.hotkey)
-                {
-                    Ok(()) => {
-                        self.registered.push(hotkey_id(index));
-                        continue;
-                    }
-                    Err(RegisterHotkeyError::TakenByOtherProgram) => {
-                        RegistrationError::TakenByOtherProgram
-                    }
-                    Err(RegisterHotkeyError::Failed(e)) => RegistrationError::Platform(e),
+                None => match self.try_register(index) {
+                    Ok(()) => continue,
+                    Err(error) => error,
                 },
             };
             self.failures.push(HotkeyRegistrationFailure {
                 index,
-                binding: binding.clone(),
+                binding: self.config.bindings[index].clone(),
                 error,
             });
         }
-        if !self.failures.is_empty() {
-            let texts = self.texts();
-            let body = self
-                .failures
+        self.notify_registration_failures(&self.failures);
+        &self.failures
+    }
+
+    /// 注册第 `index` 条绑定的热键。不带修饰键的 PrtSc 注册失败时，查看系统设置是否把
+    /// PrtSc 键交给了系统截图工具（只读取，不修改）。
+    fn try_register(&mut self, index: usize) -> Result<(), RegistrationError> {
+        let hotkey = self.config.bindings[index].hotkey;
+        match self.platform.hotkeys.register(hotkey_id(index), hotkey) {
+            Ok(()) => {
+                self.registered.push(hotkey_id(index));
+                Ok(())
+            }
+            Err(_)
+                if hotkey == PRINT_SCREEN
+                    && self
+                        .platform
+                        .system_screenshot_tool
+                        .takes_print_screen_key()
+                        .unwrap_or(false) =>
+            {
+                Err(RegistrationError::TakenBySystemScreenshotTool)
+            }
+            Err(RegisterHotkeyError::TakenByOtherProgram) => {
+                Err(RegistrationError::TakenByOtherProgram)
+            }
+            Err(RegisterHotkeyError::Failed(e)) => Err(RegistrationError::Platform(e)),
+        }
+    }
+
+    /// 为注册失败的绑定发通知：系统截图工具占用 PrtSc 的发引导通知，其余的汇总成一条。
+    fn notify_registration_failures(&self, failures: &[HotkeyRegistrationFailure]) {
+        let texts = self.texts();
+        let (taken_by_system, others): (Vec<_>, Vec<_>) = failures
+            .iter()
+            .partition(|f| f.error == RegistrationError::TakenBySystemScreenshotTool);
+        if !others.is_empty() {
+            let body = others
                 .iter()
                 .map(|f| {
                     texts.format(
@@ -155,7 +221,55 @@ impl ResidentInstance {
                 .join("\n");
             self.notify_with_config_link(texts.get("notification-hotkey-failed-title"), body);
         }
-        &self.failures
+        if !taken_by_system.is_empty() {
+            self.platform.notifier.notify(Notification {
+                title: texts.get("notification-prtsc-taken-title"),
+                body: texts.get("notification-prtsc-taken-body"),
+                on_click: Some(NotificationClick::OpenPrintScreenKeySettings),
+            });
+        }
+    }
+
+    /// PrtSc 键的系统设置变化后：如果系统截图工具不再占用 PrtSc，重新注册之前因此失败的绑定。
+    fn retry_print_screen_bindings(&mut self) {
+        let waiting: Vec<usize> = self
+            .failures
+            .iter()
+            .filter(|f| f.error == RegistrationError::TakenBySystemScreenshotTool)
+            .map(|f| f.index)
+            .collect();
+        if waiting.is_empty()
+            || self
+                .platform
+                .system_screenshot_tool
+                .takes_print_screen_key()
+                .unwrap_or(true)
+        {
+            return;
+        }
+        self.failures
+            .retain(|f| f.error != RegistrationError::TakenBySystemScreenshotTool);
+        let mut still_failing = Vec::new();
+        for index in waiting {
+            if let Err(error) = self.try_register(index) {
+                still_failing.push(HotkeyRegistrationFailure {
+                    index,
+                    binding: self.config.bindings[index].clone(),
+                    error,
+                });
+            }
+        }
+        if still_failing.is_empty() {
+            let texts = self.texts();
+            self.platform.notifier.notify(Notification {
+                title: texts.get("notification-prtsc-available-title"),
+                body: texts.get("notification-prtsc-available-body"),
+                on_click: None,
+            });
+        }
+        self.notify_registration_failures(&still_failing);
+        self.failures.extend(still_failing);
+        self.failures.sort_by_key(|f| f.index);
     }
 
     /// 把平台事件转换成命令；与任何绑定都无关的事件、无法识别的请求返回 `None`。
@@ -172,19 +286,23 @@ impl ResidentInstance {
             PlatformEvent::TrayMenuItemSelected(MENU_SETTINGS) => Some(Command::OpenSettings),
             PlatformEvent::TrayMenuItemSelected(MENU_EXIT) => Some(Command::Exit),
             PlatformEvent::TrayMenuItemSelected(_) => None,
-            PlatformEvent::ConfigFileChanged | PlatformEvent::LatestReleaseFetched(_) => None,
+            PlatformEvent::ConfigFileChanged
+            | PlatformEvent::PrintScreenKeySettingChanged
+            | PlatformEvent::LatestReleaseFetched(_) => None,
             PlatformEvent::RequestReceived(request) => {
                 Request::decode(request.message()).and_then(|r| self.command_for_request(&r))
             }
         }
     }
 
-    /// 处理一个平台事件：配置文件变更时重新加载配置；请求事件执行后把结果回复给发起方；
+    /// 处理一个平台事件：配置文件变更时重新加载配置；PrtSc 键的系统设置变化时重试被系统
+    /// 截图工具挡住的热键绑定；请求事件执行后把结果回复给发起方；检查更新有结果时按需提示；
     /// 其余事件转换成命令后执行，失败时发通知。
     pub fn handle(&mut self, event: PlatformEvent) -> Result<Flow, CoreError> {
         match event {
-            PlatformEvent::ConfigFileChanged => {
-                self.reload_config();
+            PlatformEvent::ConfigFileChanged => return Ok(self.reload_config()),
+            PlatformEvent::PrintScreenKeySettingChanged => {
+                self.retry_print_screen_bindings();
                 return Ok(Flow::Continue);
             }
             PlatformEvent::RequestReceived(request) => return self.serve(request),
@@ -354,11 +472,12 @@ impl ResidentInstance {
         }
     }
 
-    /// 配置文件被外部（或设置界面）修改后重新加载。
+    /// 配置文件被外部（或设置界面）修改后重新加载，只重做变化了的部分：界面语言变了就更新
+    /// 托盘菜单，热键绑定变了就重新注册热键，开机自启相关的设置变了就重新登记，检查更新
+    /// 刚开启时查询一次；刚开启“以管理员身份运行”时以管理员身份重新启动。
     ///
-    /// 内容等价（例如只改了注释，或编辑器原样保存）时什么都不做，不会重复通知；
-    /// 界面语言变了就更新托盘菜单；热键绑定变了才重新注册热键。
-    fn reload_config(&mut self) {
+    /// 内容等价（例如只改了注释，或编辑器原样保存）时什么都不做，不会重复通知。
+    fn reload_config(&mut self) -> Flow {
         let texts = self.texts();
         let fallback = |error: &dyn std::fmt::Display| {
             texts.format("notification-config-reload-fallback", &[("error", error)])
@@ -366,40 +485,153 @@ impl ResidentInstance {
         let text = match self.platform.config_file.read() {
             Ok(Some(text)) => text,
             Ok(None) => {
-                return self.notify_with_config_link(
+                self.notify_with_config_link(
                     texts.get("notification-config-deleted-title"),
                     texts.get("notification-config-deleted-body"),
                 );
+                return Flow::Continue;
             }
             Err(e) => {
-                return self.notify_with_config_link(
+                self.notify_with_config_link(
                     texts.get("notification-config-unreadable-title"),
                     fallback(&e),
                 );
+                return Flow::Continue;
             }
         };
         let config = match Config::parse(&text) {
             Ok(config) => config,
             Err(e) => {
-                return self.notify_with_config_link(
+                self.notify_with_config_link(
                     texts.get("notification-config-invalid-title"),
                     fallback(&e.localized(texts)),
                 );
+                return Flow::Continue;
             }
         };
         if config == self.config {
-            return;
+            return Flow::Continue;
         }
         let old = std::mem::replace(&mut self.config, config);
-        self.apply_language();
+        if old.language != self.config.language {
+            self.apply_language();
+        }
+        // 只在刚开启时请求一次管理员权限：用户拒绝后，之后无关的配置修改不再反复弹 UAC 提示。
+        if !old.run_as_admin
+            && self.config.run_as_admin
+            && !self.platform.elevation.is_elevated()
+            && self.restart_as_administrator()
+        {
+            self.unregister_hotkeys();
+            return Flow::Exit;
+        }
         if old.bindings != self.config.bindings {
             let _ = self.register_hotkeys();
+        }
+        if (old.autostart, old.run_as_admin) != (self.config.autostart, self.config.run_as_admin) {
+            self.apply_autostart();
         }
         match (old.check_for_updates, self.config.check_for_updates) {
             (false, true) => self.check_for_updates(),
             (true, false) => self.update = UpdateStatus::Disabled,
             _ => {}
         }
+        Flow::Continue
+    }
+
+    /// 以管理员身份启动接替本实例的新实例，返回新实例是否已经启动。
+    /// 用户拒绝或启动失败时发通知，本实例继续以普通权限运行。
+    fn restart_as_administrator(&mut self) -> bool {
+        match self.platform.elevation.restart_as_administrator() {
+            Ok(()) => {
+                self.restarting_as_administrator = true;
+                true
+            }
+            Err(e) => {
+                self.notify_not_elevated(&e.to_string());
+                false
+            }
+        }
+    }
+
+    fn notify_not_elevated(&self, reason: &str) {
+        let texts = self.texts();
+        self.platform.notifier.notify(Notification {
+            title: texts.get("notification-not-elevated-title"),
+            body: texts.format("notification-not-elevated-body", &[("reason", &reason)]),
+            on_click: None,
+        });
+    }
+
+    /// 按配置登记或移除开机自启。只动指向本程序的登记，别处另一份 BetterPrtSc 的登记
+    /// 只在本程序要开启同一种方式时才被覆盖。
+    ///
+    /// 以管理员身份运行时用 [`AutostartMethod::Elevated`]（登录时不弹 UAC 提示），否则用
+    /// [`AutostartMethod::Normal`]。前者需要管理员权限才能登记：本进程还没有管理员权限时
+    /// （例如用户拒绝了 UAC 提示）保持现状——原有的普通方式登记仍能在登录时启动程序，
+    /// 等以管理员身份运行后再改过来。
+    fn apply_autostart(&mut self) {
+        let wanted = self
+            .config
+            .autostart
+            .then_some(if self.config.run_as_admin {
+                AutostartMethod::Elevated
+            } else {
+                AutostartMethod::Normal
+            });
+        if wanted == Some(AutostartMethod::Elevated) && !self.platform.elevation.is_elevated() {
+            return;
+        }
+        let entries = match self.platform.autostart.entries() {
+            Ok(entries) => entries,
+            Err(e) => return self.notify_plain("notification-autostart-unreadable-title", &e),
+        };
+        if let Some(method) = wanted
+            && !entries.iter().any(|e| e.method == method && e.this_program)
+        {
+            match self.platform.autostart.enable(method) {
+                Ok(()) if self.options.portable => {
+                    let texts = self.texts();
+                    self.platform.notifier.notify(Notification {
+                        title: texts.get("notification-autostart-enabled-portable-title"),
+                        body: texts.get("notification-autostart-enabled-portable-body"),
+                        on_click: None,
+                    })
+                }
+                Ok(()) => {}
+                // 新的登记没成功时保留原有的登记，至少还能开机自启。
+                Err(e) => {
+                    return self.notify_plain("notification-autostart-enable-failed-title", &e);
+                }
+            }
+        }
+        for entry in entries {
+            if entry.this_program
+                && Some(entry.method) != wanted
+                && let Err(e) = self.platform.autostart.disable(entry.method)
+            {
+                self.notify_plain("notification-autostart-disable-failed-title", &e);
+            }
+        }
+    }
+
+    /// 按配置的界面语言更新托盘菜单，之后的通知也用这种语言。
+    fn apply_language(&mut self) {
+        self.locale = self
+            .config
+            .language
+            .resolve(&self.platform.system_language.preferred_ui_languages());
+        let texts = self.texts();
+        self.platform.tray_menu.set_items(vec![
+            TrayMenuItem {
+                id: MENU_SETTINGS,
+                label: texts.get("tray-settings"),
+            },
+            TrayMenuItem {
+                id: MENU_EXIT,
+                label: texts.get("tray-exit"),
+            },
+        ]);
     }
 
     /// 查询 GitHub Releases 上的最新正式版本；结果稍后以事件递交。
@@ -453,28 +685,18 @@ impl ResidentInstance {
         }
     }
 
-    /// 按配置的界面语言更新托盘菜单，之后的通知也用这种语言。
-    fn apply_language(&mut self) {
-        self.locale = self
-            .config
-            .language
-            .resolve(&self.platform.system_language.preferred_ui_languages());
-        let texts = self.texts();
-        self.platform.tray_menu.set_items(vec![
-            TrayMenuItem {
-                id: MENU_SETTINGS,
-                label: texts.get("tray-settings"),
-            },
-            TrayMenuItem {
-                id: MENU_EXIT,
-                label: texts.get("tray-exit"),
-            },
-        ]);
-    }
-
     /// 当前界面语言的文本。
     fn texts(&self) -> &'static Texts {
         Texts::of(self.locale)
+    }
+
+    /// 发出一条点击后什么也不做、正文就是错误说明的通知；`title` 是文本资源里的消息。
+    fn notify_plain(&self, title: &str, error: &PlatformError) {
+        self.platform.notifier.notify(Notification {
+            title: self.texts().get(title),
+            body: error.to_string(),
+            on_click: None,
+        });
     }
 
     /// 发出一条点击后打开配置文件的通知。
@@ -510,6 +732,9 @@ fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
         None => Ok(()),
     }
 }
+
+/// 不带修饰键的 PrtSc：系统截图工具占用的只有它。
+const PRINT_SCREEN: Hotkey = Hotkey::new(Modifiers::NONE, Key::PrintScreen);
 
 /// 第 `index` 条绑定使用的热键标识。
 fn hotkey_id(index: usize) -> HotkeyId {
