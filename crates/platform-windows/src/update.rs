@@ -82,10 +82,10 @@ pub fn latest_release(repository: &str) -> Result<Option<LatestRelease>, Platfor
 }
 
 /// WinHTTP 句柄，离开作用域时关闭。
-struct Handle(*mut core::ffi::c_void);
+pub(crate) struct Handle(pub(crate) *mut core::ffi::c_void);
 
 impl Handle {
-    fn new(raw: *mut core::ffi::c_void, what: &str) -> Result<Self, PlatformError> {
+    pub(crate) fn new(raw: *mut core::ffi::c_void, what: &str) -> Result<Self, PlatformError> {
         if raw.is_null() {
             Err(win_error(what, windows::core::Error::from_thread()))
         } else {

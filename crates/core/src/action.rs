@@ -26,6 +26,7 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
             | PostCaptureAction::Record
             | PostCaptureAction::Annotate
             | PostCaptureAction::Ocr
+            | PostCaptureAction::Translate
     )
 }
 
@@ -45,7 +46,9 @@ pub(crate) fn run(
         let notified = request.actions.contains(&PostCaptureAction::AutoSave);
         failure = Some(CaptureFailure { error, notified });
     }
-    if request.actions.contains(&PostCaptureAction::Ocr)
+    // 翻译动作同样打开结果面板：识别出文字后由用户点“翻译”（只在用户主动点击时才联网）。
+    if (request.actions.contains(&PostCaptureAction::Ocr)
+        || request.actions.contains(&PostCaptureAction::Translate))
         && let Err(error) = open_result_panel(platform, screenshot.image.clone(), texts)
     {
         failure.get_or_insert(CaptureFailure {

@@ -19,6 +19,7 @@ mod file_system;
 mod frame_source;
 mod geometry;
 mod hotkey;
+mod http;
 mod image;
 mod language;
 mod notifier;
@@ -46,6 +47,7 @@ pub use geometry::{Point, Rect};
 pub use hotkey::{
     GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, ParseHotkeyError, RegisterHotkeyError,
 };
+pub use http::{HttpRequest, HttpResponse, HttpTransport};
 pub use image::Image;
 pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};

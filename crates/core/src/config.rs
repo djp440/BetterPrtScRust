@@ -13,6 +13,7 @@ use serde::Deserialize;
 use toml::Spanned;
 
 use crate::i18n::UnknownLanguage;
+use crate::translation::{TargetLanguage, TranslationConfig, TranslationProvider};
 use crate::{
     CaptureMode, CaptureRequest, FilenameTemplate, FilenameTemplateError, HotkeyBinding, Language,
     Locale, OutputFormat, OutputOptions, PostCaptureAction, RecordingFormat, RecordingOptions,
@@ -44,6 +45,16 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #            annotate（标注）、record（录屏）、long_screenshot（长截屏）、ocr（OCR）、translate（翻译）
 # 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif）、
 #   frame_rate（录屏帧率）、show_cursor（录屏时是否显示鼠标指针：true / false）
+#
+# 翻译（可选，OCR 结果面板里的“翻译”按钮）：在 [translation] 里填写你自己的翻译服务；不填 api_key
+# 时按钮禁用。点“翻译”时只会把识别出的文字发给你配置的服务，截图本身绝不上传。把 [translation]
+# 写在文件末尾（它下面的键都属于 [translation]）。
+#   [translation]
+#   provider = "openai"                      服务：openai（OpenAI 兼容接口）或 deepl
+#   api_key = "sk-..."                       你的 API Key（不会写入日志）
+#   base_url = "https://api.openai.com/v1"   可选：OpenAI 兼容接口的地址（可指向自建服务）；deepl 缺省按密钥选免费/专业版
+#   model = "gpt-4o-mini"                    可选：OpenAI 兼容接口使用的模型
+#   target_language = "auto"                 可选：目标语言 auto（跟随界面语言）、zh-CN、en、ja、ko、fr、de、es、ru
 
 [[bindings]]
 hotkey = "PrintScreen"
@@ -94,6 +105,9 @@ pub struct Config {
     /// 以管理员身份运行（默认关闭）：常驻实例以管理员权限运行，管理员权限的窗口在前台时
     /// 热键也能生效；开机自启改用不弹 UAC 提示的方式。
     pub run_as_admin: bool,
+    /// 翻译服务（OpenAI 兼容接口或 DeepL）；没有配置（或没填 `api_key`）时为 `None`，
+    /// 结果面板的翻译按钮禁用。
+    pub translation: Option<TranslationConfig>,
 }
 
 impl Config {
@@ -106,6 +120,7 @@ impl Config {
             check_for_updates: false,
             autostart: false,
             run_as_admin: false,
+            translation: None,
         }
     }
 
@@ -141,6 +156,11 @@ impl Config {
             .into_iter()
             .map(|binding| binding.resolve(&output, text))
             .collect::<Result<_, _>>()?;
+        let translation = raw
+            .translation
+            .map(|translation| translation.resolve(text))
+            .transpose()?
+            .flatten();
         Ok(Config {
             output,
             bindings,
@@ -148,6 +168,7 @@ impl Config {
             check_for_updates: raw.check_for_updates.unwrap_or(false),
             autostart: raw.autostart.unwrap_or(false),
             run_as_admin: raw.run_as_admin.unwrap_or(false),
+            translation,
         })
     }
 }
@@ -182,6 +203,8 @@ enum ConfigProblem {
     RecordingFormatInGlobal,
     ZeroFrameRate,
     UnknownLanguage(String),
+    UnknownTranslationProvider(String),
+    UnknownTargetLanguage(String),
 }
 
 impl ConfigError {
@@ -256,6 +279,13 @@ impl ConfigProblem {
             ConfigProblem::UnknownLanguage(language) => {
                 texts.format("config-unknown-language", &[("language", language)])
             }
+            ConfigProblem::UnknownTranslationProvider(provider) => texts.format(
+                "config-unknown-translation-provider",
+                &[("provider", provider)],
+            ),
+            ConfigProblem::UnknownTargetLanguage(language) => {
+                texts.format("config-unknown-target-language", &[("language", language)])
+            }
         }
     }
 }
@@ -303,8 +333,54 @@ struct RawConfig {
     save_dir: Option<PathBuf>,
     filename_template: Option<Spanned<String>>,
     output_format: Option<Spanned<String>>,
+    translation: Option<RawTranslation>,
     #[serde(default)]
     bindings: Vec<RawBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTranslation {
+    provider: Spanned<String>,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    target_language: Option<Spanned<String>>,
+}
+
+impl RawTranslation {
+    /// 校验翻译服务设置；没有填 `api_key` 视为没有配置翻译服务。
+    fn resolve(self, text: &str) -> Result<Option<TranslationConfig>, ConfigError> {
+        let at = |span: Range<usize>, problem| ConfigError::at(text, span, problem);
+        let provider =
+            TranslationProvider::from_name(self.provider.get_ref()).ok_or_else(|| {
+                at(
+                    self.provider.span(),
+                    ConfigProblem::UnknownTranslationProvider(self.provider.get_ref().clone()),
+                )
+            })?;
+        let target_language = match &self.target_language {
+            Some(name) => TargetLanguage::from_name(name.get_ref()).ok_or_else(|| {
+                at(
+                    name.span(),
+                    ConfigProblem::UnknownTargetLanguage(name.get_ref().clone()),
+                )
+            })?,
+            None => TargetLanguage::Auto,
+        };
+        let non_blank =
+            |s: Option<String>| s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+        let Some(api_key) = non_blank(self.api_key) else {
+            return Ok(None);
+        };
+        Ok(Some(TranslationConfig {
+            provider,
+            api_key,
+            base_url: non_blank(self.base_url),
+            model: non_blank(self.model),
+            target_language,
+        }))
+    }
 }
 
 #[derive(Deserialize)]

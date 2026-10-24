@@ -8,6 +8,10 @@
 //! 开机自启登记、遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
 //! 检查更新发出的请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
+//! 翻译用的 HTTP 传输同样不在 `Platform` 里：用 [`FakePlatform::http_transport`] 取得，
+//! 回复用 [`FakePlatform::with_http_reply`] / [`FakePlatform::with_http_failure`] 按顺序安排，
+//! [`FakePlatform::http_requests`] 查看发出过哪些请求。
+//!
 //! 结果面板子进程用的文字识别（OCR）不在 `Platform` 里：用 [`FakePlatform::text_recognizer`]
 //! 取得，识别结果用 [`FakePlatform::with_recognized_text`] 预先设置，
 //! [`FakePlatform::recognition_requests`] 查看识别过哪些图像。
@@ -42,6 +46,7 @@ mod file_dialog;
 mod file_system;
 mod frame_source;
 mod hotkeys;
+mod http;
 mod notifier;
 mod ocr;
 mod overlay;
@@ -57,10 +62,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bps_platform::{
-    AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, Image, Key, LatestRelease,
-    LocalDateTime, Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform,
-    PlatformError, PlatformEvent, Point, PointerButton, RecognitionLanguage, Rect, SaveAsOptions,
-    StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem,
+    AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest, HttpResponse,
+    HttpTransport, Image, Key, LatestRelease, LocalDateTime, Modifiers, Notification, OverlayInput,
+    OverlayKey, OverlayScene, Platform, PlatformError, PlatformEvent, Point, PointerButton,
+    RecognitionLanguage, Rect, SaveAsOptions, StandaloneWindow, SystemLanguage, TextRecognizer,
+    TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -78,6 +84,7 @@ use file_dialog::{DialogState, FakeFileDialog};
 use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
+use http::{FakeHttpTransport, HttpState};
 use notifier::FakeNotifier;
 use ocr::{FakeTextRecognizer, OcrState};
 use overlay::{FakeOverlay, OverlayState};
@@ -115,6 +122,7 @@ pub struct FakePlatform {
     dialogs: Arc<Mutex<DialogState>>,
     window_source: Arc<Mutex<WindowSourceState>>,
     ocr: Arc<Mutex<OcrState>>,
+    http: Arc<Mutex<HttpState>>,
 }
 
 impl Default for FakePlatform {
@@ -138,6 +146,7 @@ impl Default for FakePlatform {
             dialogs: Default::default(),
             window_source: Default::default(),
             ocr: Default::default(),
+            http: Default::default(),
         }
     }
 }
@@ -574,6 +583,39 @@ impl FakePlatform {
     /// 文字识别至今的每次识别：被识别的图像和所用的识别语言，按先后排列。
     pub fn recognition_requests(&self) -> Vec<(Image, String)> {
         self.ocr.lock().unwrap().requests.clone()
+    }
+
+    /// 安排下一个 HTTP 请求得到状态码 `status`、正文 `body` 的回复（按安排的顺序依次返回）。
+    pub fn with_http_reply(self, status: u16, body: &str) -> Self {
+        self.http
+            .lock()
+            .unwrap()
+            .replies
+            .push_back(Ok(HttpResponse {
+                status,
+                body: body.as_bytes().to_vec(),
+            }));
+        self
+    }
+
+    /// 安排下一个 HTTP 请求因网络问题失败，原因为 `message`。
+    pub fn with_http_failure(self, message: &str) -> Self {
+        self.http
+            .lock()
+            .unwrap()
+            .replies
+            .push_back(Err(message.to_owned()));
+        self
+    }
+
+    /// 翻译用的 HTTP 传输能力。
+    pub fn http_transport(&self) -> Box<dyn HttpTransport + Send + Sync> {
+        Box::new(FakeHttpTransport(self.http.clone()))
+    }
+
+    /// 至今发出的每个 HTTP 请求，按先后排列。
+    pub fn http_requests(&self) -> Vec<HttpRequest> {
+        self.http.lock().unwrap().requests.clone()
     }
 
     /// 至今打开过的独立窗口，按打开顺序排列。

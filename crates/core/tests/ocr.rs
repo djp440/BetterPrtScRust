@@ -120,3 +120,27 @@ fn result_panel_that_cannot_be_opened_is_reported() {
         "{notifications:?}"
     );
 }
+
+#[test]
+fn translate_action_opens_one_result_panel_without_any_network_request() {
+    let fake = single_display();
+    let mut instance = instance_with_region_binding(
+        &fake,
+        vec![PostCaptureAction::Ocr, PostCaptureAction::Translate],
+    );
+
+    instance
+        .handle(fake.press(hotkey("Ctrl+F9")).unwrap())
+        .unwrap();
+    let region = Rect::new(3, 4, 30, 9);
+    feed(&mut instance, fake.select_region(region));
+
+    assert_eq!(
+        fake.opened_windows(),
+        [StandaloneWindow::ResultPanel {
+            screenshot: desktop_pattern(region)
+        }]
+    );
+    // 翻译只在用户在面板里点“翻译”时才联网。
+    assert!(fake.http_requests().is_empty());
+}
