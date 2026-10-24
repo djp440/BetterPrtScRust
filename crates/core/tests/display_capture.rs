@@ -5,11 +5,13 @@
 //! 最后通过 `fake` 检查剪贴板等外部可见状态。期望图像来自假显示器的画面，
 //! 不由被测代码推导。
 
+use std::path::Path;
+
 use bps_core::{
-    CaptureMode, CaptureRequest, Command, HotkeyBinding, PostCaptureAction, ResidentInstance,
+    CaptureMode, CaptureRequest, Command, PostCaptureAction, ResidentInstance, default_bindings,
 };
-use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
-use bps_platform_fake::{FakeDisplay, FakePlatform};
+use bps_platform::{Hotkey, Key, LocalDateTime, Modifiers, Point, Rect};
+use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, decode};
 
 /// 左边是 100% 缩放的主显示器；右边是 150% 缩放、向上错位 10 像素的副显示器。
 fn primary_display() -> FakeDisplay {
@@ -50,24 +52,27 @@ fn display_capture_copies_display_under_cursor_to_clipboard_as_png_and_dib() {
 }
 
 #[test]
-fn hotkey_bound_to_display_capture_copies_display_under_cursor() {
+fn shift_print_screen_copies_and_auto_saves_display_under_cursor_with_default_bindings() {
     let expected = primary_display().image().clone();
     let fake = FakePlatform::new()
         .with_display(primary_display())
         .with_display(scaled_display())
-        .with_cursor_at(Point::new(10, 10));
+        .with_cursor_at(Point::new(10, 10))
+        .with_time(LocalDateTime::new(2026, 10, 24, 21, 30, 0));
     let shift_print_screen = Hotkey::new(Modifiers::SHIFT, Key::PrintScreen);
-    let binding = HotkeyBinding {
-        hotkey: shift_print_screen,
-        capture: copy_display_capture(),
-    };
-    let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
+    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
     assert!(instance.register_hotkeys().is_empty());
 
     let event = fake.press(shift_print_screen).expect("绑定的热键应已注册");
     instance.handle(event).unwrap();
 
+    let saved = Path::new(DEFAULT_PICTURES_DIR)
+        .join("BetterPrtSc")
+        .join("2026-10-24 21-30-00.png");
+    assert_eq!(fake.files(), std::slice::from_ref(&saved));
+    assert_eq!(decode::png(&fake.file(&saved).unwrap()), expected);
     let clipboard = fake.clipboard();
-    assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
+    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
     assert_eq!(clipboard.png_image().unwrap(), expected);
+    assert_eq!(clipboard.files().unwrap(), [saved]);
 }

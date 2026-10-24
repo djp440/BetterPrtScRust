@@ -1,7 +1,9 @@
 //! 配置文件的生命周期：首次运行写入默认配置、外部修改后自动重新加载、解析失败时保留上一次
 //! 有效的配置。从 `ResidentInstance::start` 和平台事件驱动，只断言外部可见的结果。
 
-use bps_core::{CaptureMode, Config, OutputFormat, PostCaptureAction, ResidentInstance};
+use std::path::PathBuf;
+
+use bps_core::{CaptureMode, Config, PostCaptureAction, RecordingFormat, ResidentInstance};
 use bps_platform::{Hotkey, Key, Modifiers, NotificationClick, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
 
@@ -49,8 +51,8 @@ fn first_run_writes_config_file_with_six_default_bindings() {
         ]
     );
     assert_eq!(
-        config.bindings[3].capture.overrides.output_format,
-        Some(OutputFormat::Mp4),
+        config.bindings[3].capture.recording.format,
+        Some(RecordingFormat::Mp4),
         "Alt+PrtSc 默认录制 MP4"
     );
 }
@@ -89,6 +91,32 @@ fn existing_config_file_is_used_and_left_untouched() {
     assert_eq!(fake.registered_hotkeys(), [ctrl_f9]);
     instance.handle(fake.press(ctrl_f9).unwrap()).unwrap();
     assert_eq!(fake.clipboard().formats(), ["PNG", "DIB"]);
+}
+
+const GLOBAL_JPEG_TO_CUSTOM_DIR: &str = r#"
+save_dir = 'D:\截图'
+output_format = "jpg"
+
+[[bindings]]
+hotkey = "Ctrl+F9"
+mode = "display"
+actions = ["copy_to_clipboard", "auto_save"]
+"#;
+
+#[test]
+fn global_output_settings_apply_to_hotkey_bindings() {
+    let fake = FakePlatform::new()
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 32, 24)).primary())
+        .with_config_file(GLOBAL_JPEG_TO_CUSTOM_DIR);
+    let mut instance = ResidentInstance::start(fake.platform());
+
+    let ctrl_f9 = hotkey(Modifiers::CTRL, Key::F(9));
+    instance.handle(fake.press(ctrl_f9).unwrap()).unwrap();
+
+    // 默认命名模板 + 假时钟的默认时间。
+    let saved = PathBuf::from(r"D:\截图\2000-01-01 00-00-00.jpg");
+    assert_eq!(fake.files(), std::slice::from_ref(&saved));
+    assert_eq!(fake.clipboard().formats(), ["JPEG", "DIB", "Files"]);
 }
 
 const ONLY_F10_COPIES_DISPLAY: &str = r#"

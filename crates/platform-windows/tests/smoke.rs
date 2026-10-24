@@ -1,15 +1,19 @@
-//! 真机冒烟测试：会真实截屏、注册全局热键并模拟按键，默认忽略。
+//! 真机冒烟测试：会真实截屏、注册全局热键、模拟按键、读写临时目录，默认忽略。
 //!
 //! 运行：`cargo test -p bps-platform-windows -- --ignored`
 #![cfg(windows)]
 
+use std::fs;
 use std::time::{Duration, Instant};
 
 use bps_platform::{
-    ChannelError, ConfigFile, FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers,
-    PlatformEvent, ResidentChannel,
+    ChannelError, Clock, ConfigFile, FileSystem, FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key,
+    Modifiers, NewFile, PlatformEvent, ResidentChannel,
 };
-use bps_platform_windows::{DxgiFrameSource, EventLoop, PipeChannel, PipeClaim, ResidentPipe, dpi};
+use bps_platform_windows::{
+    DxgiFrameSource, EventLoop, PipeChannel, PipeClaim, ResidentPipe, WindowsClock,
+    WindowsFileSystem, dpi,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL, VK_F24,
@@ -111,28 +115,18 @@ fn resident_pipe_is_single_instance_and_forwards_requests_to_event_loop() {
 #[ignore = "真机冒烟：在临时目录读写配置文件并监视外部修改"]
 fn config_file_change_is_delivered_by_event_loop() {
     let dir = std::env::temp_dir().join(format!("bps-config-smoke-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&dir);
     let event_loop = EventLoop::new().unwrap();
     let mut config = event_loop.config_file(dir.join("config.toml"));
 
     assert_eq!(config.read().unwrap(), None, "文件不存在时应返回 None");
-    config
-        .write(
-            "# 第一版
-",
-        )
-        .unwrap();
+    config.write("# 第一版\n").unwrap();
     config.watch().unwrap();
     assert!(event_loop.wait_event(Duration::from_millis(600)).is_none());
 
     // 模拟外部编辑器：连续写两次，应合并成一个事件。
-    std::fs::write(dir.join("config.toml"), "# 第二").unwrap();
-    std::fs::write(
-        dir.join("config.toml"),
-        "# 第二版
-",
-    )
-    .unwrap();
+    fs::write(dir.join("config.toml"), "# 第二").unwrap();
+    fs::write(dir.join("config.toml"), "# 第二版\n").unwrap();
     let started = Instant::now();
     let event = event_loop.wait_event(Duration::from_secs(3));
     eprintln!("配置文件变更在 {:?} 后递交", started.elapsed());
@@ -141,7 +135,7 @@ fn config_file_change_is_delivered_by_event_loop() {
     // 先关闭目录变更通知句柄，否则删不掉目录。
     drop(config);
     drop(event_loop);
-    std::fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
 
     assert!(
         matches!(event, Some(PlatformEvent::ConfigFileChanged)),
@@ -151,13 +145,40 @@ fn config_file_change_is_delivered_by_event_loop() {
         duplicate.is_none(),
         "连续的写入应合并成一个事件：{duplicate:?}"
     );
-    assert_eq!(
-        text.as_deref(),
-        Some(
-            "# 第二版
-"
-        )
-    );
+    assert_eq!(text.as_deref(), Some("# 第二版\n"));
+}
+
+#[test]
+#[ignore = "真机冒烟：在临时目录里建目录、写文件，结束后删除该临时目录"]
+fn file_system_creates_new_files_without_overwriting() {
+    let mut fs_ = WindowsFileSystem::new();
+    let pictures = fs_.pictures_dir().unwrap();
+    eprintln!("“图片”文件夹：{}", pictures.display());
+    assert!(pictures.is_absolute() && pictures.is_dir());
+
+    let root = std::env::temp_dir().join(format!("bps-smoke-fs-{}", std::process::id()));
+    let dir = root.join("子目录").join("BetterPrtSc");
+    fs_.create_dir_all(&dir).unwrap();
+    fs_.create_dir_all(&dir).unwrap(); // 已存在时不报错
+    let file = dir.join("截图 2026-10-24.png");
+    let first = fs_.create_new(&file, b"first");
+    let second = fs_.create_new(&file, b"second");
+    let content = fs::read(&file);
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(first, Ok(NewFile::Created));
+    assert_eq!(second, Ok(NewFile::AlreadyExists));
+    assert_eq!(content.unwrap(), b"first");
+}
+
+#[test]
+#[ignore = "真机冒烟：读取本地时间"]
+fn clock_reports_plausible_local_time() {
+    let now = WindowsClock::new().now();
+    eprintln!("本地时间：{now:?}");
+    assert!(now.year >= 2024);
+    assert!((1..=12).contains(&now.month) && (1..=31).contains(&now.day));
+    assert!(now.hour < 24 && now.minute < 60 && now.second < 61 && now.millisecond < 1000);
 }
 
 /// 依次按下 `keys`，再逆序松开。

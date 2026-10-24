@@ -135,22 +135,29 @@ impl ResidentInstance {
         let Some(command) = self.command_for(&event) else {
             return Ok(Flow::Continue);
         };
-        // 热键和托盘触发的命令没有别的反馈渠道，失败时用通知告诉用户。
-        let result = self.execute(command);
-        if let Err(e) = &result {
-            let title = match e {
-                CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-                    "暂不支持"
+        let Command::Capture(request) = command else {
+            return self.execute(command);
+        };
+        // 热键触发的捕获没有别的反馈渠道，失败时用通知告诉用户（截后动作已经通知过的除外）。
+        match self.capture(&request) {
+            Ok(()) => Ok(Flow::Continue),
+            Err(CaptureFailure { error, notified }) => {
+                if !notified {
+                    let title = match error {
+                        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+                            "暂不支持"
+                        }
+                        _ => "捕获失败",
+                    };
+                    self.platform.notifier.notify(Notification {
+                        title: title.to_owned(),
+                        body: error.to_string(),
+                        on_click: None,
+                    });
                 }
-                _ => "捕获失败",
-            };
-            self.platform.notifier.notify(Notification {
-                title: title.to_owned(),
-                body: e.to_string(),
-                on_click: None,
-            });
+                Err(error)
+            }
         }
-        result
     }
 
     /// 执行转交来的请求，并把结果回复给发起方。
@@ -183,22 +190,35 @@ impl ResidentInstance {
                     .iter()
                     .find(|binding| binding.capture.mode == *mode)
                     .map(|binding| binding.capture.clone())
-                    .unwrap_or_else(|| {
-                        CaptureRequest::new(*mode, vec![PostCaptureAction::CopyToClipboard])
+                    .unwrap_or_else(|| CaptureRequest {
+                        output: self.config.output.clone(),
+                        ..CaptureRequest::new(*mode, vec![PostCaptureAction::CopyToClipboard])
                     }),
             ),
             Request::Activate => Command::Activate,
         }
     }
 
+    /// 执行一次捕获：先确认捕获模式和截后动作都已实现，再捕获、执行截后动作。
+    fn capture(&mut self, request: &CaptureRequest) -> Result<(), CaptureFailure> {
+        let not_notified = |error| CaptureFailure {
+            error,
+            notified: false,
+        };
+        ensure_implemented(request).map_err(not_notified)?;
+        let screenshot = capture::capture(&self.platform, request.mode).map_err(not_notified)?;
+        action::run(&mut self.platform, &screenshot, request).map_err(|error| CaptureFailure {
+            error,
+            // 做了自动存储时，截后动作已经就结果发过通知（“截图已保存”或“自动存储失败”）。
+            notified: request.actions.contains(&PostCaptureAction::AutoSave),
+        })
+    }
+
     /// 执行一条命令。
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match command {
             Command::Capture(request) => {
-                ensure_implemented(&request)?;
-                let screenshot =
-                    capture::capture(self.platform.frame_source.as_ref(), request.mode)?;
-                action::run(&mut self.platform, &screenshot, &request.actions)?;
+                self.capture(&request).map_err(|failure| failure.error)?;
                 Ok(Flow::Continue)
             }
             Command::Activate => Ok(Flow::Continue),
@@ -310,4 +330,10 @@ fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
 /// 第 `index` 条绑定使用的热键标识。
 fn hotkey_id(index: usize) -> HotkeyId {
     HotkeyId(index as u32 + 1)
+}
+
+/// 一次捕获失败的原因，以及截后动作是否已经就这次失败通知过用户。
+struct CaptureFailure {
+    error: CoreError,
+    notified: bool,
 }

@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use bps_platform::{HotkeyId, Image, NotificationClick, PlatformError, PlatformEvent};
+use bps_platform::{HotkeyId, Image, PlatformError, PlatformEvent};
 use windows::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WAIT_OBJECT_0,
     WPARAM,
@@ -44,7 +44,8 @@ use windows::core::{PCWSTR, w};
 
 use crate::config_file::ChangeNotification;
 use crate::error::win_error;
-use crate::{WindowsConfigFile, WindowsHotkeys, WindowsNotifier, notifier};
+use crate::notifier::{PendingClick, open_click_target};
+use crate::{TrayNotifier, WindowsConfigFile, WindowsHotkeys};
 
 /// 隐藏窗口的类名；其他进程可以据此找到常驻实例。
 const CLASS_NAME: PCWSTR = w!("BetterPrtSc.ResidentWindow");
@@ -71,16 +72,16 @@ struct WindowState {
     /// 其他线程投递的事件，收到 `WM_SENT_EVENT` 时移进 `events`。
     sent: mpsc::Receiver<PlatformEvent>,
     tray: RefCell<Option<TrayIcon>>,
+    /// 最近一条托盘通知的点击操作。
+    balloon_click: PendingClick,
     /// 资源管理器重启后广播的消息，收到时重新添加托盘图标。
     taskbar_created: u32,
     shared: Rc<Shared>,
 }
 
-/// 事件循环与它创建的平台能力对象（通知、配置文件）共享的状态。
+/// 事件循环与它创建的配置文件对象共享的状态。
 #[derive(Default)]
 pub(crate) struct Shared {
-    /// 最近一条托盘通知被点击时要执行的操作。
-    pub balloon_click: RefCell<Option<NotificationClick>>,
     /// 配置文件所在目录的变更通知。
     pub config_watch: RefCell<Option<ChangeNotification>>,
 }
@@ -149,6 +150,7 @@ impl EventLoop {
                 events: RefCell::new(VecDeque::new()),
                 sent,
                 tray: RefCell::new(None),
+                balloon_click: PendingClick::default(),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 shared: Rc::default(),
             });
@@ -187,9 +189,10 @@ impl EventLoop {
         WindowsHotkeys::new(self.hwnd)
     }
 
-    /// 通过本循环的托盘图标发通知；需要先 [`show_tray_icon`](Self::show_tray_icon)。
-    pub fn notifier(&self) -> WindowsNotifier {
-        WindowsNotifier::new(self.hwnd, self.state.shared.clone())
+    /// 用本循环的托盘图标显示气泡通知；需要先 [`show_tray_icon`](Self::show_tray_icon)。
+    /// 用户点击气泡时，本循环执行通知的点击操作。
+    pub fn notifier(&self) -> TrayNotifier {
+        TrayNotifier::new(self.hwnd, self.state.balloon_click.clone())
     }
 
     /// 位于 `path` 的配置文件；开始监视后，本循环递交 [`PlatformEvent::ConfigFileChanged`]。
@@ -302,15 +305,16 @@ unsafe extern "system" fn window_proc(
             }
             WM_TRAY => {
                 let mouse = (lparam.0 & 0xFFFF) as u32;
-                if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
+                if mouse == NIN_BALLOONUSERCLICK {
+                    // 先取出再执行，ShellExecute 期间可能重入窗口过程。
+                    let click = state.balloon_click.borrow_mut().take();
+                    if let Some(click) = click {
+                        open_click_target(hwnd, &click);
+                    }
+                } else if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
                     && show_tray_menu(hwnd) == Some(MENU_EXIT)
                 {
                     state.push(PlatformEvent::ExitRequested);
-                } else if mouse == NIN_BALLOONUSERCLICK {
-                    let click = state.shared.balloon_click.borrow_mut().take();
-                    if let Some(click) = click {
-                        notifier::open(hwnd, click);
-                    }
                 }
                 return LRESULT(0);
             }

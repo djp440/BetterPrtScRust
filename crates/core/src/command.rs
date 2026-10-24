@@ -1,8 +1,6 @@
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
-use crate::OutputFormat;
+use crate::OutputOptions;
 
 /// 交给常驻实例执行的命令，是 `core` 的唯一入口。
 ///
@@ -18,39 +16,39 @@ pub enum Command {
     Exit,
 }
 
-/// 一次捕获要做什么：截什么（捕获模式）、截完做什么（截后动作），以及覆盖项。
+/// 一次捕获要做什么：截什么（捕获模式）、截完做什么（截后动作）、产物怎么输出。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureRequest {
     pub mode: CaptureMode,
-    /// 按顺序执行的截后动作。
+    /// 截后动作。复制到剪贴板与自动存储一起处理：剪贴板只写一次，
+    /// 同时做了自动存储时附带存下的文件。
     pub actions: Vec<PostCaptureAction>,
-    /// 这次捕获对全局设置的覆盖；没有覆盖的项使用全局设置或内置默认值。
-    pub overrides: CaptureOverrides,
+    /// 输出格式、自动存储目录和命名模板。
+    pub output: OutputOptions,
+    /// 录屏选项；只有带录屏动作的捕获用到。
+    pub recording: RecordingOptions,
 }
 
 impl CaptureRequest {
-    /// 不带任何覆盖项的捕获请求。
+    /// 使用默认输出选项（PNG、`图片\BetterPrtSc`、默认命名模板）和默认录屏选项的捕获请求。
     pub fn new(mode: CaptureMode, actions: Vec<PostCaptureAction>) -> Self {
         Self {
             mode,
             actions,
-            overrides: CaptureOverrides::default(),
+            output: OutputOptions::default(),
+            recording: RecordingOptions::default(),
         }
     }
 }
 
-/// 热键绑定可以单独覆盖的设置；`None` 表示沿用全局设置或内置默认值。
+/// 录屏选项；`None` 表示使用录屏功能的内置默认值。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CaptureOverrides {
-    /// 自动存储的目录。
-    pub save_dir: Option<PathBuf>,
-    /// 自动存储的命名模板。
-    pub filename_template: Option<String>,
-    /// 产物的输出格式。
-    pub output_format: Option<OutputFormat>,
-    /// 录屏的帧率（每秒帧数）。
+pub struct RecordingOptions {
+    /// 录屏的输出格式。
+    pub format: Option<RecordingFormat>,
+    /// 帧率（每秒帧数）。
     pub frame_rate: Option<u32>,
-    /// 录屏时是否显示鼠标指针。
+    /// 是否录入鼠标指针。
     pub show_cursor: Option<bool>,
 }
 
@@ -62,7 +60,8 @@ pub struct CaptureOverrides {
 pub enum CaptureMode {
     /// 鼠标所在的那块显示器，按物理像素输出。
     Display,
-    /// 所有显示器拼合成的整个虚拟桌面。尚未实现，执行时报告“暂不支持”。
+    /// 所有显示器拼合成的整个虚拟桌面：各显示器按物理像素截取后按位置拼接，
+    /// 显示器之间没有覆盖的空隙是透明像素。
     VirtualDesktop,
     /// 用户在选区遮罩上框选的区域。尚未实现，执行时报告“暂不支持”。
     Region,
@@ -89,9 +88,9 @@ impl CaptureMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PostCaptureAction {
-    /// 把截图复制到剪贴板（PNG + DIB）。
+    /// 把截图复制到剪贴板：按输出格式编码的图像 + DIB。
     CopyToClipboard,
-    /// 按命名模板和输出格式把产物写入自动存储目录。
+    /// 自动存储：按命名模板和输出格式写入存储目录，完成后发通知。
     AutoSave,
     /// 进入标注。
     Annotate,
@@ -118,6 +117,13 @@ impl PostCaptureAction {
             PostCaptureAction::Translate => "翻译",
         }
     }
+}
+
+/// 录屏的输出格式。截图的输出格式见 [`crate::OutputFormat`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecordingFormat {
+    Mp4,
+    Gif,
 }
 
 /// 执行完一条命令后常驻实例应继续运行还是退出。

@@ -6,10 +6,15 @@
   要求开始时没有 BetterPrtSc 在运行（否则直接中止，不打扰正在使用的实例）。
   依次验证：
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
-    2. `bps capture region` 返回“暂不支持”（退出码 3），`bps capture bogus` 是用法错误（退出码 2）
+    2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
+       `bps capture region` 返回“暂不支持”（退出码 3），`bps capture bogus` 是用法错误（退出码 2）
     3. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
     4. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
+  默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存截图：结束时删除本次存下的文件
+  （以剪贴板附带的文件为准），目录是本次新建且已空时一并删除。
+  本脚本启动的进程的 APPDATA 指向 -OutDir 下的临时目录，常驻实例首次运行生成的
+  config.toml 写在那里，不碰真实的 %APPDATA%。
   需要 STA 线程访问剪贴板，请用 Windows PowerShell 运行：
     powershell -NoProfile -STA -File scripts\smoke-cli.ps1 [-BinDir target\release]
 #>
@@ -30,6 +35,10 @@ public static class BpsCliSmokeUser32 {
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")]
     public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
 }
 '@
 $WM_CLOSE = 0x0010
@@ -72,9 +81,34 @@ function Invoke-Bps([string[]]$arguments) {
     }
 }
 
+# 物理像素的虚拟桌面尺寸：临时把本线程切到 Per-Monitor V2，避免系统按缩放比例虚拟化坐标。
+function Get-PhysicalVirtualScreenSize {
+    $previous = [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext([IntPtr]-4)
+    try { "{0}x{1}" -f [BpsCliSmokeUser32]::GetSystemMetrics(78), [BpsCliSmokeUser32]::GetSystemMetrics(79) }
+    finally { [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext($previous) | Out-Null }
+}
+
+# 剪贴板里 PNG 格式图像的尺寸；没有 PNG 时返回 $null。
+function Get-ClipboardPngSize {
+    $stream = $clip::GetDataObject().GetData('PNG')
+    if (-not $stream) { return $null }
+    $image = [System.Drawing.Image]::FromStream($stream)
+    try { "{0}x{1}" -f $image.Width, $image.Height } finally { $image.Dispose() }
+}
+
 function Assert-That([bool]$condition, [string]$message) {
     if (-not $condition) { throw "失败：$message" }
     "通过：$message"
+}
+
+# 剪贴板数据里附带的文件（本次自动存储的文件），结束时删除。
+function Get-SavedFiles($data) {
+    $files = $null
+    if ($data -and $data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
+        $files = $data.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+    }
+    # 逗号运算符防止单元素数组在返回时被展开成字符串。
+    if ($files) { , [string[]]$files } else { , [string[]]@() }
 }
 
 if ((Get-Residents).Count -gt 0) { throw "已有 $resident 在运行，请先退出它再做冒烟测试" }
@@ -82,6 +116,16 @@ if ((Get-Residents).Count -gt 0) { throw "已有 $resident 在运行，请先退
 $clip = [System.Windows.Forms.Clipboard]
 $backupImage = if ($clip::ContainsImage()) { $clip::GetImage() } else { $null }
 $backupText = if ($clip::ContainsText()) { $clip::GetText() } else { $null }
+$saveDir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'BetterPrtSc'
+$saveDirExisted = Test-Path -LiteralPath $saveDir
+$startedAt = Get-Date
+$savedFiles = @()
+# 子进程（bps 及它拉起的常驻实例）继承环境变量。
+$realAppData = $env:APPDATA
+$fakeAppData = Join-Path $OutDir 'appdata'
+if (Test-Path -LiteralPath $fakeAppData) { Remove-Item -Recurse -Force -LiteralPath $fakeAppData }
+New-Item -ItemType Directory -Force $fakeAppData | Out-Null
+$env:APPDATA = $fakeAppData
 try {
     $clip::Clear()
     $r = Invoke-Bps @('capture', 'display')
@@ -90,6 +134,16 @@ try {
     $data = $clip::GetDataObject()
     Assert-That ($data -and $data.GetDataPresent('PNG') -and $data.GetDataPresent([System.Windows.Forms.DataFormats]::Dib)) `
         "剪贴板含 PNG 与 DIB（格式：$($data.GetFormats() -join ', ')）"
+    $files = Get-SavedFiles $data
+    $savedFiles += $files
+    Assert-That ($files.Count -eq 1 -and (Test-Path -LiteralPath $files[0])) "与 Shift+PrtSc 一致，自动存储并附带文件：$files"
+
+    $clip::Clear()
+    $r = Invoke-Bps @('capture', 'virtual-desktop')
+    $screen = Get-PhysicalVirtualScreenSize
+    $png = Get-ClipboardPngSize
+    Assert-That ($r.Code -eq 0 -and $png -eq $screen) `
+        "bps capture virtual-desktop 退出码 $($r.Code)，PNG $png 等于物理像素虚拟桌面 $screen（$($r.Ms) ms）$($r.Stderr)"
 
     $r = Invoke-Bps @('capture', 'region')
     Assert-That ($r.Code -eq 3 -and $r.Stderr -match '暂不支持') "bps capture region 退出码 3 且提示暂不支持：$($r.Stderr.Trim())"
@@ -106,7 +160,9 @@ try {
 
     $clip::Clear()
     $r = Invoke-Bps @('capture', 'display')
-    Assert-That ($r.Code -eq 0 -and $clip::GetDataObject().GetDataPresent('PNG')) `
+    $data = $clip::GetDataObject()
+    $savedFiles += Get-SavedFiles $data
+    Assert-That ($r.Code -eq 0 -and $data.GetDataPresent('PNG')) `
         "已运行时 bps capture display 退出码 0 且剪贴板有 PNG（$($r.Ms) ms）"
 }
 finally {
@@ -118,6 +174,23 @@ finally {
         }
     }
     "结束后常驻实例数：$((Get-Residents).Count)"
-    if ($backupImage) { $clip::SetImage($backupImage) }
-    elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    $env:APPDATA = $realAppData
+    # 剪贴板可能正被其他程序占用：恢复失败只警告，不影响后面的清理。
+    try {
+        if ($backupImage) { $clip::SetImage($backupImage) }
+        elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    }
+    catch { "警告：恢复剪贴板失败：$($_.Exception.Message)" }
+    # 只删除本次运行存下的文件，以及本次新建且已空的存储目录。
+    foreach ($f in $savedFiles) {
+        if ($f -and (Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).CreationTime -ge $startedAt) {
+            Remove-Item -LiteralPath $f
+            "已删除本次存下的 $f"
+        }
+    }
+    if (-not $saveDirExisted -and (Test-Path -LiteralPath $saveDir) -and
+        -not (Get-ChildItem -LiteralPath $saveDir -Force)) {
+        Remove-Item -LiteralPath $saveDir
+        "已删除本次新建的空目录 $saveDir"
+    }
 }

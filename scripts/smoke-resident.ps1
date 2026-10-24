@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  常驻实例端到端冒烟：便携模式首次运行 → 配置重新加载 → 热键 → 剪贴板 → 退出。
+  常驻实例端到端冒烟：便携模式首次运行 → 配置重新加载 → 热键 → 剪贴板和自动存储 → 退出。
 
 .DESCRIPTION
   把 BetterPrtSc.exe 复制到临时目录并放上 portable 标记文件，以便携模式运行；子进程的
@@ -8,13 +8,15 @@
 
     1. 首次运行：程序目录里生成含 6 条默认绑定的 config.toml；
        第 1 条默认绑定（PrtSc → 区域 + 标注）尚未实现，应通知“暂不支持”且不碰剪贴板。
-    2. 改写 config.toml（带 BOM，同记事本），第 1 条绑定换成 Shift+PrtSc → 显示器 + 复制；
-       不重启，投递热键事件后剪贴板应出现 PNG + DIB。
+    2. 改写 config.toml（带 BOM，同记事本），第 1 条绑定换成 Shift+PrtSc → 显示器 + 复制 +
+       自动存储，存储目录覆盖为临时目录；不重启，投递热键事件后剪贴板应出现 PNG + DIB +
+       存下的文件。
     3. 把 config.toml 改坏：应通知“配置文件有错误”，并且上一次有效的绑定继续生效。
 
   不模拟真实按键（单独按下再松开 Shift 可能切换输入法中英文），而是向常驻实例的
   隐藏窗口投递 WM_HOTKEY；热键是否注册成功看程序输出。
   运行期间默认热键（PrtSc 等）会被短暂注册，并弹出几条系统通知。
+  截图只存到 -OutDir 下，不写“图片”文件夹。
   -ExitVia Tray 时通过托盘菜单的“退出”结束（会在鼠标处闪现菜单约 1 秒），
   否则投递 WM_CLOSE。
   运行期间会占用剪贴板，结束时恢复原有的文本或图像内容（其他格式不恢复）。
@@ -49,14 +51,6 @@ $VK_RETURN = 0x0D
 $VK_DOWN = 0x28
 # 第 1 条热键绑定的标识（热键标识 = 绑定下标 + 1）。
 $FirstBinding = 1
-
-$CopyDisplayConfig = @'
-# 冒烟测试：第 1 条绑定 Shift+PrtSc → 显示器 + 复制
-[[bindings]]
-hotkey = "Shift+PrintScreen"
-mode = "display"
-actions = ["copy_to_clipboard"]
-'@
 
 function Find-Window([string]$class) {
     [BpsSmokeUser32]::FindWindowW($class, [NullString]::Value)
@@ -109,12 +103,23 @@ function Wait-ClipboardPng {
 if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
 $appDir = Join-Path $OutDir 'app'
 $fakeAppData = Join-Path $OutDir 'appdata'
+$saveDir = Join-Path $OutDir 'saved'
 New-Item -ItemType Directory -Force $appDir, $fakeAppData | Out-Null
 Copy-Item $Exe (Join-Path $appDir 'BetterPrtSc.exe')
 New-Item -ItemType File (Join-Path $appDir 'portable') | Out-Null
 $config = Join-Path $appDir 'config.toml'
 $stderr = Join-Path $OutDir 'stderr.log'
 $pngPath = Join-Path $OutDir 'clipboard.png'
+
+# Windows 路径写成 TOML 字面量字符串（单引号），反斜杠不转义。
+$CopyAndSaveConfig = @"
+# 冒烟测试：第 1 条绑定 Shift+PrtSc → 显示器 + 复制 + 自动存储到临时目录
+[[bindings]]
+hotkey = "Shift+PrintScreen"
+mode = "display"
+actions = ["copy_to_clipboard", "auto_save"]
+save_dir = '$saveDir'
+"@
 
 $clip = [System.Windows.Forms.Clipboard]
 $backupImage = if ($clip::ContainsImage()) { $clip::GetImage() } else { $null }
@@ -149,7 +154,7 @@ try {
     'PrtSc（区域 + 标注）通知了“暂不支持”，剪贴板未被写入'
 
     '--- 2. 修改配置后自动重新加载 ---'
-    Set-Content -Path $config -Value $CopyDisplayConfig -Encoding UTF8   # Windows PowerShell 写入带 BOM 的 UTF-8
+    Set-Content -Path $config -Value $CopyAndSaveConfig -Encoding UTF8   # Windows PowerShell 写入带 BOM 的 UTF-8
     Wait-Log '已处理 ConfigFileChanged'
     $clip::Clear()
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -167,8 +172,18 @@ try {
     $bits = [BitConverter]::ToInt16($dib, 14)
     "DIB：${w}x${h}，${bits} 位，共 $($dib.Length) 字节"
 
+    $savedFiles = @($data.GetData([System.Windows.Forms.DataFormats]::FileDrop))
+    if ($savedFiles.Count -ne 1) { throw "剪贴板应附带 1 个文件，实际 $($savedFiles.Count) 个" }
+    $saved = $savedFiles[0]
+    if (-not (Test-Path -LiteralPath $saved)) { throw "剪贴板附带的文件不存在：$saved" }
+    if ((Split-Path -Parent $saved) -ne $saveDir) { throw "文件不在配置的存储目录 ${saveDir}：$saved" }
+    $img = [System.Drawing.Image]::FromFile($saved)
+    "自动存储：$saved（$($img.Width)x$($img.Height)，$((Get-Item -LiteralPath $saved).Length) 字节）"
+    $img.Dispose()
+    Wait-Log '[通知] 截图已保存'
+
     '--- 3. 配置写错时保留上一次有效的配置 ---'
-    Set-Content -Path $config -Value $CopyDisplayConfig.Replace('"display"', '"dispaly"') -Encoding UTF8
+    Set-Content -Path $config -Value $CopyAndSaveConfig.Replace('"display"', '"dispaly"') -Encoding UTF8
     Wait-Log '[通知] 配置文件有错误'
     $clip::Clear()
     Send-Hotkey $hwnd $FirstBinding
@@ -193,6 +208,10 @@ finally {
     "常驻实例退出码：$($proc.ExitCode)"
     '--- 常驻实例输出 ---'
     Get-Content $stderr -Encoding UTF8
-    if ($backupImage) { $clip::SetImage($backupImage) }
-    elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    # 剪贴板可能正被其他程序占用：恢复失败只警告，不影响后面的清理。
+    try {
+        if ($backupImage) { $clip::SetImage($backupImage) }
+        elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    }
+    catch { "警告：恢复剪贴板失败：$($_.Exception.Message)" }
 }
