@@ -30,4 +30,4 @@ egui 选区遮罩的延迟本身达标，但无法同时满足“常驻内存 < 
 - “egui · 全部按需”第二次及以后的触发，进程内的 Present 都成功了，但 DXGI 和 GDI 两种方式都没在屏幕上看到遮罩；没有深究，因为这个策略单看延迟就已经不可用。
 - 两种方案都通过了拖拽框选验证：注入的拖拽得到的选区与预期一致，选区内像素与冻结前的桌面逐像素相同。
 
-测量环境：AMD Ryzen 5 9600X、47 GB 内存、Windows 11 专业工作站版 build 26300、NVIDIA GeForce RTX 5070 Ti（驱动 32.0.16.1692）、单块 3840×2160@160 Hz 显示器，缩放 200%。原型用 Rust 1.95、windows 0.62、egui / egui-wgpu 0.37、wgpu 30（只开 DX12 后端）、winit 0.30。多显示器混合缩放没有在真机上验证。原型代码、测量方法和原始数据见 `prototypes/overlay-latency/`。
+测量环境：AMD Ryzen 5 9600X、47 GB 内存、Windows 11 专业工作站版 build 26300、NVIDIA GeForce RTX 5070 Ti（驱动 32.0.16.1692）、单块 3840×2160@160 Hz 显示器，缩放 200%，测量时桌面为 SDR（复制出来的格式为 B8G8R8A8）。原型用 Rust 1.95、windows 0.62、egui / egui-wgpu 0.37、wgpu 30（只开 DX12 后端）、winit 0.30。多显示器混合缩放没有在真机上验证。原型代码、测量方法和原始数据见 `prototypes/overlay-latency/`。

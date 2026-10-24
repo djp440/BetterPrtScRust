@@ -93,4 +93,5 @@ prototypes/overlay-latency/target/release/overlay-native.exe --strategy prewarm
 3. 尺寸标签和边框粗细按选区左上角所在显示器的缩放变化；
 4. 遮罩出现时窗口没有被系统按 DPI 改变位置或大小（两个原型都吞掉了 `WM_DPICHANGED`）。
 
-原型没有处理旋转的显示器（Desktop Duplication 返回的是未旋转的图像），竖屏会显示错误。
+原型没有处理旋转的显示器（Desktop Duplication 返回的是未旋转的图像），竖屏会显示错误；也没有处理 HDR 桌面
+（这时复制出来的是 FP16，见 #3 的交接笔记），只在 SDR 桌面（B8G8R8A8）上测过。

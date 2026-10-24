@@ -282,6 +282,13 @@ impl Capturer {
                 let tex: ID3D11Texture2D = res.unwrap().cast()?;
                 let mut desc = D3D11_TEXTURE2D_DESC::default();
                 tex.GetDesc(&mut desc);
+                if debug {
+                    // HDR 桌面下即使只声明 BGRA8 也可能拿到 FP16（见 #3 笔记），原型假设 BGRA8。
+                    eprintln!(
+                        "  frame format={:?} {}x{}",
+                        desc.Format, desc.Width, desc.Height
+                    );
+                }
                 let r = f(&tex, &desc);
                 dup.ReleaseFrame()?;
                 return Ok((r?, attempts));
