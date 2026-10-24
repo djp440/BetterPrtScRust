@@ -55,6 +55,7 @@ mod region;
 mod request;
 mod selection;
 mod settings;
+mod snap;
 mod status;
 mod stitch;
 mod update;

@@ -156,6 +156,7 @@ pub enum OverlayCursor {
 /// 用户在遮罩上的输入，坐标为虚拟桌面物理像素。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayInput {
+    /// 指针移动。修饰键按下或松开而指针没动时，平台也在原位置递交一次，`modifiers` 是新的状态。
     PointerMoved {
         position: Point,
         modifiers: Modifiers,
