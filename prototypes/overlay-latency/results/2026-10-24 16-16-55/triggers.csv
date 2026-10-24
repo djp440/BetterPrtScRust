@@ -1,0 +1,17 @@
+config,kind,e2e_ms,stale_frames,phases
+egui-lazy,first,561.11,0,hotkey=3.53|wake=0.65|gfx=486.34|capture=9.49|upload=11.09|window=25.28|present=19.67|uncloak=0.24|foreground=40.86|dwm=4.51|visible=-40.55
+egui-lazy,next,,0,hotkey=3.34|wake=0.24|gfx=455.14|capture=9.94|upload=9.88|window=17.04|present=13.09|uncloak=0.28|foreground=7.66|dwm=2.56
+egui-lazy,next,,0,hotkey=4.17|wake=0.16|gfx=447.00|capture=9.02|upload=10.89|window=16.24|present=13.49|uncloak=0.40|foreground=6.86|dwm=7.31
+egui-lazy,next,,0,hotkey=3.53|wake=0.16|gfx=449.66|capture=9.33|upload=10.85|window=18.91|present=13.18|uncloak=0.28|foreground=7.15|dwm=4.84
+egui-lazy,first,600.37,0,hotkey=4.55|wake=0.34|gfx=523.00|capture=11.03|upload=14.13|window=24.80|present=16.85|uncloak=0.34|foreground=31.63|dwm=1.90|visible=-28.20
+egui-lazy,next,,0,hotkey=4.37|wake=0.14|gfx=499.29|capture=11.22|upload=12.59|window=16.88|present=13.43|uncloak=0.33|foreground=8.08|dwm=3.49
+egui-lazy,next,,0,hotkey=3.80|wake=0.16|gfx=468.86|capture=10.90|upload=12.55|window=18.83|present=16.09|uncloak=0.32|foreground=18.04|dwm=2.49
+egui-lazy,next,,0,hotkey=4.05|wake=0.18|gfx=465.50|capture=8.79|upload=10.53|window=17.05|present=14.36|uncloak=0.33|foreground=17.05|dwm=1.78
+egui-lazy,first,578.53,0,hotkey=4.34|wake=0.18|gfx=510.75|capture=8.60|upload=10.56|window=23.35|present=16.02|uncloak=0.17|foreground=25.39|dwm=1.75|visible=-22.57
+egui-lazy,next,,0,hotkey=3.76|wake=0.21|gfx=468.04|capture=11.88|upload=10.81|window=18.31|present=10.32|uncloak=0.20|foreground=11.68|dwm=4.82
+egui-lazy,next,,0,hotkey=3.68|wake=0.15|gfx=436.43|capture=9.19|upload=10.96|window=16.30|present=8.19|uncloak=0.15|foreground=7.51|dwm=4.30
+egui-lazy,next,,0,hotkey=4.03|wake=0.16|gfx=463.22|capture=10.98|upload=11.49|window=17.33|present=14.34|uncloak=0.27|foreground=11.54|dwm=6.38
+egui-lazy,first,656.82,0,hotkey=46.32|wake=3.37|gfx=536.97|capture=12.48|upload=12.19|window=22.71|present=14.05|uncloak=0.27|foreground=26.94|dwm=3.54|visible=-22.01
+egui-lazy,next,,0,hotkey=5.00|wake=0.19|gfx=617.86|capture=19.89|upload=12.88|window=24.34|present=18.86|uncloak=0.30|foreground=5.89|dwm=4.15
+egui-lazy,next,,0,hotkey=23.84|wake=0.10|gfx=645.38|capture=13.79|upload=12.38|window=23.85|present=17.18|uncloak=0.32|foreground=6.44|dwm=7.19
+egui-lazy,next,,0,hotkey=5.06|wake=0.18|gfx=508.85|capture=10.17|upload=12.01|window=24.69|present=13.93|uncloak=0.36|foreground=9.24|dwm=7.90

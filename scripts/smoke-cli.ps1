@@ -6,7 +6,8 @@
   要求开始时没有 BetterPrtSc 在运行（否则直接中止，不打扰正在使用的实例）。
   依次验证：
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
-    2. `bps capture region` 返回“暂不支持”（退出码 3），`bps capture bogus` 是用法错误（退出码 2）
+    2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
+       `bps capture region` 返回“暂不支持”（退出码 3），`bps capture bogus` 是用法错误（退出码 2）
     3. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
     4. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
@@ -32,6 +33,10 @@ public static class BpsCliSmokeUser32 {
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")]
     public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
 }
 '@
 $WM_CLOSE = 0x0010
@@ -74,6 +79,21 @@ function Invoke-Bps([string[]]$arguments) {
     }
 }
 
+# 物理像素的虚拟桌面尺寸：临时把本线程切到 Per-Monitor V2，避免系统按缩放比例虚拟化坐标。
+function Get-PhysicalVirtualScreenSize {
+    $previous = [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext([IntPtr]-4)
+    try { "{0}x{1}" -f [BpsCliSmokeUser32]::GetSystemMetrics(78), [BpsCliSmokeUser32]::GetSystemMetrics(79) }
+    finally { [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext($previous) | Out-Null }
+}
+
+# 剪贴板里 PNG 格式图像的尺寸；没有 PNG 时返回 $null。
+function Get-ClipboardPngSize {
+    $stream = $clip::GetDataObject().GetData('PNG')
+    if (-not $stream) { return $null }
+    $image = [System.Drawing.Image]::FromStream($stream)
+    try { "{0}x{1}" -f $image.Width, $image.Height } finally { $image.Dispose() }
+}
+
 function Assert-That([bool]$condition, [string]$message) {
     if (-not $condition) { throw "失败：$message" }
     "通过：$message"
@@ -109,6 +129,13 @@ try {
     $files = Get-SavedFiles $data
     $savedFiles += $files
     Assert-That ($files.Count -eq 1 -and (Test-Path -LiteralPath $files[0])) "与 Shift+PrtSc 一致，自动存储并附带文件：$files"
+
+    $clip::Clear()
+    $r = Invoke-Bps @('capture', 'virtual-desktop')
+    $screen = Get-PhysicalVirtualScreenSize
+    $png = Get-ClipboardPngSize
+    Assert-That ($r.Code -eq 0 -and $png -eq $screen) `
+        "bps capture virtual-desktop 退出码 $($r.Code)，PNG $png 等于物理像素虚拟桌面 $screen（$($r.Ms) ms）$($r.Stderr)"
 
     $r = Invoke-Bps @('capture', 'region')
     Assert-That ($r.Code -eq 3 -and $r.Stderr -match '暂不支持') "bps capture region 退出码 3 且提示暂不支持：$($r.Stderr.Trim())"

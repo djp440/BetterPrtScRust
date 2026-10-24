@@ -1,0 +1,82 @@
+== egui-lazy
+  < READY pid=44112 strategy=lazy init_ms=16.8 wgpu_adapter=- outputs=\\.\DISPLAY1@0,0,3840x2160,dpi192,rot1,NVIDIA_GeForce_RTX_5070_Ti
+  READY pid=44112 strategy=lazy init_ms=16.8 wgpu_adapter=- outputs=\\.\DISPLAY1@0,0,3840x2160,dpi192,rot1,NVIDIA_GeForce_RTX_5070_Ti
+  ! trigger 1 帧轨迹（最后 6 帧）479.4ms:247,241,241 493.2ms:247,241,241 510.2ms:247,241,241 515.2ms:247,241,241 547.5ms:247,241,241 561.1ms:255,65,255
+  < EVENT n=1 t_hotkey=11445533721969 t_wake=11445533728478 t_gfx=11445538591868 t_capture=11445538686784 t_upload=11445538797705 t_window=11445539050550 t_present=11445539247210 t_uncloak=11445539249607 t_foreground=11445539658201 t_dwm=11445539703267 attempts=2 fg=1
+  < CLOSED n=1 reason=timeout
+  < EVENT n=2 t_hotkey=11445547052470 t_wake=11445547054821 t_gfx=11445551606240 t_capture=11445551705596 t_upload=11445551804393 t_window=11445551974831 t_present=11445552105741 t_uncloak=11445552108579 t_foreground=11445552185190 t_dwm=11445552210790 attempts=2 fg=1
+  < CLOSED n=2 reason=timeout
+  ! trigger 2 帧轨迹（最后 6 帧）2876.1ms:247,241,241 2907.1ms:247,241,241 2948.0ms:247,241,241 2976.0ms:247,241,241 3007.5ms:247,241,241 3012.4ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,102,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r0-n2.png
+  < EVENT n=3 t_hotkey=11445581232295 t_wake=11445581233911 t_gfx=11445585703922 t_capture=11445585794144 t_upload=11445585903013 t_window=11445586065410 t_present=11445586200310 t_uncloak=11445586204350 t_foreground=11445586272905 t_dwm=11445586345972 attempts=2 fg=1
+  < CLOSED n=3 reason=timeout
+  ! trigger 3 帧轨迹（最后 6 帧）2827.5ms:247,241,241 2859.4ms:247,241,241 2890.3ms:247,241,241 2928.4ms:247,241,241 2959.5ms:247,241,241 2990.6ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,139,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r0-n3.png
+  < EVENT n=4 t_hotkey=11445614442457 t_wake=11445614444089 t_gfx=11445618940711 t_capture=11445619033966 t_upload=11445619142417 t_window=11445619331536 t_present=11445619463374 t_uncloak=11445619466141 t_foreground=11445619537649 t_dwm=11445619586073 attempts=2 fg=1
+  < CLOSED n=4 reason=timeout
+  ! trigger 4 帧轨迹（最后 6 帧）2986.8ms:247,241,241 2993.2ms:247,241,241 2999.1ms:247,241,241 3005.4ms:247,241,241 3011.5ms:247,241,241 3017.6ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,176,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r0-n4.png
+  < EXIT
+  < READY pid=75440 strategy=lazy init_ms=16.2 wgpu_adapter=- outputs=\\.\DISPLAY1@0,0,3840x2160,dpi192,rot1,NVIDIA_GeForce_RTX_5070_Ti
+  ! trigger 1 帧轨迹（最后 6 帧）498.8ms:247,241,241 524.5ms:247,241,241 530.8ms:247,241,241 542.0ms:247,241,241 573.8ms:247,241,241 600.4ms:255,65,255
+  < EVENT n=1 t_hotkey=11445694160059 t_wake=11445694163467 t_gfx=11445699393501 t_capture=11445699503770 t_upload=11445699645111 t_window=11445699893090 t_present=11445700061607 t_uncloak=11445700065008 t_foreground=11445700381270 t_dwm=11445700400233 attempts=2 fg=1
+  < CLOSED n=1 reason=timeout
+  < EVENT n=2 t_hotkey=11445706377357 t_wake=11445706378749 t_gfx=11445711371605 t_capture=11445711483781 t_upload=11445711609705 t_window=11445711778467 t_present=11445711912767 t_uncloak=11445711916026 t_foreground=11445711996780 t_dwm=11445712031723 attempts=2 fg=1
+  < CLOSED n=2 reason=timeout
+  ! trigger 2 帧轨迹（最后 6 帧）2845.8ms:247,241,241 2876.8ms:247,241,241 2915.0ms:247,241,241 2946.5ms:247,241,241 2977.0ms:247,241,241 3017.8ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,102,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r1-n2.png
+  < EVENT n=3 t_hotkey=11445741171079 t_wake=11445741172727 t_gfx=11445745861348 t_capture=11445745970314 t_upload=11445746095790 t_window=11445746284117 t_present=11445746444968 t_uncloak=11445746448141 t_foreground=11445746628532 t_dwm=11445746653479 attempts=2 fg=1
+  < CLOSED n=3 reason=timeout
+  ! trigger 3 帧轨迹（最后 6 帧）2834.7ms:247,241,241 2865.9ms:247,241,241 2897.5ms:247,241,241 2935.2ms:247,241,241 2966.1ms:247,241,241 2997.5ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,139,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r1-n3.png
+  < EVENT n=4 t_hotkey=11445774921971 t_wake=11445774923738 t_gfx=11445779578713 t_capture=11445779666571 t_upload=11445779771870 t_window=11445779942339 t_present=11445780085961 t_uncloak=11445780089213 t_foreground=11445780259667 t_dwm=11445780277461 attempts=2 fg=1
+  < CLOSED n=4 reason=timeout
+  ! trigger 4 帧轨迹（最后 6 帧）2822.0ms:247,241,241 2859.8ms:247,241,241 2891.2ms:247,241,241 2922.3ms:247,241,241 2960.6ms:247,241,241 2991.1ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,176,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r1-n4.png
+  < EXIT
+  < READY pid=42880 strategy=lazy init_ms=10.9 wgpu_adapter=- outputs=\\.\DISPLAY1@0,0,3840x2160,dpi192,rot1,NVIDIA_GeForce_RTX_5070_Ti
+  ! trigger 1 帧轨迹（最后 6 帧）464.9ms:247,241,241 502.6ms:247,241,241 517.4ms:247,241,241 534.6ms:247,241,241 571.0ms:247,241,241 578.5ms:255,65,255
+  < EVENT n=1 t_hotkey=11445854810719 t_wake=11445854812496 t_gfx=11445859920003 t_capture=11445860006001 t_upload=11445860111632 t_window=11445860345129 t_present=11445860505364 t_uncloak=11445860507053 t_foreground=11445860760906 t_dwm=11445860778402 attempts=2 fg=1
+  < CLOSED n=1 reason=timeout
+  < EVENT n=2 t_hotkey=11445867670252 t_wake=11445867672358 t_gfx=11445872352740 t_capture=11445872471525 t_upload=11445872579624 t_window=11445872762698 t_present=11445872865932 t_uncloak=11445872867945 t_foreground=11445872984696 t_dwm=11445873032928 attempts=2 fg=1
+  < CLOSED n=2 reason=timeout
+  ! trigger 2 帧轨迹（最后 6 帧）2879.0ms:247,241,241 2921.6ms:247,241,241 2934.7ms:247,241,241 2947.3ms:247,241,241 2978.4ms:247,241,241 3016.0ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,102,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r2-n2.png
+  < EVENT n=3 t_hotkey=11445902608303 t_wake=11445902609828 t_gfx=11445906974171 t_capture=11445907066028 t_upload=11445907175580 t_window=11445907338534 t_present=11445907420426 t_uncloak=11445907421950 t_foreground=11445907497048 t_dwm=11445907540074 attempts=2 fg=1
+  < CLOSED n=3 reason=timeout
+  ! trigger 3 帧轨迹（最后 6 帧）2854.1ms:247,241,241 2885.3ms:247,241,241 2922.8ms:247,241,241 2955.0ms:247,241,241 2959.2ms:247,241,241 2985.2ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,139,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r2-n3.png
+  < EVENT n=4 t_hotkey=11445935810503 t_wake=11445935812095 t_gfx=11445940444334 t_capture=11445940554151 t_upload=11445940669020 t_window=11445940842287 t_present=11445940985699 t_uncloak=11445940988361 t_foreground=11445941103767 t_dwm=11445941167564 attempts=2 fg=1
+  < CLOSED n=4 reason=timeout
+  ! trigger 4 帧轨迹（最后 6 帧）2835.6ms:247,241,241 2866.9ms:247,241,241 2903.8ms:247,241,241 2934.8ms:247,241,241 2966.1ms:247,241,241 3003.6ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,176,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r2-n4.png
+  < EXIT
+  < READY pid=75592 strategy=lazy init_ms=11.5 wgpu_adapter=- outputs=\\.\DISPLAY1@0,0,3840x2160,dpi192,rot1,NVIDIA_GeForce_RTX_5070_Ti
+  ! trigger 1 帧轨迹（最后 6 帧）567.1ms:247,241,241 592.1ms:247,241,241 598.5ms:247,241,241 611.0ms:247,241,241 629.5ms:247,241,241 656.8ms:255,65,255
+  < EVENT n=1 t_hotkey=11446017648444 t_wake=11446017682115 t_gfx=11446023051794 t_capture=11446023176593 t_upload=11446023298482 t_window=11446023525541 t_present=11446023666085 t_uncloak=11446023668807 t_foreground=11446023938185 t_dwm=11446023973583 attempts=2 fg=1
+  < CLOSED n=1 reason=timeout
+  < EVENT n=2 t_hotkey=11446030685043 t_wake=11446030686941 t_gfx=11446036865575 t_capture=11446037064489 t_upload=11446037193269 t_window=11446037436650 t_present=11446037625233 t_uncloak=11446037628237 t_foreground=11446037687100 t_dwm=11446037728632 attempts=2 fg=1
+  < CLOSED n=2 reason=timeout
+  ! trigger 2 帧轨迹（最后 6 帧）2847.9ms:247,241,241 2866.9ms:247,241,241 2879.4ms:247,241,241 2916.7ms:247,241,241 2948.4ms:247,241,241 2985.1ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,102,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r3-n2.png
+  < EVENT n=3 t_hotkey=11446066035492 t_wake=11446066036498 t_gfx=11446072490301 t_capture=11446072628178 t_upload=11446072751934 t_window=11446072990479 t_present=11446073162316 t_uncloak=11446073165498 t_foreground=11446073229946 t_dwm=11446073301871 attempts=2 fg=1
+  < CLOSED n=3 reason=timeout
+  ! trigger 3 帧轨迹（最后 6 帧）2926.0ms:247,241,241 2932.5ms:247,241,241 2944.1ms:247,241,241 2963.6ms:247,241,241 3001.7ms:247,241,241 3032.4ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,139,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r3-n3.png
+  < EVENT n=4 t_hotkey=11446100247593 t_wake=11446100249358 t_gfx=11446105337871 t_capture=11446105439605 t_upload=11446105559722 t_window=11446105806635 t_present=11446105945947 t_uncloak=11446105949592 t_foreground=11446106041973 t_dwm=11446106120944 attempts=2 fg=1
+  < CLOSED n=4 reason=timeout
+  ! trigger 4 帧轨迹（最后 6 帧）2861.4ms:247,241,241 2892.5ms:247,241,241 2912.1ms:247,241,241 2928.5ms:247,241,241 2961.9ms:247,241,241 2992.4ms:247,241,241
+  ! 未上屏，GDI 读 (4,4) = 244,243,243（期望 255,176,255）
+  ! 未上屏，截图 C:\Users\15575\.bps-work\wt\t2\prototypes\overlay-latency\results\2026-10-24 16-16-55\egui-lazy-missing-r3-n4.png
+  < EXIT
