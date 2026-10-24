@@ -56,6 +56,7 @@ mod request;
 mod result_panel;
 mod selection;
 mod settings;
+mod snap;
 mod status;
 mod stitch;
 mod update;

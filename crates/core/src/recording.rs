@@ -26,6 +26,7 @@ use crate::capture::{self, CaptureFailure};
 use crate::filename::FilenameFields;
 use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::selection::{RegionSelection, Step};
+use crate::snap::Snapping;
 use crate::stitch::virtual_desktop_bounds;
 use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir, Texts};
 
@@ -60,7 +61,7 @@ pub(crate) struct Recording {
 enum Phase {
     /// 在实时画面上框选区域。
     Selecting {
-        selection: RegionSelection,
+        selection: Box<RegionSelection>,
         /// 遮罩上当前画着的场景；场景没变时不重画。
         drawn: Option<OverlayScene>,
     },
@@ -164,6 +165,8 @@ impl Recording {
             recording.phase = Phase::Recording(Box::new(active));
             return Ok(recording);
         }
+        // 框选时选区吸附到窗口边缘（#11）。
+        let snapping = Snapping::of_desktop(platform.window_source.as_ref());
         let displays = platform.overlay.open(Backdrop::Live)?;
         let Some(selection) = RegionSelection::new(displays, texts.get("overlay-record-hint"))
         else {
@@ -171,7 +174,7 @@ impl Recording {
             return Err(CoreError::NoDisplay);
         };
         recording.phase = Phase::Selecting {
-            selection,
+            selection: Box::new(selection.with_snapping(snapping)),
             drawn: None,
         };
         if let Err(e) = recording.redraw(platform) {
@@ -200,6 +203,9 @@ impl Recording {
         let Phase::Selecting { selection, .. } = &mut self.phase else {
             return None;
         };
+        selection
+            .snapping_mut()
+            .load_controls(input, platform.window_source.as_ref());
         match selection.handle(input) {
             Step::Continue => match self.redraw(platform) {
                 Ok(()) => None,
