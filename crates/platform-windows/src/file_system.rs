@@ -7,10 +7,12 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use bps_platform::{FileSystem, NewFile, PlatformError};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS};
+use windows::Win32::Storage::FileSystem::{MOVEFILE_COPY_ALLOWED, MoveFileExW};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{FOLDERID_Pictures, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 
-use crate::error::win_error;
+use crate::error::{wide_path, win_error};
 
 /// Windows 文件系统。
 #[derive(Debug, Default)]
@@ -52,6 +54,27 @@ impl FileSystem for WindowsFileSystem {
             return Err(io_error("写入文件", path, e));
         }
         Ok(NewFile::Created)
+    }
+
+    fn rename_new(&mut self, from: &Path, to: &Path) -> Result<NewFile, PlatformError> {
+        // 不带 MOVEFILE_REPLACE_EXISTING：目标已存在时失败，不覆盖（std::fs::rename 会覆盖）。
+        match unsafe { MoveFileExW(&wide_path(from), &wide_path(to), MOVEFILE_COPY_ALLOWED) } {
+            Ok(()) => Ok(NewFile::Created),
+            Err(e)
+                if e.code() == ERROR_ALREADY_EXISTS.to_hresult()
+                    || e.code() == ERROR_FILE_EXISTS.to_hresult() =>
+            {
+                Ok(NewFile::AlreadyExists)
+            }
+            Err(e) => Err(win_error(
+                &format!("把 {} 改名为 {} 失败", from.display(), to.display()),
+                e,
+            )),
+        }
+    }
+
+    fn remove_file(&mut self, path: &Path) -> Result<(), PlatformError> {
+        fs::remove_file(path).map_err(|e| io_error("删除文件", path, e))
     }
 
     fn write(&mut self, path: &Path, contents: &[u8]) -> Result<(), PlatformError> {

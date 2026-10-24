@@ -22,6 +22,11 @@
 //! 区域捕获要等用户在选区遮罩（`bps_platform::SelectionOverlay`）上框选：命令打开遮罩后即返回，
 //! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
 //!
+//! 截后动作含“录屏”的捕获开始一次录屏（见 `recording` 模块）：区域模式在实时画面上的遮罩
+//! （`Backdrop::Live`）里框选，然后从 `bps_platform::VideoSource` 取画面、由
+//! `bps_platform::VideoEncoder` 编码，`bps_platform::Ticker` 按帧率递交的 `PlatformEvent::Tick`
+//! 推进时间轴；再次触发同一个捕获请求时停止，按命名模板存储并把文件放进剪贴板。
+//!
 //! 截后动作包含标注时，框好区域后旁边浮现标注工具条，用户在遮罩上画标注，最后选择复制到
 //! 剪贴板、自动存储或另存为结束捕获。标注文档模型 [`AnnotationDocument`] 把标注列表合成为
 //! 最终截图；遮罩上显示的也是它合成的像素（遮罩的画布），屏幕上看到的就是最终产物。
@@ -45,6 +50,7 @@ mod i18n;
 mod instance;
 mod location;
 mod output;
+mod recording;
 mod region;
 mod request;
 mod selection;

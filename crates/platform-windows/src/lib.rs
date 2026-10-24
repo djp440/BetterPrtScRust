@@ -14,6 +14,9 @@
 //! - [`WgcWindowSource`]：`EnumWindows` 枚举顶层窗口（命中测试用它的布局），Windows.Graphics.Capture
 //!   截取单个窗口的完整内容
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
+//! - [`WgcVideoSource`]：录屏的视频源（Windows.Graphics.Capture，按区域裁剪，GPU 纹理）
+//! - [`MfVideoEncoder`]：录屏的 MP4 编码器（Media Foundation，优先硬件 H.264 编码）
+//! - [`WindowsTicker`]：录屏的节拍（高精度可等待定时器），由 [`EventLoop`] 递交
 //! - [`WindowsFileDialog`]：系统“另存为”对话框，遮罩显示着时显示在遮罩之上
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
@@ -53,8 +56,10 @@ mod pixels;
 mod registry;
 mod screenshot_tool;
 mod shell;
+mod ticker;
 mod token;
 mod update;
+mod video;
 mod window_capture;
 mod window_source;
 
@@ -78,11 +83,13 @@ pub use shell::{
     allow_any_process_to_set_foreground, open_with_default_program, pick_folder,
     standard_user_can_write,
 };
+pub use ticker::WindowsTicker;
 pub use token::{
     RESTARTED_AS_ADMINISTRATOR_ARG, WindowsElevation, is_elevated,
     run_self_as_administrator_and_wait,
 };
 pub use update::{GitHubReleases, latest_release};
+pub use video::{MfVideoEncoder, WgcVideoSource};
 pub use window_source::WgcWindowSource;
 
 use std::path::PathBuf;
@@ -108,6 +115,9 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
         overlay: Box::new(event_loop.selection_overlay()),
+        video_source: Box::new(WgcVideoSource::new()),
+        video_encoder: Box::new(MfVideoEncoder::new()),
+        ticker: Box::new(event_loop.ticker()),
         file_dialog: Box::new(WindowsFileDialog::new()),
         window_source: Box::new(WgcWindowSource::new()),
     }
