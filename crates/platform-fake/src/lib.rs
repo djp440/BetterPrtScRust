@@ -5,7 +5,8 @@
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
 //! 编辑配置文件、修改系统设置、选托盘菜单、在选区遮罩上框选或取消）并检查外部可见的结果
 //! （剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、开机自启登记、
-//! 遮罩当前画的场景、托盘菜单的文字、打开的窗口、检查更新发出的请求）。
+//! 遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的窗口、检查更新发出的
+//! 请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
 //! 结果面板子进程用的文字识别（OCR）不在 `Platform` 里：用 [`FakePlatform::text_recognizer`]
 //! 取得，识别结果用 [`FakePlatform::with_recognized_text`] 预先设置，
@@ -33,6 +34,7 @@ mod autostart;
 mod clipboard;
 mod config_file;
 pub mod decode;
+mod file_dialog;
 mod file_system;
 mod frame_source;
 mod hotkeys;
@@ -50,8 +52,8 @@ use std::sync::{Arc, Mutex};
 use bps_platform::{
     AutostartEntry, AutostartMethod, Clock, Hotkey, Image, Key, LatestRelease, LocalDateTime,
     Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform, PlatformError,
-    PlatformEvent, Point, PointerButton, RecognitionLanguage, Rect, StandaloneWindow,
-    SystemLanguage, TextRecognizer, TrayMenuItem,
+    PlatformEvent, Point, PointerButton, RecognitionLanguage, Rect, SaveAsOptions,
+    StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -63,6 +65,7 @@ pub use resident_channel::FakeResidentChannel;
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
 use clipboard::FakeClipboard;
 use config_file::{ConfigFileState, FakeConfigFile};
+use file_dialog::{DialogState, FakeFileDialog};
 use file_system::{FakeFileSystem, FsState};
 use frame_source::{FakeFrameSource, FrameState};
 use hotkeys::{FakeHotkeys, HotkeyState};
@@ -95,6 +98,7 @@ pub struct FakePlatform {
     updates: Arc<Mutex<UpdateState>>,
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
+    dialogs: Arc<Mutex<DialogState>>,
     ocr: Arc<Mutex<OcrState>>,
 }
 
@@ -114,6 +118,7 @@ impl Default for FakePlatform {
             updates: Default::default(),
             system: Default::default(),
             overlay: Default::default(),
+            dialogs: Default::default(),
             ocr: Default::default(),
         }
     }
@@ -153,6 +158,12 @@ impl FakePlatform {
         files.add_dir(&path);
         files.pictures_dir = path;
         drop(files);
+        self
+    }
+
+    /// 预先创建一个目录（及其上级目录）。
+    pub fn with_dir(self, path: impl AsRef<Path>) -> Self {
+        self.files.lock().unwrap().add_dir(path.as_ref());
         self
     }
 
@@ -312,7 +323,19 @@ impl FakePlatform {
                 frames: self.frames.clone(),
                 state: self.overlay.clone(),
             }),
+            file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),
         }
+    }
+
+    /// 安排用户在下一次弹出的“另存为”对话框里的选择：选定 `path`，或取消（`None`）。
+    /// 可以连续安排多次，按弹出顺序使用；弹出时没有安排好的选择会让测试 panic。
+    pub fn answer_save_as(&self, path: Option<PathBuf>) {
+        self.dialogs.lock().unwrap().answers.push_back(path);
+    }
+
+    /// 至今弹出过的“另存为”对话框，按弹出顺序排列。
+    pub fn save_as_dialogs(&self) -> Vec<SaveAsOptions> {
+        self.dialogs.lock().unwrap().shown.clone()
     }
 
     /// 当前的开机自启登记：普通方式在前。
@@ -495,6 +518,25 @@ impl FakePlatform {
     /// 遮罩上当前画着的场景；遮罩没有显示时返回 `None`。
     pub fn overlay_scene(&self) -> Option<OverlayScene> {
         self.overlay.lock().unwrap().visible_scene().cloned()
+    }
+
+    /// 遮罩上用户正看到的画布：位置和内容；没有画布或遮罩没有显示时返回 `None`。
+    pub fn overlay_canvas(&self) -> Option<(Rect, Image)> {
+        self.overlay.lock().unwrap().visible_canvas().cloned()
+    }
+
+    /// 在遮罩上单击写着 `text` 的地方（[`OverlayItem::Text`](bps_platform::OverlayItem::Text)
+    /// 所在矩形的中心），例如工具条上的按钮。遮罩上没有这段文字时 panic。
+    pub fn click_text(&self, text: &str) -> Vec<PlatformEvent> {
+        let scene = self.overlay_scene().expect("选区遮罩没有显示");
+        let rect = scene
+            .text_rect(text)
+            .unwrap_or_else(|| panic!("遮罩上没有“{text}”"));
+        let center = Point::new(
+            rect.x + rect.width as i32 / 2,
+            rect.y + rect.height as i32 / 2,
+        );
+        self.click(PointerButton::Left, center)
     }
 
     /// 模拟用户在遮罩上的一次输入，返回平台事件循环会递交的事件。

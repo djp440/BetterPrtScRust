@@ -86,7 +86,7 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
     );
 }
 
-/// 默认绑定前面加一条“区域 + 复制”：默认的 PrtSc 是“区域 + 标注”，标注实现前会被整体拒绝。
+/// 默认绑定前面加一条“区域 + 复制”，`bps capture region` 因此只框选、复制，不进入标注。
 fn bindings_with_region_copy() -> Vec<HotkeyBinding> {
     let region_copy = HotkeyBinding {
         hotkey: Hotkey::new(Modifiers::CTRL, Key::F(8)),
@@ -99,17 +99,29 @@ fn bindings_with_region_copy() -> Vec<HotkeyBinding> {
 }
 
 /// 带一条“区域 + 复制”绑定的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
-/// 只要选区遮罩显示着，用户就在上面做 `gesture`。
+/// 只要选区遮罩显示着，用户就在上面做 `gesture`（遮罩还开着就接着做下一步）。
 fn resident_instance_with_user(
     fake: &FakePlatform,
-    gesture: impl Fn(&FakePlatform) -> Vec<PlatformEvent> + 'static,
+    gesture: impl FnMut(&FakePlatform) -> Vec<PlatformEvent> + 'static,
 ) -> impl FnMut(PlatformEvent) + 'static {
-    let mut instance = ResidentInstance::new(fake.platform(), bindings_with_region_copy());
+    resident_instance_with_bindings_and_user(fake, bindings_with_region_copy(), gesture)
+}
+
+/// 用 `bindings` 启动的常驻实例，外加在遮罩上做 `gesture` 的用户。
+fn resident_instance_with_bindings_and_user(
+    fake: &FakePlatform,
+    bindings: Vec<HotkeyBinding>,
+    mut gesture: impl FnMut(&FakePlatform) -> Vec<PlatformEvent> + 'static,
+) -> impl FnMut(PlatformEvent) + 'static {
+    let mut instance = ResidentInstance::new(fake.platform(), bindings);
     assert!(instance.register_hotkeys().is_empty());
     let fake = fake.clone();
     move |event| {
         let _ = instance.handle(event);
-        if fake.overlay_visible() {
+        for _ in 0..10 {
+            if !fake.overlay_visible() {
+                break;
+            }
             for event in gesture(&fake) {
                 let _ = instance.handle(event);
             }
@@ -152,16 +164,31 @@ fn bps_capture_region_reports_cancelled_when_user_presses_escape() {
 }
 
 #[test]
-fn bps_capture_region_with_default_bindings_reports_annotate_unsupported_without_overlay() {
+fn bps_capture_region_with_default_bindings_replies_after_user_finishes_annotating() {
+    // 默认的 PrtSc 是“区域 + 标注”：框选后进入标注，用户点“复制”才结束。
     let fake = two_displays_cursor_on_second();
-    let mut channel = FakeResidentChannel::running(resident_instance(&fake));
+    let region = Rect::new(10, 5, 40, 30);
+    let mut channel = FakeResidentChannel::running(resident_instance_with_bindings_and_user(
+        &fake,
+        default_bindings(),
+        {
+            let mut selected = false;
+            move |fake| {
+                if std::mem::replace(&mut selected, true) {
+                    fake.click_text("复制")
+                } else {
+                    fake.drag(Point::new(10, 5), Point::new(49, 34))
+                }
+            }
+        },
+    ));
 
     let outcome = run_cli(["capture", "region"], &mut channel);
 
-    assert_eq!(outcome.status, CliStatus::Unsupported, "{outcome:?}");
-    assert!(outcome.stderr.contains("标注"), "{outcome:?}");
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
-    assert!(fake.clipboard().is_empty());
+    let png = fake.clipboard().png_image().unwrap();
+    assert_eq!((png.width(), png.height()), (region.width, region.height));
 }
 
 #[test]

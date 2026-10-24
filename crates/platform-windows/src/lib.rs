@@ -13,6 +13,7 @@
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
 //! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
+//! - [`WindowsFileDialog`]：系统“另存为”对话框，遮罩显示着时显示在遮罩之上
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
 //! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面；
@@ -40,6 +41,7 @@ mod display_config;
 pub mod dpi;
 mod error;
 mod event_loop;
+mod file_dialog;
 mod file_system;
 mod font;
 mod frame_source;
@@ -64,6 +66,7 @@ pub use clipboard::{WindowsClipboard, read_clipboard_text, write_clipboard_text}
 pub use clock::WindowsClock;
 pub use config_file::WindowsConfigFile;
 pub use event_loop::{EventLoop, EventSender, WindowsTrayMenu};
+pub use file_dialog::WindowsFileDialog;
 pub use file_system::WindowsFileSystem;
 pub use font::map_system_font;
 pub use frame_source::DxgiFrameSource;
@@ -107,5 +110,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
         overlay: Box::new(event_loop.selection_overlay()),
+        file_dialog: Box::new(WindowsFileDialog::new()),
     }
 }

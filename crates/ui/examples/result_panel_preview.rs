@@ -90,7 +90,7 @@ fn main() {
         icon: None,
         system_languages: bps_platform_windows::user_ui_languages(),
         open: Arc::new(|target| {
-            println!("打开 {}", target.display());
+            println!("打开 {}", target.to_string_lossy());
             Ok(())
         }),
         clipboard: SystemClipboard {

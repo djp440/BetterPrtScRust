@@ -1,4 +1,4 @@
-use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform};
+use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform, Point};
 
 use crate::{CaptureMode, CoreError, stitch};
 
@@ -71,11 +71,16 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
 fn display_under_cursor(frames: &dyn FrameSource) -> Result<Display, CoreError> {
     let displays = frames.displays()?;
     let cursor = frames.cursor_position()?;
-    displays
-        .iter()
-        .find(|d| d.bounds.contains(cursor))
-        .or_else(|| displays.iter().find(|d| d.is_primary))
-        .or_else(|| displays.first())
+    display_at(&displays, cursor)
         .cloned()
         .ok_or(CoreError::NoDisplay)
+}
+
+/// `displays` 中包含 `point` 的显示器；`point` 不在任何显示器内时退回主显示器。
+pub(crate) fn display_at(displays: &[Display], point: Point) -> Option<&Display> {
+    displays
+        .iter()
+        .find(|d| d.bounds.contains(point))
+        .or_else(|| displays.iter().find(|d| d.is_primary))
+        .or_else(|| displays.first())
 }

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use bps_platform::{
-    Backdrop, Display, DisplayId, Image, OverlayScene, PlatformError, SelectionOverlay,
+    Backdrop, Display, DisplayId, Image, OverlayScene, PlatformError, Point, Rect, SelectionOverlay,
 };
 
 use crate::frame_source::FrameState;
@@ -13,12 +13,21 @@ pub(crate) struct OverlayState {
     /// 最近一次 `render` 的场景；打开后还没画过时为 `None`（遮罩还看不见）。
     scene: Option<OverlayScene>,
     frozen: Vec<(DisplayId, Image)>,
+    /// 画布的位置和内容（包括还没 `render` 出来的更新）。
+    canvas: Option<(Rect, Image)>,
+    /// 最近一次 `render` 时的画布，即用户看到的画布。
+    shown_canvas: Option<(Rect, Image)>,
 }
 
 impl OverlayState {
     /// 遮罩是否正显示在屏幕上（打开并且至少画过一次）。
     pub fn visible_scene(&self) -> Option<&OverlayScene> {
         self.scene.as_ref().filter(|_| self.open)
+    }
+
+    /// 用户正看到的画布（最近一次 `render` 时的画布）。
+    pub fn visible_canvas(&self) -> Option<&(Rect, Image)> {
+        self.shown_canvas.as_ref().filter(|_| self.open)
     }
 }
 
@@ -48,6 +57,8 @@ impl SelectionOverlay for FakeOverlay {
             .collect();
         state.open = true;
         state.scene = None;
+        state.canvas = None;
+        state.shown_canvas = None;
         Ok(displays)
     }
 
@@ -57,6 +68,7 @@ impl SelectionOverlay for FakeOverlay {
             return Err(PlatformError::new("假遮罩没有打开"));
         }
         state.scene = Some(scene.clone());
+        state.shown_canvas = state.canvas.clone();
         Ok(())
     }
 
@@ -70,10 +82,54 @@ impl SelectionOverlay for FakeOverlay {
             .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))
     }
 
+    fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError> {
+        let mut state = self.state.lock().unwrap();
+        if !state.open {
+            return Err(PlatformError::new("假遮罩没有打开"));
+        }
+        assert_eq!(
+            (image.width(), image.height()),
+            (area.width, area.height),
+            "画布内容的尺寸必须等于画布范围"
+        );
+        state.canvas = Some((area, image.clone()));
+        Ok(())
+    }
+
+    fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError> {
+        let mut state = self.state.lock().unwrap();
+        if !state.open {
+            return Err(PlatformError::new("假遮罩没有打开"));
+        }
+        let (area, image) = state
+            .canvas
+            .as_mut()
+            .expect("更新画布之前必须先 show_canvas");
+        let target = Rect::new(at.x, at.y, patch.width(), patch.height());
+        assert!(
+            area.intersection(target) == Some(target),
+            "画布更新 {target:?} 超出了画布 {area:?}"
+        );
+        let (left, top) = ((at.x - area.x) as usize, (at.y - area.y) as usize);
+        let width = image.width() as usize;
+        let mut pixels = std::mem::replace(image, Image::from_rgba(0, 0, Vec::new())).into_rgba();
+        let row_bytes = patch.width() as usize * 4;
+        if row_bytes > 0 {
+            for (row, source) in patch.rgba().chunks_exact(row_bytes).enumerate() {
+                let start = ((top + row) * width + left) * 4;
+                pixels[start..start + row_bytes].copy_from_slice(source);
+            }
+        }
+        *image = Image::from_rgba(area.width, area.height, pixels);
+        Ok(())
+    }
+
     fn close(&mut self) {
         let mut state = self.state.lock().unwrap();
         state.open = false;
         state.scene = None;
         state.frozen.clear();
+        state.canvas = None;
+        state.shown_canvas = None;
     }
 }

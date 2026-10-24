@@ -21,6 +21,9 @@ pub enum Backdrop {
 /// 典型顺序：[`open`](Self::open) → [`render`](Self::render)（首次调用时遮罩才出现，之后每次重画）
 /// → 用户输入经平台事件循环递交 → …… → [`frozen_image`](Self::frozen_image) 取裁剪用的画面 →
 /// [`close`](Self::close)。
+///
+/// 每一帧从下往上是：背景（冻结帧）→ 画布（[`show_canvas`](Self::show_canvas)，可选）→
+/// 场景（[`OverlayScene`]）。
 pub trait SelectionOverlay {
     /// 打开遮罩：按 `backdrop` 准备背景（冻结帧模式下此刻拍下每块显示器的画面），
     /// 但还不显示，等第一次 [`render`](Self::render)。
@@ -34,7 +37,19 @@ pub trait SelectionOverlay {
     /// 冻结帧中一块显示器的画面，尺寸等于它 `bounds` 的物理像素尺寸。只读取已拍下的冻结帧。
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError>;
 
-    /// 隐藏遮罩并释放冻结帧；没有打开时什么也不做。
+    /// 在遮罩上 `area`（虚拟桌面物理像素）处显示画布，内容是 `image`（尺寸必须等于 `area`）；
+    /// 替换已有的画布。
+    ///
+    /// 画布盖在背景之上、场景之下，像素由 `core` 提供：标注时显示 `core` 合成好的截图，
+    /// 屏幕上看到的因此就是最终产物。在下一次 [`render`](Self::render) 时显示；
+    /// [`close`](Self::close) 时释放。
+    fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError>;
+
+    /// 用 `patch` 替换画布的一部分，`patch` 的左上角位于虚拟桌面 `at`，必须整个落在画布内。
+    /// 在下一次 [`render`](Self::render) 时显示。
+    fn update_canvas(&mut self, at: Point, patch: &Image) -> Result<(), PlatformError>;
+
+    /// 隐藏遮罩并释放冻结帧和画布；没有打开时什么也不做。
     fn close(&mut self);
 }
 
@@ -55,6 +70,14 @@ impl OverlayScene {
             _ => None,
         })
     }
+
+    /// 场景中内容为 `text` 的 [`OverlayItem::Text`] 所在的矩形（有多个时取最上面的）。
+    pub fn text_rect(&self, text: &str) -> Option<Rect> {
+        self.items.iter().rev().find_map(|item| match item {
+            OverlayItem::Text { rect, text: t, .. } if t == text => Some(*rect),
+            _ => None,
+        })
+    }
 }
 
 /// 遮罩上的一个绘制元素。新的界面元素优先由现有元素组合；确实需要新画法时在这里加变体，
@@ -71,6 +94,15 @@ pub enum OverlayItem {
     },
     /// 带底色的单行文字。
     Label(Label),
+    /// 在 `rect` 内水平、垂直都居中的单行文字，没有底色（例如工具条按钮上的文字）。
+    /// 超出 `rect` 的部分可能被裁掉，由调用方留足宽度。
+    Text {
+        rect: Rect,
+        text: String,
+        /// 字号（物理像素），已按所在显示器的缩放比例换算。
+        font_size: f32,
+        color: Color,
+    },
 }
 
 /// 带底色的单行文字。底色框的大小由平台按文字实际尺寸加上 `padding` 决定。
