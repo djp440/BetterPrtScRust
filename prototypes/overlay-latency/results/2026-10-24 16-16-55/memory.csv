@@ -1,0 +1,9 @@
+config,when,working_set_mb,private_working_set_mb,private_bytes_mb
+egui-lazy,idle_before,13.45,1.42,2.29
+egui-lazy,idle_after,116.52,89.46,149.64
+egui-lazy,idle_before,13.46,1.43,2.28
+egui-lazy,idle_after,119.33,92.29,146.47
+egui-lazy,idle_before,13.45,1.42,2.27
+egui-lazy,idle_after,125.89,98.83,140.07
+egui-lazy,idle_before,13.45,1.41,2.27
+egui-lazy,idle_after,119.75,92.73,154.55
