@@ -68,6 +68,29 @@ impl FsState {
             None => Ok(()),
         }
     }
+
+    /// 写入文件：不存在时新建，存在时覆盖（假编码器写视频用）。上级目录必须已存在且可写。
+    pub fn overwrite(&mut self, path: &Path, contents: Vec<u8>) -> Result<(), PlatformError> {
+        if self.dirs.contains(path) {
+            return Err(PlatformError::new(format!("{} 是目录", path.display())));
+        }
+        self.check_parent(path)?;
+        self.check_writable(path)?;
+        self.files.insert(path.to_path_buf(), contents);
+        Ok(())
+    }
+
+    fn check_parent(&self, path: &Path) -> Result<(), PlatformError> {
+        let parent = path.parent().unwrap_or(Path::new(""));
+        if self.dirs.contains(parent) {
+            Ok(())
+        } else {
+            Err(PlatformError::new(format!(
+                "系统找不到指定的路径：{}",
+                parent.display()
+            )))
+        }
+    }
 }
 
 pub(crate) struct FakeFileSystem(pub Arc<Mutex<FsState>>);
@@ -107,5 +130,37 @@ impl FileSystem for FakeFileSystem {
         state.check_writable(path)?;
         state.files.insert(path.to_path_buf(), contents.to_vec());
         Ok(NewFile::Created)
+    }
+
+    fn rename_new(&mut self, from: &Path, to: &Path) -> Result<NewFile, PlatformError> {
+        let mut state = self.0.lock().unwrap();
+        if !state.files.contains_key(from) {
+            return Err(PlatformError::new(format!(
+                "系统找不到指定的文件：{}",
+                from.display()
+            )));
+        }
+        if state.files.contains_key(to) || state.dirs.contains(to) {
+            return Ok(NewFile::AlreadyExists);
+        }
+        state.check_parent(to)?;
+        state.check_writable(from)?;
+        state.check_writable(to)?;
+        let contents = state.files.remove(from).expect("刚刚检查过");
+        state.files.insert(to.to_path_buf(), contents);
+        Ok(NewFile::Created)
+    }
+
+    fn remove_file(&mut self, path: &Path) -> Result<(), PlatformError> {
+        let mut state = self.0.lock().unwrap();
+        if !state.files.contains_key(path) {
+            return Err(PlatformError::new(format!(
+                "系统找不到指定的文件：{}",
+                path.display()
+            )));
+        }
+        state.check_writable(path)?;
+        state.files.remove(path);
+        Ok(())
     }
 }

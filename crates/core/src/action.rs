@@ -18,7 +18,9 @@ const MAX_NAME_SUFFIX: u32 = 9999;
 pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
     matches!(
         action,
-        PostCaptureAction::CopyToClipboard | PostCaptureAction::AutoSave
+        PostCaptureAction::CopyToClipboard
+            | PostCaptureAction::AutoSave
+            | PostCaptureAction::Record
     )
 }
 

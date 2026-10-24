@@ -19,4 +19,6 @@ pub enum PlatformEvent {
     RequestReceived(IncomingRequest),
     /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
     OverlayInput(OverlayInput),
+    /// 用 [`crate::Ticker::start`] 开始的节拍到了。
+    Tick,
 }

@@ -4,7 +4,7 @@
 use bps_core::{
     CaptureMode, CaptureRequest, Command, CoreError, Flow, PostCaptureAction, ResidentInstance,
 };
-use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
+use bps_platform::{Hotkey, Key, Modifiers, OverlayKey, Point, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
 
 fn desktop() -> FakePlatform {
@@ -93,5 +93,9 @@ fn every_default_binding_either_runs_or_reports_unsupported() {
             ),
             "{hotkey}: {result:?}"
         );
+        // 区域捕获和录屏会打开选区遮罩；取消它，下一个绑定才能开始。
+        if fake.overlay_visible() {
+            instance.handle(fake.press_key(OverlayKey::Escape)).unwrap();
+        }
     }
 }

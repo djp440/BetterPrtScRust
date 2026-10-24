@@ -13,9 +13,16 @@ pub(crate) struct OverlayState {
     /// 最近一次 `render` 的场景；打开后还没画过时为 `None`（遮罩还看不见）。
     scene: Option<OverlayScene>,
     frozen: Vec<(DisplayId, Image)>,
+    /// 打开时的背景。
+    backdrop: Option<Backdrop>,
 }
 
 impl OverlayState {
+    /// 正显示着的遮罩底下是什么。
+    pub fn visible_backdrop(&self) -> Option<Backdrop> {
+        self.visible_scene().and(self.backdrop)
+    }
+
     /// 遮罩是否正显示在屏幕上（打开并且至少画过一次）。
     pub fn visible_scene(&self) -> Option<&OverlayScene> {
         self.scene.as_ref().filter(|_| self.open)
@@ -29,7 +36,6 @@ pub(crate) struct FakeOverlay {
 
 impl SelectionOverlay for FakeOverlay {
     fn open(&mut self, backdrop: Backdrop) -> Result<Vec<Display>, PlatformError> {
-        let Backdrop::FrozenFrame = backdrop;
         let mut state = self.state.lock().unwrap();
         if state.open {
             return Err(PlatformError::new("假遮罩已经打开"));
@@ -39,13 +45,17 @@ impl SelectionOverlay for FakeOverlay {
         if displays.is_empty() {
             return Err(PlatformError::new("假帧源中没有显示器"));
         }
-        // 冻结帧：此刻每块显示器画面的副本，之后画面再变也不影响它。
-        state.frozen = frames
-            .displays
-            .iter()
-            .zip(&displays)
-            .map(|(fake, display)| (display.id, fake.image().clone()))
-            .collect();
+        // 冻结帧：此刻每块显示器画面的副本，之后画面再变也不影响它。实时画面不拍冻结帧。
+        state.frozen = match backdrop {
+            Backdrop::FrozenFrame => frames
+                .displays
+                .iter()
+                .zip(&displays)
+                .map(|(fake, display)| (display.id, fake.image().clone()))
+                .collect(),
+            Backdrop::Live => Vec::new(),
+        };
+        state.backdrop = Some(backdrop);
         state.open = true;
         state.scene = None;
         Ok(displays)
@@ -75,5 +85,6 @@ impl SelectionOverlay for FakeOverlay {
         state.open = false;
         state.scene = None;
         state.frozen.clear();
+        state.backdrop = None;
     }
 }

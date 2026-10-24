@@ -21,6 +21,11 @@
 //!
 //! 区域捕获要等用户在选区遮罩（`bps_platform::SelectionOverlay`）上框选：命令打开遮罩后即返回，
 //! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
+//!
+//! 截后动作含“录屏”的捕获开始一次录屏（见 `recording` 模块）：区域模式在实时画面上的遮罩
+//! （`Backdrop::Live`）里框选，然后从 `bps_platform::VideoSource` 取画面、由
+//! `bps_platform::VideoEncoder` 编码，`bps_platform::Ticker` 按帧率递交的 `PlatformEvent::Tick`
+//! 推进时间轴；再次触发同一个捕获请求时停止，按命名模板存储并把文件放进剪贴板。
 
 mod action;
 mod autostart;
@@ -36,6 +41,7 @@ mod forward;
 mod instance;
 mod location;
 mod output;
+mod recording;
 mod region;
 mod request;
 mod selection;

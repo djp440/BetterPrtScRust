@@ -1,11 +1,15 @@
-//! 把剪贴板和假文件系统里的字节解码回图像，用来在测试里验证数据真的能被读回。
+//! 把剪贴板和假文件系统里的字节解码回图像（以及假编码器写出的视频），用来在测试里验证
+//! 数据真的能被读回。
 //!
 //! 解码器是独立于 `bps-core` 编码器的实现，期望值因此不由被测代码推导。
 //! 格式不合法时一律 panic（测试失败）。
 
 use std::io::Cursor;
+use std::time::Duration;
 
-use bps_platform::Image;
+use bps_platform::{Image, VideoFormat};
+
+use crate::video::FAKE_VIDEO_MAGIC;
 
 /// 解码 8 位 RGB / RGBA PNG。
 pub fn png(bytes: &[u8]) -> Image {
@@ -96,6 +100,75 @@ pub fn dib(bytes: &[u8]) -> Image {
         }
     }
     Image::from_rgba(width as u32, rows as u32, rgba)
+}
+
+/// 假编码器写出的一段视频。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeVideo {
+    pub format: VideoFormat,
+    pub width: u32,
+    pub height: u32,
+    /// 每秒帧数。
+    pub frame_rate: u32,
+    /// 按时间戳排列的全部帧。
+    pub frames: Vec<FakeVideoFrame>,
+}
+
+impl FakeVideo {
+    /// 视频的时长：最后一帧的时间戳再加一帧的时长。
+    pub fn duration(&self) -> Duration {
+        self.frames.last().map_or(Duration::ZERO, |last| {
+            last.timestamp + Duration::from_secs(1) / self.frame_rate
+        })
+    }
+}
+
+/// 视频里的一帧。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeVideoFrame {
+    /// 从视频开头算起的显示时间。
+    pub timestamp: Duration,
+    pub image: Image,
+}
+
+/// 解码假编码器（`FakePlatform` 的视频编码器）写出的视频文件。
+pub fn video(bytes: &[u8]) -> FakeVideo {
+    assert!(
+        bytes.starts_with(FAKE_VIDEO_MAGIC),
+        "不是假编码器写出的视频（长度 {}）",
+        bytes.len()
+    );
+    let mut rest = &bytes[FAKE_VIDEO_MAGIC.len()..];
+    let mut take = |n: usize| {
+        assert!(rest.len() >= n, "假视频数据不完整");
+        let (head, tail) = rest.split_at(n);
+        rest = tail;
+        head
+    };
+    let format = match take(4) {
+        b"mp4\0" => VideoFormat::Mp4,
+        other => panic!("未知的假视频格式 {other:?}"),
+    };
+    let mut u32_field = || u32::from_le_bytes(take(4).try_into().unwrap());
+    let (width, height, frame_rate, count) = (u32_field(), u32_field(), u32_field(), u32_field());
+    let frame_bytes = width as usize * height as usize * 4;
+    let frames = (0..count)
+        .map(|_| {
+            let nanos = u64::from_le_bytes(take(8).try_into().unwrap());
+            FakeVideoFrame {
+                timestamp: Duration::from_nanos(nanos),
+                image: Image::from_rgba(width, height, take(frame_bytes).to_vec()),
+            }
+        })
+        .collect();
+    assert!(rest.is_empty(), "假视频末尾有多余数据");
+    FakeVideo {
+        format,
+        width,
+        height,
+        frame_rate,
+        frames,
+    }
 }
 
 fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {

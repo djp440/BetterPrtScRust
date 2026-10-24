@@ -39,4 +39,8 @@ impl LocalDateTime {
 /// 时钟：提供当前的本地时间，例如用于命名模板里的日期时间。
 pub trait Clock {
     fn now(&self) -> LocalDateTime;
+
+    /// 单调时间：从某个固定时刻（例如程序启动）起经过的时间，不受系统时间调整影响，
+    /// 用来计量时长（例如录屏的时间轴）。
+    fn monotonic(&self) -> std::time::Duration;
 }

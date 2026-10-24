@@ -118,7 +118,9 @@ impl D2dSelectionOverlay {
 
 impl SelectionOverlay for D2dSelectionOverlay {
     fn open(&mut self, backdrop: Backdrop) -> Result<Vec<Display>, PlatformError> {
-        let Backdrop::FrozenFrame = backdrop;
+        if backdrop == Backdrop::Live {
+            return Err(PlatformError::new("实时画面上的遮罩尚未实现"));
+        }
         if self.session.is_some() {
             return Err(PlatformError::new("选区遮罩已经打开"));
         }
