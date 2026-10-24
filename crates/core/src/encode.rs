@@ -2,7 +2,83 @@
 
 use bps_platform::Image;
 
-use crate::CoreError;
+use crate::{CoreError, OutputFormat};
+
+/// JPEG 质量（1–100）。截图里文字多，取偏高的值。
+const JPEG_QUALITY: u8 = 90;
+/// AVIF 质量（1–100）与 rav1e 速度（1 最慢 – 10 最快）。截图在热键处理中同步编码，取最快速度。
+const AVIF_QUALITY: f32 = 85.0;
+const AVIF_SPEED: u8 = 10;
+
+/// 按输出格式编码成完整的文件字节。
+pub(crate) fn encode(image: &Image, format: OutputFormat) -> Result<Vec<u8>, CoreError> {
+    match format {
+        OutputFormat::Png => png(image),
+        OutputFormat::Jpeg => jpeg(image),
+        OutputFormat::WebP => webp(image),
+        OutputFormat::Avif => avif(image),
+    }
+}
+
+/// 编码成 JPEG。JPEG 没有透明度，半透明和透明像素先合成到白色背景上。
+fn jpeg(image: &Image) -> Result<Vec<u8>, CoreError> {
+    let (width, height) = (u16::try_from(image.width()), u16::try_from(image.height()));
+    let (Ok(width), Ok(height)) = (width, height) else {
+        return Err(CoreError::Encode(format!(
+            "JPEG 最大只支持 65535x65535，截图为 {}x{}",
+            image.width(),
+            image.height()
+        )));
+    };
+    let rgb: Vec<u8> = image
+        .rgba()
+        .chunks_exact(4)
+        .flat_map(|p| {
+            let alpha = u16::from(p[3]);
+            let over_white =
+                |c: u8| ((u16::from(c) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+            [over_white(p[0]), over_white(p[1]), over_white(p[2])]
+        })
+        .collect();
+    let mut out = Vec::new();
+    jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY)
+        .encode(&rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .map_err(|e| CoreError::Encode(e.to_string()))?;
+    Ok(out)
+}
+
+/// 编码成无损 WebP，保留透明度。
+fn webp(image: &Image) -> Result<Vec<u8>, CoreError> {
+    let mut out = Vec::new();
+    image_webp::WebPEncoder::new(&mut out)
+        .encode(
+            image.rgba(),
+            image.width(),
+            image.height(),
+            image_webp::ColorType::Rgba8,
+        )
+        .map_err(|e| CoreError::Encode(e.to_string()))?;
+    Ok(out)
+}
+
+/// 编码成有损 AVIF；完全不透明时不写 alpha 通道。
+fn avif(image: &Image) -> Result<Vec<u8>, CoreError> {
+    let pixels: Vec<ravif::RGBA8> = image
+        .rgba()
+        .chunks_exact(4)
+        .map(|p| ravif::RGBA8::new(p[0], p[1], p[2], p[3]))
+        .collect();
+    let encoded = ravif::Encoder::new()
+        .with_quality(AVIF_QUALITY)
+        .with_speed(AVIF_SPEED)
+        .encode_rgba(ravif::Img::new(
+            &pixels[..],
+            image.width() as usize,
+            image.height() as usize,
+        ))
+        .map_err(|e| CoreError::Encode(e.to_string()))?;
+    Ok(encoded.avif_file)
+}
 
 /// 编码成 PNG（RGBA8）。剪贴板场景优先速度，使用快速压缩。
 pub(crate) fn png(image: &Image) -> Result<Vec<u8>, CoreError> {

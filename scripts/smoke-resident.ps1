@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  常驻实例端到端冒烟：启动 BetterPrtSc.exe → 投递热键事件 → 检查剪贴板 → 退出。
+  常驻实例端到端冒烟：启动 BetterPrtSc.exe → 投递热键事件 → 检查剪贴板和自动存储的文件 → 退出。
 
 .DESCRIPTION
   不模拟真实按键（单独按下再松开 Shift 可能切换输入法中英文），而是向常驻实例的
@@ -8,6 +8,8 @@
   -ExitVia Tray 时通过托盘菜单的“退出”结束（会在鼠标处闪现菜单约 1 秒），
   否则投递 WM_CLOSE。
   运行期间会占用剪贴板，结束时恢复原有的文本或图像内容（其他格式不恢复）。
+  默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存一张截图并弹出托盘通知；
+  结束时删除本次存下的文件，目录是本次新建且已空时一并删除。
   需要 STA 线程访问剪贴板，请用 Windows PowerShell 运行：
     powershell -NoProfile -STA -File scripts\smoke-resident.ps1 [-Exe <路径>] [-ExitVia Tray]
 #>
@@ -66,6 +68,11 @@ $clip = [System.Windows.Forms.Clipboard]
 $backupImage = if ($clip::ContainsImage()) { $clip::GetImage() } else { $null }
 $backupText = if ($clip::ContainsText()) { $clip::GetText() } else { $null }
 
+$saveDir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'BetterPrtSc'
+$saveDirExisted = Test-Path -LiteralPath $saveDir
+$startedAt = Get-Date
+$savedFiles = @()
+
 $proc = Start-Process -FilePath $Exe -PassThru -WindowStyle Hidden -RedirectStandardError $stderr
 $null = $proc.Handle  # 先取句柄，否则退出后读不到 ExitCode
 $hwnd = [IntPtr]::Zero
@@ -98,6 +105,16 @@ try {
     $bits = [BitConverter]::ToInt16($dib, 14)
     "DIB：${w}x${h}，${bits} 位，共 $($dib.Length) 字节"
 
+    $savedFiles = @($data.GetData([System.Windows.Forms.DataFormats]::FileDrop))
+    if ($savedFiles.Count -ne 1) { throw "剪贴板应附带 1 个文件，实际 $($savedFiles.Count) 个" }
+    $saved = $savedFiles[0]
+    if (-not (Test-Path -LiteralPath $saved)) { throw "剪贴板附带的文件不存在：$saved" }
+    if ((Split-Path -Parent $saved) -ne $saveDir) { throw "文件不在默认存储目录 ${saveDir}：$saved" }
+    $img = [System.Drawing.Image]::FromFile($saved)
+    "自动存储：$saved（$($img.Width)x$($img.Height)，$((Get-Item -LiteralPath $saved).Length) 字节）"
+    $img.Dispose()
+    Start-Sleep -Seconds 2  # 留时间给托盘通知显示
+
     if ($ExitVia -eq 'Tray') { Exit-ViaTrayMenu $hwnd }
     else { [BpsSmokeUser32]::PostMessageW($hwnd, $WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
     if ($proc.WaitForExit(5000)) { "常驻实例已经由 $ExitVia 退出" }
@@ -114,4 +131,16 @@ finally {
     Get-Content $stderr -Encoding UTF8
     if ($backupImage) { $clip::SetImage($backupImage) }
     elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    # 只删除本次运行存下的文件，以及本次新建且已空的存储目录。
+    foreach ($f in $savedFiles) {
+        if ($f -and (Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).CreationTime -ge $startedAt) {
+            Remove-Item -LiteralPath $f
+            "已删除本次存下的 $f"
+        }
+    }
+    if (-not $saveDirExisted -and (Test-Path -LiteralPath $saveDir) -and
+        -not (Get-ChildItem -LiteralPath $saveDir -Force)) {
+        Remove-Item -LiteralPath $saveDir
+        "已删除本次新建的空目录 $saveDir"
+    }
 }

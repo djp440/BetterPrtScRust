@@ -1,5 +1,8 @@
 //! 剪贴板：把 `core` 编码好的各格式字节原样放进系统剪贴板。
 
+use std::borrow::Cow;
+use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
@@ -9,8 +12,8 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::CF_DIB;
-use windows::core::w;
+use windows::Win32::System::Ole::{CF_DIB, CF_HDROP};
+use windows::core::{PCWSTR, w};
 
 use crate::EventLoop;
 use crate::error::win_error;
@@ -19,7 +22,10 @@ use crate::error::win_error;
 const OPEN_ATTEMPTS: u32 = 10;
 const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
 
-/// Windows 剪贴板。PNG 写入注册格式 `"PNG"`，DIB 写入 `CF_DIB`。
+/// Windows 剪贴板。
+///
+/// 编码好的图像写入注册格式：PNG → `"PNG"`，JPEG → `"JFIF"`，WebP → `"image/webp"`，
+/// AVIF → `"image/avif"`；DIB 写入 `CF_DIB`，文件写入 `CF_HDROP`。
 pub struct WindowsClipboard {
     owner: Option<HWND>,
 }
@@ -38,21 +44,48 @@ impl Clipboard for WindowsClipboard {
         let _open = OpenedClipboard::open(self.owner)?;
         unsafe { EmptyClipboard() }.map_err(|e| win_error("清空剪贴板失败", e))?;
         for item in &items {
+            let registered = |name: PCWSTR| unsafe { RegisterClipboardFormatW(name) };
             let (format, bytes) = match item {
-                ClipboardItem::Png(bytes) => {
-                    (unsafe { RegisterClipboardFormatW(w!("PNG")) }, bytes)
+                ClipboardItem::Png(bytes) => (registered(w!("PNG")), Cow::Borrowed(bytes)),
+                ClipboardItem::Jpeg(bytes) => (registered(w!("JFIF")), Cow::Borrowed(bytes)),
+                ClipboardItem::WebP(bytes) => (registered(w!("image/webp")), Cow::Borrowed(bytes)),
+                ClipboardItem::Avif(bytes) => (registered(w!("image/avif")), Cow::Borrowed(bytes)),
+                ClipboardItem::Dib(bytes) => (u32::from(CF_DIB.0), Cow::Borrowed(bytes)),
+                ClipboardItem::Files(paths) => {
+                    (u32::from(CF_HDROP.0), Cow::Owned(drop_files(paths)))
                 }
-                ClipboardItem::Dib(bytes) => (u32::from(CF_DIB.0), bytes),
             };
             if format == 0 {
-                return Err(PlatformError::new("注册 PNG 剪贴板格式失败"));
+                return Err(PlatformError::new(format!(
+                    "注册 {} 剪贴板格式失败",
+                    item.format_name()
+                )));
             }
-            set_data(format, bytes).map_err(|e| {
+            set_data(format, &bytes).map_err(|e| {
                 PlatformError::new(format!("写入剪贴板 {} 格式失败：{e}", item.format_name()))
             })?;
         }
         Ok(())
     }
+}
+
+/// `CF_HDROP` 的内容：`DROPFILES` 头（20 字节，宽字符）后接各个以 0 结尾的路径，
+/// 最后再加一个 0。
+fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
+    const DROPFILES_SIZE: u32 = 20;
+    let mut out = Vec::new();
+    out.extend_from_slice(&DROPFILES_SIZE.to_le_bytes()); // pFiles：路径列表的偏移
+    out.extend_from_slice(&0i32.to_le_bytes()); // pt.x
+    out.extend_from_slice(&0i32.to_le_bytes()); // pt.y
+    out.extend_from_slice(&0i32.to_le_bytes()); // fNC
+    out.extend_from_slice(&1i32.to_le_bytes()); // fWide：路径是 UTF-16
+    for path in paths {
+        for unit in path.as_os_str().encode_wide().chain([0]) {
+            out.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
 }
 
 /// 已打开的剪贴板；离开作用域时关闭。

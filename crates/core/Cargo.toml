@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 bps-platform.workspace = true
 png.workspace = true
+jpeg-encoder.workspace = true
+image-webp.workspace = true
+ravif.workspace = true
 
 [dev-dependencies]
 bps-platform-fake.workspace = true

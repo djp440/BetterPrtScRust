@@ -48,9 +48,11 @@ fn bps_capture_display_copies_display_under_cursor_like_the_hotkey() {
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(channel.launches(), 0, "常驻实例已在运行时不应再拉起");
+    // 与 Shift+PrtSc 的默认绑定一致：复制 + 自动存储。
     let clipboard = fake.clipboard();
-    assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
+    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
     assert_eq!(clipboard.png_image().unwrap(), *second_display().image());
+    assert_eq!(clipboard.files().unwrap(), fake.files());
 }
 
 #[test]
@@ -93,10 +95,7 @@ fn bps_capture_uses_post_capture_actions_of_first_hotkey_binding_with_that_mode(
     // 这条显示器绑定没有任何截后动作：按热键只截图、不复制，bps 也必须一样。
     let display_without_actions = HotkeyBinding {
         hotkey: Hotkey::new(Modifiers::CTRL, Key::F(9)),
-        capture: CaptureRequest {
-            mode: CaptureMode::Display,
-            actions: Vec::new(),
-        },
+        capture: CaptureRequest::new(CaptureMode::Display, Vec::new()),
     };
     let mut instance = ResidentInstance::new(
         fake.platform(),
