@@ -81,6 +81,19 @@ impl WindowSourceState {
             .filter_map(|(index, w)| w.as_ref().map(|w| (id_of(index), w)))
     }
 
+    /// 窗口此刻的内容；窗口已关闭时为 `None`。
+    pub(crate) fn image_of(&self, id: WindowId) -> Option<Image> {
+        self.find(id).ok().map(|w| w.image.clone())
+    }
+
+    /// 窗口改变大小：外框和内容（[`window_pattern`]）都换成新尺寸，左上角不动。
+    pub(crate) fn resize(&mut self, index: usize, width: u32, height: u32) {
+        let window = self.windows[index].as_mut().expect("窗口已关闭");
+        window.bounds.width = width;
+        window.bounds.height = height;
+        window.image = window_pattern(width, height);
+    }
+
     fn find(&self, id: WindowId) -> Result<&FakeWindow, PlatformError> {
         self.open_windows()
             .find(|(i, _)| *i == id)

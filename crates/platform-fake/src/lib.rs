@@ -337,6 +337,15 @@ impl FakePlatform {
 
     /// 模拟用户关闭第 `index` 个窗口（按添加顺序，从 0 开始）：之后的窗口布局里没有它，
     /// 截取它会失败。
+    /// 把第 `index` 个添加的窗口改成 `width` × `height`（左上角不动，内容换成新尺寸的
+    /// [`window_pattern`]）。
+    pub fn resize_window(&self, index: usize, width: u32, height: u32) {
+        self.window_source
+            .lock()
+            .unwrap()
+            .resize(index, width, height);
+    }
+
     pub fn close_window(&self, index: usize) {
         self.window_source.lock().unwrap().windows[index] = None;
     }
@@ -417,6 +426,7 @@ impl FakePlatform {
                 state: self.overlay.clone(),
             }),
             video_source: Box::new(FakeVideoSource {
+                windows: self.window_source.clone(),
                 frames: self.frames.clone(),
                 state: self.video.clone(),
             }),
