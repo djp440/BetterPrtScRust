@@ -6,9 +6,10 @@
 use std::time::{Duration, Instant};
 
 use bps_platform::{
-    ConfigFile, FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers, PlatformEvent,
+    ChannelError, ConfigFile, FrameSource, GlobalHotkeys, Hotkey, HotkeyId, Key, Modifiers,
+    PlatformEvent, ResidentChannel,
 };
-use bps_platform_windows::{DxgiFrameSource, EventLoop, dpi};
+use bps_platform_windows::{DxgiFrameSource, EventLoop, PipeChannel, PipeClaim, ResidentPipe, dpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
     VIRTUAL_KEY, VK_CONTROL, VK_F24,
@@ -68,7 +69,42 @@ fn registered_hotkey_press_is_delivered_by_event_loop() {
     let event = event_loop.wait_event(Duration::from_secs(2));
     hotkeys.unregister(id).unwrap();
 
-    assert_eq!(event, Some(PlatformEvent::HotkeyPressed(id)));
+    assert!(
+        matches!(event, Some(PlatformEvent::HotkeyPressed(pressed)) if pressed == id),
+        "{event:?}"
+    );
+}
+
+#[test]
+#[ignore = "真机冒烟：创建命名管道并经它转交一条请求"]
+fn resident_pipe_is_single_instance_and_forwards_requests_to_event_loop() {
+    let name = format!(r"\\.\pipe\BetterPrtSc-smoke-{}", std::process::id());
+    let PipeClaim::Claimed(pipe) = ResidentPipe::claim(&name).unwrap() else {
+        panic!("第一次占用管道应成功");
+    };
+    assert!(
+        matches!(ResidentPipe::claim(&name), Ok(PipeClaim::AlreadyRunning)),
+        "管道已被占用时不应再成为常驻实例"
+    );
+    let event_loop = EventLoop::new().unwrap();
+    pipe.serve(event_loop.sender()).unwrap();
+
+    let client_name = name.clone();
+    let client = std::thread::spawn(move || {
+        // 常驻实例在运行，所以永远不会拉起这个不存在的程序。
+        PipeChannel::new(&client_name, "不存在的程序.exe").send("capture display")
+    });
+    let Some(PlatformEvent::RequestReceived(request)) =
+        event_loop.wait_event(Duration::from_secs(5))
+    else {
+        panic!("事件循环应收到转交来的请求");
+    };
+    assert_eq!(request.message(), "capture display");
+    request.reply("ok".to_owned());
+
+    assert_eq!(client.join().unwrap(), Ok("ok".to_owned()));
+    let mut gone = PipeChannel::new(r"\\.\pipe\BetterPrtSc-smoke-nobody", "不存在的程序.exe");
+    assert_eq!(gone.send("activate"), Err(ChannelError::NotRunning));
 }
 
 #[test]
@@ -87,7 +123,7 @@ fn config_file_change_is_delivered_by_event_loop() {
         )
         .unwrap();
     config.watch().unwrap();
-    assert_eq!(event_loop.wait_event(Duration::from_millis(600)), None);
+    assert!(event_loop.wait_event(Duration::from_millis(600)).is_none());
 
     // 模拟外部编辑器：连续写两次，应合并成一个事件。
     std::fs::write(dir.join("config.toml"), "# 第二").unwrap();
@@ -107,8 +143,14 @@ fn config_file_change_is_delivered_by_event_loop() {
     drop(event_loop);
     std::fs::remove_dir_all(&dir).unwrap();
 
-    assert_eq!(event, Some(PlatformEvent::ConfigFileChanged));
-    assert_eq!(duplicate, None, "连续的写入应合并成一个事件");
+    assert!(
+        matches!(event, Some(PlatformEvent::ConfigFileChanged)),
+        "{event:?}"
+    );
+    assert!(
+        duplicate.is_none(),
+        "连续的写入应合并成一个事件：{duplicate:?}"
+    );
     assert_eq!(
         text.as_deref(),
         Some(

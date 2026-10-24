@@ -5,7 +5,9 @@
 //! - [`WindowsHotkeys`]：`RegisterHotKey`，按下时由 [`EventLoop`] 递交 `PlatformEvent`
 //! - [`WindowsNotifier`]：托盘图标的气泡通知，点击时打开文件或文件夹
 //! - [`WindowsConfigFile`]：配置文件读写，所在目录变化时由 [`EventLoop`] 递交 `PlatformEvent`
-//! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标
+//! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件
+//! - [`ResidentPipe`]：常驻实例的命名管道（单实例 + 接收转交的请求）；
+//!   [`PipeChannel`]：CLI 一侧的 `ResidentChannel`
 //!
 //! 进程必须是 Per-Monitor V2 DPI 感知，坐标和图像才是物理像素，见 [`dpi`]。
 //!
@@ -22,14 +24,16 @@ mod event_loop;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod pipe;
 mod pixels;
 
 pub use clipboard::WindowsClipboard;
 pub use config_file::WindowsConfigFile;
-pub use event_loop::EventLoop;
+pub use event_loop::{EventLoop, EventSender};
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use notifier::WindowsNotifier;
+pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 
 use std::path::PathBuf;
 

@@ -6,24 +6,34 @@
 //!
 //! 热键绑定来自配置文件 [`Config`]：[`ResidentInstance::start`] 读取（首次运行时写入
 //! [`DEFAULT_CONFIG`]）并注册热键，配置文件被外部修改后自动重新加载。
+//!
+//! 其他进程（`bps` CLI、再次启动的程序）用 [`forward`] / [`run_cli`] 把 [`Request`]
+//! 经 `bps_platform::ResidentChannel` 转交给常驻实例；常驻实例收到的请求事件由
+//! [`ResidentInstance::handle`] 转换成命令执行，并回复 [`Reply`]。
 
 mod action;
 mod binding;
 mod capture;
+mod cli;
 mod command;
 mod config;
 mod encode;
 mod error;
+mod forward;
 mod instance;
 mod location;
 mod output_format;
+mod request;
 
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
+pub use cli::{CliOutcome, CliStatus, run_cli};
 pub use command::{
     CaptureMode, CaptureOverrides, CaptureRequest, Command, Flow, PostCaptureAction,
 };
 pub use config::{Config, ConfigError, DEFAULT_CONFIG};
 pub use error::CoreError;
+pub use forward::{ForwardError, WhenNotRunning, forward};
 pub use instance::ResidentInstance;
 pub use location::{DataLocation, PORTABLE_MARKER};
 pub use output_format::OutputFormat;
+pub use request::{Reply, Request};

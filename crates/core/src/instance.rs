@@ -1,8 +1,11 @@
-use bps_platform::{HotkeyId, Notification, NotificationClick, Platform, PlatformEvent};
+use bps_platform::{
+    HotkeyId, IncomingRequest, Notification, NotificationClick, Platform, PlatformEvent,
+};
 
 use crate::{
     CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow, HotkeyBinding,
-    HotkeyRegistrationFailure, RegistrationError, action, capture,
+    HotkeyRegistrationFailure, PostCaptureAction, RegistrationError, Reply, Request, action,
+    capture,
 };
 
 /// 常驻实例的核心：持有平台能力和配置，把触发事件转换成命令并执行。
@@ -100,28 +103,36 @@ impl ResidentInstance {
         &self.failures
     }
 
-    /// 把平台事件转换成命令；与任何绑定都无关的事件返回 `None`。
-    pub fn command_for(&self, event: PlatformEvent) -> Option<Command> {
+    /// 把平台事件转换成命令；与任何绑定都无关的事件、无法识别的请求返回 `None`。
+    pub fn command_for(&self, event: &PlatformEvent) -> Option<Command> {
         match event {
             PlatformEvent::HotkeyPressed(id) => self
                 .config
                 .bindings
                 .iter()
                 .enumerate()
-                .find(|(index, _)| hotkey_id(*index) == id)
+                .find(|(index, _)| hotkey_id(*index) == *id)
                 .map(|(_, binding)| Command::Capture(binding.capture.clone())),
             PlatformEvent::ExitRequested => Some(Command::Exit),
             PlatformEvent::ConfigFileChanged => None,
+            PlatformEvent::RequestReceived(request) => {
+                Request::decode(request.message()).map(|r| self.command_for_request(&r))
+            }
         }
     }
 
-    /// 处理一个平台事件：配置文件变更时重新加载配置，其余事件转换成命令后执行。
+    /// 处理一个平台事件：配置文件变更时重新加载配置；请求事件执行后把结果回复给发起方；
+    /// 其余事件转换成命令后执行，失败时发通知。
     pub fn handle(&mut self, event: PlatformEvent) -> Result<Flow, CoreError> {
-        if event == PlatformEvent::ConfigFileChanged {
-            self.reload_config();
-            return Ok(Flow::Continue);
+        match event {
+            PlatformEvent::ConfigFileChanged => {
+                self.reload_config();
+                return Ok(Flow::Continue);
+            }
+            PlatformEvent::RequestReceived(request) => return self.serve(request),
+            PlatformEvent::HotkeyPressed(_) | PlatformEvent::ExitRequested => {}
         }
-        let Some(command) = self.command_for(event) else {
+        let Some(command) = self.command_for(&event) else {
             return Ok(Flow::Continue);
         };
         // 热键和托盘触发的命令没有别的反馈渠道，失败时用通知告诉用户。
@@ -142,6 +153,44 @@ impl ResidentInstance {
         result
     }
 
+    /// 执行转交来的请求，并把结果回复给发起方。
+    fn serve(&mut self, incoming: IncomingRequest) -> Result<Flow, CoreError> {
+        let result = match Request::decode(incoming.message()) {
+            Some(request) => {
+                let command = self.command_for_request(&request);
+                self.execute(command)
+            }
+            None => Err(CoreError::InvalidRequest(incoming.message().to_owned())),
+        };
+        let reply = match &result {
+            Ok(_) => Reply::Done,
+            Err(e @ (CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_))) => {
+                Reply::Unsupported(e.to_string())
+            }
+            Err(e) => Reply::Failed(e.to_string()),
+        };
+        incoming.reply(reply.encode());
+        result
+    }
+
+    /// 请求对应的命令。`capture <捕获模式>` 与按下该捕获模式的热键完全一致：
+    /// 采用第一条该捕获模式的热键绑定；没有这样的绑定时只复制到剪贴板。
+    fn command_for_request(&self, request: &Request) -> Command {
+        match request {
+            Request::Capture(mode) => Command::Capture(
+                self.config
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.capture.mode == *mode)
+                    .map(|binding| binding.capture.clone())
+                    .unwrap_or_else(|| {
+                        CaptureRequest::new(*mode, vec![PostCaptureAction::CopyToClipboard])
+                    }),
+            ),
+            Request::Activate => Command::Activate,
+        }
+    }
+
     /// 执行一条命令。
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match command {
@@ -152,6 +201,7 @@ impl ResidentInstance {
                 action::run(&mut self.platform, &screenshot, &request.actions)?;
                 Ok(Flow::Continue)
             }
+            Command::Activate => Ok(Flow::Continue),
             Command::Exit => {
                 self.unregister_hotkeys();
                 Ok(Flow::Exit)

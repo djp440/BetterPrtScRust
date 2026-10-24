@@ -1,7 +1,9 @@
-//! BetterPrtSc 常驻实例（`BetterPrtSc.exe`）：托盘图标 + 全局热键 → `core` 命令。
+//! BetterPrtSc 常驻实例（`BetterPrtSc.exe`）：托盘图标 + 全局热键 + 命名管道 → `core` 命令。
 //!
-//! 这里只做组装：决定配置文件的位置（便携模式或 `%APPDATA%`），创建平台事件循环和
-//! 平台能力，交给 `bps_core::ResidentInstance`，再把事件循环递交的每个平台事件交给它处理。
+//! 这里只做组装：先占用常驻实例的命名管道（单实例），再决定配置文件的位置（便携模式或
+//! `%APPDATA%`），创建平台事件循环和平台能力，交给 `bps_core::ResidentInstance`，
+//! 然后把事件循环递交的每个平台事件交给它处理。
+//! 管道已被占用时说明常驻实例已在运行，本进程只把“激活”请求转交给它，随即退出。
 
 // release 版不弹控制台窗口；debug 版保留控制台，便于查看输出。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -30,17 +32,30 @@ fn main() -> ExitCode {
 
 #[cfg(windows)]
 mod resident {
+    use std::error::Error;
     use std::ops::ControlFlow;
     use std::path::PathBuf;
     use std::time::Instant;
 
-    use bps_core::{DataLocation, Flow, PORTABLE_MARKER, ResidentInstance};
+    use bps_core::{
+        DataLocation, Flow, PORTABLE_MARKER, Reply, Request, ResidentInstance, WhenNotRunning,
+        forward,
+    };
     use bps_platform::PlatformError;
-    use bps_platform_windows::{EventLoop, dpi};
+    use bps_platform_windows::{
+        EventLoop, PipeChannel, PipeClaim, ResidentPipe, dpi, resident_pipe_name,
+    };
 
     use crate::icon;
 
-    pub fn run() -> Result<(), PlatformError> {
+    pub fn run() -> Result<(), Box<dyn Error>> {
+        // 最先占用命名管道：已有常驻实例时不显示托盘图标、不注册热键。
+        let pipe_name = resident_pipe_name();
+        let pipe = match ResidentPipe::claim(&pipe_name)? {
+            PipeClaim::Claimed(pipe) => pipe,
+            PipeClaim::AlreadyRunning => return activate_running_instance(&pipe_name),
+        };
+
         let declared_by_manifest = dpi::is_per_monitor_v2();
         if !dpi::ensure_per_monitor_v2() {
             eprintln!("警告：未能声明 Per-Monitor V2 DPI 感知，截图可能不是物理像素");
@@ -79,21 +94,23 @@ mod resident {
                 failure.binding.hotkey, failure.error
             );
         }
+        pipe.serve(event_loop.sender())?;
         eprintln!(
-            "常驻实例已启动，{} 条热键绑定",
+            "常驻实例已启动（命名管道 {pipe_name}），{} 条热键绑定",
             instance.config().bindings.len()
         );
 
         event_loop.run(|event| {
             let started = Instant::now();
+            let description = format!("{event:?}");
             match instance.handle(event) {
                 Ok(Flow::Continue) => {
-                    eprintln!("已处理 {event:?}，耗时 {:?}", started.elapsed());
+                    eprintln!("已处理 {description}，耗时 {:?}", started.elapsed());
                     ControlFlow::Continue(())
                 }
                 Ok(Flow::Exit) => ControlFlow::Break(()),
                 Err(e) => {
-                    eprintln!("处理 {event:?} 失败：{e}");
+                    eprintln!("处理 {description} 失败：{e}");
                     ControlFlow::Continue(())
                 }
             }
@@ -116,5 +133,19 @@ mod resident {
                 "找不到 %APPDATA%；可以在程序目录下放一个名为 {PORTABLE_MARKER} 的文件，改用便携模式"
             ))
         })
+    }
+
+    /// 再次启动时：把“激活”请求转交给已在运行的常驻实例，不再拉起新的。
+    fn activate_running_instance(pipe_name: &str) -> Result<(), Box<dyn Error>> {
+        let mut channel = PipeChannel::new(pipe_name, std::env::current_exe()?);
+        match forward(&Request::Activate, &mut channel, WhenNotRunning::GiveUp)? {
+            Reply::Done => {
+                eprintln!("BetterPrtSc 已在运行，已激活该常驻实例");
+                Ok(())
+            }
+            Reply::Unsupported(message) | Reply::Failed(message) => {
+                Err(format!("激活常驻实例失败：{message}").into())
+            }
+        }
     }
 }

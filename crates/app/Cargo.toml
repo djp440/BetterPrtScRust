@@ -1,6 +1,6 @@
 [package]
 name = "bps-app"
-description = "BetterPrtSc 常驻实例（BetterPrtSc.exe）"
+description = "BetterPrtSc 常驻实例（BetterPrtSc.exe）与 bps CLI（bps.exe）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,11 @@ build = "build.rs"
 [[bin]]
 name = "BetterPrtSc"
 path = "src/main.rs"
+
+# 控制台程序；把命令经命名管道转交给常驻实例。
+[[bin]]
+name = "bps"
+path = "src/bps.rs"
 
 [dependencies]
 bps-core.workspace = true

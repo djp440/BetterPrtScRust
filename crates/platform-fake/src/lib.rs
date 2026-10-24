@@ -6,6 +6,8 @@
 //! 编辑配置文件）并检查外部可见的结果（剪贴板内容、已注册的热键、发出的通知、
 //! 配置文件内容）。
 //!
+//! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
+//!
 //! ```
 //! use bps_platform::{Point, Rect};
 //! use bps_platform_fake::{FakeDisplay, FakePlatform};
@@ -23,6 +25,7 @@ mod config_file;
 mod frame_source;
 mod hotkeys;
 mod notifier;
+mod resident_channel;
 
 use std::sync::{Arc, Mutex};
 
@@ -33,6 +36,7 @@ use bps_platform::{Hotkey, Notification, Platform, PlatformEvent, Point};
 pub use clipboard::ClipboardContent;
 pub use config_file::FAKE_CONFIG_PATH;
 pub use frame_source::{FakeDisplay, desktop_pattern};
+pub use resident_channel::FakeResidentChannel;
 
 use clipboard::FakeClipboard;
 use config_file::{ConfigFileState, FakeConfigFile};
