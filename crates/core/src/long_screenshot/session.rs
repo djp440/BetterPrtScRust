@@ -68,7 +68,10 @@ enum Phase {
     /// 区域透过遮罩，用户滚动内容，持续采样拼接。
     Sampling(Box<Sampling>),
     /// 在遮罩上标注拼好的长截屏；`view` 是它（可能缩小后）显示的范围。
-    Annotating { annotator: Annotator, view: Rect },
+    Annotating {
+        annotator: Box<Annotator>,
+        view: Rect,
+    },
     /// 已经结束（只在交接时短暂出现）。
     Over,
 }
@@ -420,7 +423,10 @@ impl LongScreenshotCapture {
             let view = preview::annotation_view(region, &image, &self.displays);
             let mut annotator = Annotator::new(self.displays.clone(), self.texts);
             annotator.lock_image(view, image);
-            self.phase = Phase::Annotating { annotator, view };
+            self.phase = Phase::Annotating {
+                annotator: Box::new(annotator),
+                view,
+            };
             self.hovered = None;
             self.pressed = None;
             return self.keep_going(platform);
