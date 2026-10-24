@@ -9,6 +9,7 @@
 //! 然后分别在 `platform-windows` 和 `platform-fake` 里实现。
 
 mod autostart;
+mod background;
 mod clipboard;
 mod clock;
 mod config_file;
@@ -38,6 +39,7 @@ mod window;
 mod window_source;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
+pub use background::{BackgroundResult, BackgroundWorker};
 pub use clipboard::{Clipboard, ClipboardItem};
 pub use clock::{Clock, LocalDateTime};
 pub use config_file::ConfigFile;
@@ -122,4 +124,6 @@ pub struct Platform {
     pub window_source: Box<dyn WindowSource>,
     /// 长截屏期间持续采样区域的实时画面；有新画面时经平台事件循环以 [`PlatformEvent`] 递交。
     pub region_sampler: Box<dyn RegionSampler>,
+    /// 后台线程：做耗时的编码等工作；完成时以 [`PlatformEvent::BackgroundJobDone`] 递交。
+    pub background: Box<dyn BackgroundWorker>,
 }

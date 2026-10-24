@@ -55,6 +55,11 @@ impl OutputFormat {
         }
     }
 
+    /// 编码是否很慢（AVIF 编码 4K 图约 0.9 秒）：慢格式的编码要放到后台线程，不能卡住事件循环。
+    pub fn encodes_slowly(self) -> bool {
+        matches!(self, OutputFormat::Avif)
+    }
+
     /// 按扩展名（不区分大小写，不含点）找格式。
     pub fn from_extension(name: &str) -> Option<OutputFormat> {
         let name = name.to_ascii_lowercase();

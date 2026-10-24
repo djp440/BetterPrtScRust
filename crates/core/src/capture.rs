@@ -3,6 +3,7 @@ use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform, Point};
 use crate::{CaptureMode, CoreError, stitch};
 
 /// 一次捕获的产物（截图）及其来源信息。
+#[derive(Clone)]
 pub(crate) struct Screenshot {
     pub image: Image,
     pub mode: CaptureMode,

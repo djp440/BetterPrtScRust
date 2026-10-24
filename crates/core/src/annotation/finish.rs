@@ -11,7 +11,7 @@ use bps_platform::{FileType, LocalDateTime, Notification, Platform, Rect, SaveAs
 use super::session::{Annotator, Finish};
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
-use crate::{CaptureRequest, CoreError, OutputFormat, PostCaptureAction, Texts, action, encode};
+use crate::{CaptureRequest, OutputFormat, PostCaptureAction, Texts, action};
 
 /// 被标注的截图是什么时候、从哪里截下来的：命名模板用它。
 pub(crate) struct Origin {
@@ -66,7 +66,7 @@ pub(crate) fn conclude(
     request: &CaptureRequest,
     origin: &Origin,
     finish: Finish,
-    texts: &Texts,
+    texts: &'static Texts,
 ) -> Option<Result<(), CaptureFailure>> {
     let image = match annotator.final_image(platform, region) {
         Ok(image) => image,
@@ -111,7 +111,7 @@ fn run(
     request: &CaptureRequest,
     finish: Finish,
     save_as: Option<&Path>,
-    texts: &Texts,
+    texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
     let mut actions: Vec<PostCaptureAction> = request
         .actions
@@ -140,39 +140,45 @@ fn run(
     };
 
     let saved_as = save_as.map(|path| {
-        let result = write_save_as(platform, screenshot, request.output.output_format, path);
-        if let Err(error) = &result {
-            platform.notifier.notify(Notification {
-                title: texts.get("notification-save-as-failed-title"),
-                body: error.localized(texts),
-                on_click: None,
-            });
-        }
-        result
+        write_save_as(
+            platform,
+            screenshot,
+            request.output.output_format,
+            path,
+            texts,
+        )
     });
     let ran = action::run(platform, screenshot, &effective, texts);
     match saved_as {
-        Some(Err(error)) => Err(CaptureFailure::already_notified(error)),
+        Some(Err(failure)) => Err(failure),
         _ => ran,
     }
 }
 
 /// 按路径的扩展名（不认识时用输出格式）编码，写到用户选的路径，覆盖已有文件。
+/// 慢格式在后台编码，写文件和失败通知在编码完成后进行。
 fn write_save_as(
     platform: &mut Platform,
     screenshot: &Screenshot,
     default: OutputFormat,
     path: &Path,
-) -> Result<(), CoreError> {
-    let extension = path
+    texts: &'static Texts,
+) -> Result<(), CaptureFailure> {
+    let format = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    let format = extension
-        .as_deref()
         .and_then(OutputFormat::from_extension)
         .unwrap_or(default);
-    let encoded = encode::encode(&screenshot.image, format)?;
-    platform.file_system.write(path, &encoded)?;
-    Ok(())
+    let path = path.to_owned();
+    action::encode_then(platform, screenshot, format, move |platform, _, encoded| {
+        let written = encoded.and_then(|bytes| Ok(platform.file_system.write(&path, &bytes)?));
+        written.map_err(|error| {
+            platform.notifier.notify(Notification {
+                title: texts.get("notification-save-as-failed-title"),
+                body: error.localized(texts),
+                on_click: None,
+            });
+            CaptureFailure::already_notified(error)
+        })
+    })
 }

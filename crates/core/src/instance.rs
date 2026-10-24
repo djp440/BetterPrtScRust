@@ -314,6 +314,7 @@ impl ResidentInstance {
             PlatformEvent::ConfigFileChanged
             | PlatformEvent::PrintScreenKeySettingChanged
             | PlatformEvent::LatestReleaseFetched(_)
+            | PlatformEvent::BackgroundJobDone
             | PlatformEvent::OverlayInput(_)
             | PlatformEvent::Tick
             | PlatformEvent::RegionSampled => None,
@@ -339,6 +340,7 @@ impl ResidentInstance {
             // 节拍同时驱动录屏和长截屏的采样（两者不会同时进行）。
             PlatformEvent::Tick => return self.advance(ActiveCapture::on_tick),
             PlatformEvent::RegionSampled => return self.advance(ActiveCapture::on_region_sampled),
+            PlatformEvent::BackgroundJobDone => return self.on_background_done(),
             PlatformEvent::LatestReleaseFetched(result) => {
                 self.latest_release_fetched(result);
                 return Ok(Flow::Continue);
@@ -361,6 +363,16 @@ impl ResidentInstance {
                 Err(failure.error)
             }
         }
+    }
+
+    /// 后台编码完成：在事件循环线程上继续后续步骤；失败的用通知告诉用户。
+    fn on_background_done(&mut self) -> Result<Flow, CoreError> {
+        let mut first = None;
+        for failure in action::run_continuations(&mut self.platform) {
+            self.notify_capture_failure(&failure);
+            first.get_or_insert(failure.error);
+        }
+        first.map_or(Ok(Flow::Continue), Err)
     }
 
     /// 热键触发的捕获失败时通知用户；截后动作已经就这次失败通知过的不再重复。
