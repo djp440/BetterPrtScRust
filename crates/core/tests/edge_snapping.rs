@@ -3,9 +3,12 @@
 //! 窗口布局来自假平台的窗口（`FakePlatform::with_window`），断言的是遮罩上画出的选区边框，
 //! 即用户看到的选区。
 
-use bps_core::{CaptureMode, CaptureRequest, Command, PostCaptureAction, ResidentInstance};
+use bps_core::{
+    CaptureMode, CaptureRequest, Command, PostCaptureAction, ResidentInstance, default_bindings,
+};
 use bps_platform::{
-    Modifiers, OverlayInput, OverlayItem, OverlayKey, PlatformEvent, Point, PointerButton, Rect,
+    Hotkey, Key, Modifiers, OverlayInput, OverlayItem, OverlayKey, PlatformEvent, Point,
+    PointerButton, Rect,
 };
 use bps_platform_fake::{FakeDisplay, FakePlatform, FakeWindow, desktop_pattern};
 
@@ -291,4 +294,27 @@ fn selection_never_snaps_past_the_virtual_desktop() {
     );
 
     assert_eq!(selection(&fake), Some(Rect::new(360, 110, 40, 61)));
+}
+
+#[test]
+fn framing_a_region_to_record_snaps_too() {
+    let fake = desktop_with_window();
+    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    assert!(instance.register_hotkeys().is_empty());
+    instance
+        .handle(
+            fake.press(Hotkey::new(Modifiers::ALT, Key::PrintScreen))
+                .unwrap(),
+        )
+        .unwrap();
+
+    feed(
+        &mut instance,
+        vec![
+            press(&fake, Point::new(97, 47), Modifiers::NONE),
+            move_to(&fake, Point::new(295, 145), Modifiers::NONE),
+        ],
+    );
+
+    assert_eq!(selection(&fake), Some(WINDOW));
 }

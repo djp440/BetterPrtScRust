@@ -57,12 +57,9 @@ impl RegionCapture {
         texts: &'static Texts,
     ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
-        // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘；取不到窗口布局就不吸附。
+        // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘。
         let user_frames = matches!(request.mode, CaptureMode::Region | CaptureMode::Window);
-        let snapping = user_frames
-            .then(|| platform.window_source.layout().ok())
-            .flatten()
-            .map(Snapping::new);
+        let snapping = user_frames.then(|| Snapping::of_desktop(platform.window_source.as_ref()));
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
         let hint = texts.get("overlay-selected-hint");
         let Some(mut selection) = RegionSelection::new(displays.clone(), hint) else {
@@ -139,9 +136,7 @@ impl RegionCapture {
         // 指针第一次进入某个窗口时取它的控件，供选区吸附到控件边缘。
         self.selection
             .snapping_mut()
-            .load_controls(input, |window| {
-                platform.window_source.controls(window).unwrap_or_default()
-            });
+            .load_controls(input, platform.window_source.as_ref());
         match self.selection.handle(input) {
             Step::Continue => self.keep_going(platform),
             // 标注时 Enter 或双击选区等于点“复制”。

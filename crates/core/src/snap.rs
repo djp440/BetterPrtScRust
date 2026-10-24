@@ -2,7 +2,8 @@
 //!
 //! 吸附目标是拍冻结帧那一刻的窗口布局（[`WindowLayout`]）里各窗口的外框（与用户看到的冻结帧
 //! 一致），以及选区那一角所在窗口里控件的外框。控件按需取：指针第一次进入某个窗口时，
-//! 由持有平台的一方经 [`Snapping::load_controls`] 补上。被上层窗口盖住的边不算。
+//! 由持有平台的一方在把输入交给选区状态机之前调用 [`Snapping::load_controls`] 补上。
+//! 被上层窗口盖住的边不算。
 //! 按住 Ctrl 时临时不吸附：拖拽起点看按下左键时，拖动的一角看最近一次指针输入时。
 //!
 //! 坐标约定：“边”是像素之间的分界线。竖直的边 `x = L` 位于第 `L - 1` 列与第 `L` 列像素之间，
@@ -11,7 +12,9 @@
 
 use std::collections::HashMap;
 
-use bps_platform::{Modifiers, OverlayInput, Point, PointerButton, Rect, WindowId, WindowLayout};
+use bps_platform::{
+    Modifiers, OverlayInput, Point, PointerButton, Rect, WindowId, WindowLayout, WindowSource,
+};
 
 /// 100% 缩放下的吸附距离（物理像素），按选区那一端所在显示器的缩放比例放大。
 pub(crate) const SNAP_DISTANCE: f64 = 8.0;
@@ -55,20 +58,17 @@ impl DragEnd {
 }
 
 impl Snapping {
-    /// 吸附到 `layout` 中窗口的边缘。
-    pub fn new(layout: WindowLayout) -> Self {
+    /// 吸附到此刻桌面上窗口的边缘：在拍冻结帧（或打开实时遮罩）之前调用，
+    /// 使吸附目标与用户看到的画面一致。取不到窗口布局时不吸附。
+    pub fn of_desktop(windows: &dyn WindowSource) -> Self {
         Self {
-            layout,
+            layout: windows.layout().unwrap_or_default(),
             ..Self::default()
         }
     }
 
-    /// `input` 的指针位置在某个窗口上、还没取过它的控件时，用 `fetch` 取来。
-    pub fn load_controls(
-        &mut self,
-        input: &OverlayInput,
-        fetch: impl FnOnce(WindowId) -> Vec<Rect>,
-    ) {
+    /// `input` 的指针位置在某个窗口上、还没取过它的控件时，向 `windows` 取来；取不到就当没有控件。
+    pub fn load_controls(&mut self, input: &OverlayInput, windows: &dyn WindowSource) {
         let position = match *input {
             OverlayInput::PointerMoved { position, .. }
             | OverlayInput::PointerPressed { position, .. }
@@ -78,7 +78,8 @@ impl Snapping {
         if let Some(window) = self.layout.window_at(position)
             && !self.controls.contains_key(&window.id)
         {
-            self.controls.insert(window.id, fetch(window.id));
+            let controls = windows.controls(window.id).unwrap_or_default();
+            self.controls.insert(window.id, controls);
         }
     }
 
