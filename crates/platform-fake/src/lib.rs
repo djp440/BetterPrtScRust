@@ -3,10 +3,10 @@
 //! 用法：先用 [`FakeDisplay`] 和 [`FakePlatform`] 的构造方法描述“桌面”，
 //! 再用 [`FakePlatform::platform`] 生成交给 `bps-core` 的 [`Platform`]；
 //! `FakePlatform` 本身保留一份共享状态，测试通过它模拟用户操作（移动鼠标、按热键、
-//! 编辑配置文件、修改系统设置、选托盘菜单、在选区遮罩上框选或取消）并检查外部可见的结果
-//! （剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、开机自启登记、
-//! 遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的窗口、检查更新发出的
-//! 请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
+//! 编辑配置文件、修改系统设置、选托盘菜单、关闭桌面上的窗口、在选区遮罩上框选或取消）
+//! 并检查外部可见的结果（剪贴板内容、写入的文件、发出的通知、已注册的热键、配置文件内容、
+//! 开机自启登记、遮罩当前画的场景和画布、弹出过的“另存为”对话框、托盘菜单的文字、打开的独立窗口、
+//! 检查更新发出的请求）。“另存为”对话框里用户的选择要预先用 [`FakePlatform::answer_save_as`] 安排好。
 //!
 //! 遮罩上的操作（[`FakePlatform::select_region`]、[`FakePlatform::drag`]、
 //! [`FakePlatform::press_key`]、[`FakePlatform::type_text`] 等）只生成 `PlatformEvent`，由测试交给常驻实例处理，
@@ -15,6 +15,10 @@
 //! 标注文字的字形由 [`text_mask`] 按简单规则生成（方块代替字形），测试可以据此写出期望像素。
 //!
 //! CLI 一侧用 [`FakeResidentChannel`]：它把请求同步交给测试里的常驻实例。
+//!
+//! 录屏：单调时间只在测试调用 [`FakePlatform::advance_clock`] 时前进；节拍开始后，
+//! [`FakePlatform::tick`] 生成平台事件循环会递交的节拍事件。假视频源的帧是此刻假显示器画面的
+//! 副本，假编码器写出的视频用 [`decode::video`] 读回。
 //!
 //! ```
 //! use bps_platform::{Point, Rect};
@@ -42,16 +46,19 @@ mod resident_channel;
 mod text;
 mod tray;
 mod update;
+mod video;
+mod window_source;
 mod windows;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bps_platform::{
-    AutostartEntry, AutostartMethod, Clock, Hotkey, Image, Key, LatestRelease, LocalDateTime,
-    Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform, PlatformError,
-    PlatformEvent, Point, PointerButton, Rect, SaveAsOptions, StandaloneWindow, SystemLanguage,
-    TrayMenuItem,
+    AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, Image, Key, LatestRelease,
+    LocalDateTime, Modifiers, Notification, OverlayInput, OverlayKey, OverlayScene, Platform,
+    PlatformError, PlatformEvent, Point, PointerButton, Rect, SaveAsOptions, StandaloneWindow,
+    SystemLanguage, TrayMenuItem,
 };
 
 pub use clipboard::ClipboardContent;
@@ -60,6 +67,8 @@ pub use file_system::DEFAULT_PICTURES_DIR;
 pub use frame_source::{FakeDisplay, desktop_pattern};
 pub use resident_channel::FakeResidentChannel;
 pub use text::text_mask;
+pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
+pub use window_source::{FakeWindow, window_pattern};
 
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
 use clipboard::FakeClipboard;
@@ -72,6 +81,8 @@ use notifier::FakeNotifier;
 use overlay::{FakeOverlay, OverlayState};
 use tray::FakeTrayMenu;
 use update::{FakeUpdateService, UpdateState};
+use video::{FakeTicker, FakeVideoEncoder, FakeVideoSource, VideoState};
+use window_source::{FakeWindowSource, WindowSourceState};
 use windows::{FakeWindowLauncher, WindowsState};
 
 /// 假时钟的默认时间。
@@ -89,6 +100,8 @@ pub struct FakePlatform {
     files: Arc<Mutex<FsState>>,
     notifications: Arc<Mutex<Vec<Notification>>>,
     time: Arc<Mutex<LocalDateTime>>,
+    /// 单调时间。
+    monotonic: Arc<Mutex<Duration>>,
     config_file: Arc<Mutex<ConfigFileState>>,
     tray_menu: Arc<Mutex<Vec<TrayMenuItem>>>,
     windows: Arc<Mutex<WindowsState>>,
@@ -96,7 +109,9 @@ pub struct FakePlatform {
     updates: Arc<Mutex<UpdateState>>,
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
+    video: Arc<Mutex<VideoState>>,
     dialogs: Arc<Mutex<DialogState>>,
+    window_source: Arc<Mutex<WindowSourceState>>,
 }
 
 impl Default for FakePlatform {
@@ -108,6 +123,7 @@ impl Default for FakePlatform {
             files: Default::default(),
             notifications: Default::default(),
             time: Arc::new(Mutex::new(DEFAULT_TIME)),
+            monotonic: Default::default(),
             config_file: Default::default(),
             tray_menu: Default::default(),
             windows: Default::default(),
@@ -115,7 +131,9 @@ impl Default for FakePlatform {
             updates: Default::default(),
             system: Default::default(),
             overlay: Default::default(),
+            video: Default::default(),
             dialogs: Default::default(),
+            window_source: Default::default(),
         }
     }
 }
@@ -132,6 +150,16 @@ impl FakePlatform {
     /// 接入一块显示器；按添加顺序分配 `DisplayId`。
     pub fn with_display(self, display: FakeDisplay) -> Self {
         self.frames.lock().unwrap().displays.push(display);
+        self
+    }
+
+    /// 在桌面上打开一个顶层窗口；后添加的窗口在上层（像依次打开的窗口）。
+    pub fn with_window(self, window: FakeWindow) -> Self {
+        self.window_source
+            .lock()
+            .unwrap()
+            .windows
+            .push(Some(window));
         self
     }
 
@@ -290,9 +318,58 @@ impl FakePlatform {
         *display = display.clone().with_image(image);
     }
 
+    /// 模拟用户关闭第 `index` 个窗口（按添加顺序，从 0 开始）：之后的窗口布局里没有它，
+    /// 截取它会失败。
+    pub fn close_window(&self, index: usize) {
+        self.window_source.lock().unwrap().windows[index] = None;
+    }
+
     /// 模拟时间流逝。
     pub fn set_time(&self, time: LocalDateTime) {
         *self.time.lock().unwrap() = time;
+    }
+
+    /// 让单调时间前进 `duration`（本地时间不受影响）。
+    pub fn advance_clock(&self, duration: Duration) {
+        *self.monotonic.lock().unwrap() += duration;
+    }
+
+    /// 节拍到了：节拍正在运行时返回平台事件循环会递交的事件，否则返回 `None`。
+    /// 节拍不会自己发生，测试按需要调用（真实平台上节拍也可能晚到或被合并）。
+    pub fn tick(&self) -> Option<PlatformEvent> {
+        self.ticker_period().map(|_| PlatformEvent::Tick)
+    }
+
+    /// 正在运行的节拍的周期；没有节拍时返回 `None`。
+    pub fn ticker_period(&self) -> Option<Duration> {
+        self.video.lock().unwrap().ticker
+    }
+
+    /// 视频源是否正在捕获画面（有还没关闭的视频流）。
+    pub fn capturing_video(&self) -> bool {
+        self.video.lock().unwrap().open_streams > 0
+    }
+
+    /// 视频源打开后迟迟收不到第一帧，直到调用 [`deliver_video_frames`](Self::deliver_video_frames)。
+    pub fn with_video_frames_delayed(self) -> Self {
+        self.video.lock().unwrap().pending = true;
+        self
+    }
+
+    /// 视频源开始收到画面。
+    pub fn deliver_video_frames(&self) {
+        self.video.lock().unwrap().pending = false;
+    }
+
+    /// 模拟视频源捕获的目标消失（例如显示器被拔掉）：之后视频流不再有新的帧。
+    pub fn end_video_source(&self) {
+        self.video.lock().unwrap().ended = true;
+    }
+
+    /// 视频编码器开始编码时会以 `message` 失败（例如没有可用的编码器）。
+    pub fn with_video_encoder_failing(self, message: &str) -> Self {
+        self.video.lock().unwrap().encoder_error = Some(message.to_owned());
+        self
     }
 
     /// 生成交给 `bps-core` 的平台能力集合，它与本对象共享状态。
@@ -303,7 +380,10 @@ impl FakePlatform {
             hotkeys: Box::new(FakeHotkeys(self.hotkeys.clone())),
             file_system: Box::new(FakeFileSystem(self.files.clone())),
             notifier: Box::new(FakeNotifier(self.notifications.clone())),
-            clock: Box::new(FakeClock(self.time.clone())),
+            clock: Box::new(FakeClock {
+                time: self.time.clone(),
+                monotonic: self.monotonic.clone(),
+            }),
             config_file: Box::new(FakeConfigFile {
                 state: self.config_file.clone(),
                 path: self.config_file_path(),
@@ -319,7 +399,17 @@ impl FakePlatform {
                 frames: self.frames.clone(),
                 state: self.overlay.clone(),
             }),
+            video_source: Box::new(FakeVideoSource {
+                frames: self.frames.clone(),
+                state: self.video.clone(),
+            }),
+            video_encoder: Box::new(FakeVideoEncoder {
+                files: self.files.clone(),
+                state: self.video.clone(),
+            }),
+            ticker: Box::new(FakeTicker(self.video.clone())),
             file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),
+            window_source: Box::new(FakeWindowSource(self.window_source.clone())),
         }
     }
 
@@ -457,6 +547,11 @@ impl FakePlatform {
         self.overlay.lock().unwrap().visible_scene().cloned()
     }
 
+    /// 正显示着的遮罩底下是什么（冻结帧或实时画面）；遮罩没有显示时返回 `None`。
+    pub fn overlay_backdrop(&self) -> Option<Backdrop> {
+        self.overlay.lock().unwrap().visible_backdrop()
+    }
+
     /// 遮罩上用户正看到的画布：位置和内容；没有画布或遮罩没有显示时返回 `None`。
     pub fn overlay_canvas(&self) -> Option<(Rect, Image)> {
         self.overlay.lock().unwrap().visible_canvas().cloned()
@@ -583,10 +678,17 @@ impl SystemLanguage for FakeSystemLanguage {
 /// 不带修饰键的 PrtSc。
 const PRINT_SCREEN: Hotkey = Hotkey::new(Modifiers::NONE, Key::PrintScreen);
 
-struct FakeClock(Arc<Mutex<LocalDateTime>>);
+struct FakeClock {
+    time: Arc<Mutex<LocalDateTime>>,
+    monotonic: Arc<Mutex<Duration>>,
+}
 
 impl Clock for FakeClock {
     fn now(&self) -> LocalDateTime {
-        *self.0.lock().unwrap()
+        *self.time.lock().unwrap()
+    }
+
+    fn monotonic(&self) -> Duration {
+        *self.monotonic.lock().unwrap()
     }
 }

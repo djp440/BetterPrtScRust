@@ -29,7 +29,9 @@ mod screenshot_tool;
 mod text;
 mod tray;
 mod update;
+mod video;
 mod window;
+mod window_source;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -57,7 +59,12 @@ pub use screenshot_tool::SystemScreenshotTool;
 pub use text::TextMask;
 pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
 pub use update::{LatestRelease, UpdateService};
+pub use video::{
+    StreamFrame, StreamOptions, Ticker, VideoEncoder, VideoFormat, VideoFrame, VideoSettings,
+    VideoSource, VideoStream, VideoTarget, VideoWriter,
+};
 pub use window::{StandaloneWindow, WindowLauncher};
+pub use window_source::{TopLevelWindow, WindowId, WindowLayout, WindowSource};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -73,7 +80,7 @@ pub struct Platform {
     pub file_system: Box<dyn FileSystem>,
     /// 通知（托盘气泡）。
     pub notifier: Box<dyn Notifier>,
-    /// 本地时间，用于命名模板。
+    /// 本地时间（用于命名模板）与单调时间（用于计量时长）。
     pub clock: Box<dyn Clock>,
     /// 配置文件的读写与变更监视；变更经平台事件循环以 [`PlatformEvent`] 递交。
     pub config_file: Box<dyn ConfigFile>,
@@ -93,6 +100,14 @@ pub struct Platform {
     pub updates: Box<dyn UpdateService>,
     /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
     pub overlay: Box<dyn SelectionOverlay>,
+    /// 录屏的视频源：持续捕获屏幕上的一块区域。
+    pub video_source: Box<dyn VideoSource>,
+    /// 把录屏的帧编码成视频文件。
+    pub video_encoder: Box<dyn VideoEncoder>,
+    /// 节拍：录屏期间按帧率递交 [`PlatformEvent::Tick`]。
+    pub ticker: Box<dyn Ticker>,
     /// 文件对话框（另存为）。
     pub file_dialog: Box<dyn FileDialog>,
+    /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。
+    pub window_source: Box<dyn WindowSource>,
 }
