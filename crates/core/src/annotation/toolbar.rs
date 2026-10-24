@@ -23,6 +23,8 @@ pub(crate) enum Tool {
     Arrow,
     Mosaic,
     Text,
+    /// 选择：点中已画好的标注，拖动它、改样式或删除，不画新的标注。
+    Select,
 }
 
 /// 工具条上的按钮。
@@ -33,6 +35,9 @@ pub(crate) enum Button {
     Color(Color),
     /// 之后画的标注用这一档线宽。
     Thickness(Thickness),
+    /// 撤销、重做上一步标注修改。
+    Undo,
+    Redo,
     /// 取消这次捕获。
     Cancel,
     /// 结束方式：另存为。
@@ -66,6 +71,9 @@ impl ToolbarButton for Button {
             Button::Tool(Tool::Arrow) => "annotation-arrow",
             Button::Tool(Tool::Mosaic) => "annotation-mosaic",
             Button::Tool(Tool::Text) => "annotation-text",
+            Button::Tool(Tool::Select) => "annotation-select",
+            Button::Undo => "annotation-undo",
+            Button::Redo => "annotation-redo",
             Button::Cancel => "annotation-cancel",
             Button::SaveAs => "annotation-save-as",
             Button::AutoSave => "annotation-auto-save",
@@ -96,12 +104,16 @@ pub(crate) enum Entry<B> {
     Separator,
 }
 
-/// 上一行从左到右：工具 | 取消、结束方式（最常用的“复制”在最右边）。
-const TOP_ROW: [Entry<Button>; 9] = [
+/// 上一行从左到右：工具 | 撤销、重做 | 取消、结束方式（最常用的“复制”在最右边）。
+const TOP_ROW: [Entry<Button>; 13] = [
     Entry::Button(Button::Tool(Tool::Rectangle)),
     Entry::Button(Button::Tool(Tool::Arrow)),
     Entry::Button(Button::Tool(Tool::Mosaic)),
     Entry::Button(Button::Tool(Tool::Text)),
+    Entry::Button(Button::Tool(Tool::Select)),
+    Entry::Separator,
+    Entry::Button(Button::Undo),
+    Entry::Button(Button::Redo),
     Entry::Separator,
     Entry::Button(Button::Cancel),
     Entry::Button(Button::SaveAs),

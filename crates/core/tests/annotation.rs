@@ -890,3 +890,346 @@ fn overlay_shows_exactly_the_screenshot_with_mosaic_and_text_that_will_be_produc
         "屏幕上看到的应与最终截图逐像素一致（插入点不在截图里）"
     );
 }
+
+// ---- 撤销 / 重做与再编辑 ----
+
+use bps_platform::{Modifiers, OverlayInput, OverlayKey};
+
+const ORIGINAL_BOX_EDGE: Point = Point::new(151, 150);
+
+/// 区域 (100,80,400,300)，已选好“矩形”并画了一个红色粗细中档的框：屏幕 (150,120)–(249,179)，
+/// 即截图坐标 (50,40)–(149,99)，左边线在截图 x=50..53。
+fn with_box() -> (FakePlatform, ResidentInstance, Rect) {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = annotating(&fake, region);
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(150, 120), Point::new(249, 179)),
+    );
+    (fake, instance, region)
+}
+
+fn press(instance: &mut ResidentInstance, fake: &FakePlatform, key: OverlayKey, m: Modifiers) {
+    instance
+        .handle(fake.press_key_with(key, m))
+        .expect("按键应被处理");
+}
+
+fn copy_result(fake: &FakePlatform, instance: &mut ResidentInstance) -> bps_platform::Image {
+    feed(instance, fake.click_text("复制"));
+    fake.clipboard().png_image().expect("应复制到剪贴板")
+}
+
+fn canvas(fake: &FakePlatform) -> bps_platform::Image {
+    fake.overlay_canvas().expect("应显示画布").1
+}
+
+#[test]
+fn undo_and_redo_buttons_step_through_added_annotations() {
+    let (fake, mut instance, region) = with_box();
+    let base = desktop_pattern(region);
+    feed(&mut instance, fake.click_text("箭头"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(120, 300), Point::new(400, 300)),
+    );
+    assert!(is_red(canvas(&fake).pixel(100, 220)), "箭头已画上");
+
+    feed(&mut instance, fake.click_text("撤销"));
+    let shown = canvas(&fake);
+    assert!(shown.pixel(100, 220) == base.pixel(100, 220), "箭头被撤销");
+    assert!(is_red(shown.pixel(51, 70)), "框还在");
+
+    feed(&mut instance, fake.click_text("撤销"));
+    assert!(
+        canvas(&fake).pixel(51, 70) == base.pixel(51, 70),
+        "框也被撤销"
+    );
+
+    feed(&mut instance, fake.click_text("重做"));
+    feed(&mut instance, fake.click_text("重做"));
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 70)), "重做后框回来了");
+    assert!(is_red(png.pixel(100, 220)), "重做后箭头回来了");
+}
+
+#[test]
+fn ctrl_z_undoes_and_ctrl_y_or_ctrl_shift_z_redoes() {
+    let (fake, mut instance, region) = with_box();
+    let ctrl_shift = Modifiers {
+        ctrl: true,
+        shift: true,
+        ..Modifiers::NONE
+    };
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    assert!(
+        canvas(&fake) == desktop_pattern(region),
+        "Ctrl+Z 撤销了画框"
+    );
+    press(&mut instance, &fake, OverlayKey::Y, Modifiers::CTRL);
+    assert!(is_red(canvas(&fake).pixel(51, 70)), "Ctrl+Y 重做");
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    press(&mut instance, &fake, OverlayKey::Z, ctrl_shift);
+    assert!(is_red(canvas(&fake).pixel(51, 70)), "Ctrl+Shift+Z 重做");
+
+    // 没按 Ctrl 的 Z 什么也不做。
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::NONE);
+    assert!(is_red(canvas(&fake).pixel(51, 70)));
+    assert!(fake.overlay_visible(), "撤销、重做不结束捕获");
+}
+
+#[test]
+fn undoing_or_redoing_with_nothing_to_do_changes_nothing() {
+    let (fake, mut instance, region) = with_box();
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    feed(&mut instance, fake.click_text("重做"));
+    feed(&mut instance, fake.click_text("重做"));
+    feed(&mut instance, fake.click_text("重做"));
+
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 70)));
+    assert!(png.pixel(10, 10) == desktop_pattern(region).pixel(10, 10));
+}
+
+#[test]
+fn selected_annotation_can_be_dragged_and_the_whole_drag_is_one_undo_step() {
+    let (fake, mut instance, region) = with_box();
+    let base = desktop_pattern(region);
+    feed(&mut instance, fake.click_text("选择"));
+
+    // 抓住框的左边线，向右下拖 (30,20)：截图坐标 (80,60)–(179,119)。
+    feed(
+        &mut instance,
+        fake.drag(ORIGINAL_BOX_EDGE, Point::new(181, 170)),
+    );
+    let shown = canvas(&fake);
+    assert!(is_red(shown.pixel(81, 90)), "屏幕上框已移到新位置");
+    assert!(shown.pixel(51, 70) == base.pixel(51, 70), "原位置空了");
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    let shown = canvas(&fake);
+    assert!(is_red(shown.pixel(51, 70)), "一次撤销就回到拖动之前");
+    assert!(shown.pixel(81, 90) == base.pixel(81, 90));
+    press(&mut instance, &fake, OverlayKey::Y, Modifiers::CTRL);
+
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(81, 90)));
+    assert!(is_red(png.pixel(178, 118)), "移动后的右下角");
+    assert!(png.pixel(51, 70) == base.pixel(51, 70));
+}
+
+#[test]
+fn dragging_follows_the_pointer_while_the_button_is_down() {
+    let (fake, mut instance, region) = with_box();
+    feed(&mut instance, fake.click_text("选择"));
+    let events = vec![
+        fake.overlay_input(OverlayInput::PointerPressed {
+            button: PointerButton::Left,
+            position: ORIGINAL_BOX_EDGE,
+            modifiers: Modifiers::NONE,
+            double_click: false,
+        }),
+        fake.overlay_input(OverlayInput::PointerMoved {
+            position: Point::new(171, 160),
+            modifiers: Modifiers::NONE,
+        }),
+    ];
+    feed(&mut instance, events);
+
+    let shown = canvas(&fake);
+    assert!(is_red(shown.pixel(71, 80)), "按住拖动时就跟着指针");
+    assert!(shown.pixel(51, 70) == desktop_pattern(region).pixel(51, 70));
+}
+
+#[test]
+fn delete_removes_the_selected_annotation_and_undo_restores_it() {
+    let (fake, mut instance, region) = with_box();
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, ORIGINAL_BOX_EDGE),
+    );
+
+    press(&mut instance, &fake, OverlayKey::Delete, Modifiers::NONE);
+    assert!(canvas(&fake) == desktop_pattern(region), "框被删除");
+    assert!(fake.overlay_visible());
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    assert!(is_red(canvas(&fake).pixel(51, 70)), "撤销删除");
+}
+
+#[test]
+fn delete_without_a_selection_or_after_clicking_empty_space_does_nothing() {
+    let (fake, mut instance, _) = with_box();
+    press(&mut instance, &fake, OverlayKey::Delete, Modifiers::NONE);
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, ORIGINAL_BOX_EDGE),
+    );
+    // 点空白处取消选中（框内部是空的，点不中）。
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(200, 150)),
+    );
+    press(&mut instance, &fake, OverlayKey::Delete, Modifiers::NONE);
+
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 70)), "框还在");
+}
+
+#[test]
+fn color_and_thickness_buttons_restyle_the_selected_annotation_undoably() {
+    let (fake, mut instance, region) = with_box();
+    let base = desktop_pattern(region);
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, ORIGINAL_BOX_EDGE),
+    );
+
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+    let shown = canvas(&fake);
+    assert_eq!(shown.pixel(51, 70), [30, 110, 240, 255], "框改成蓝色");
+    assert!(shown.pixel(54, 70) == base.pixel(54, 70), "线宽没变");
+
+    feed(&mut instance, click_on(&fake, thickness_samples(&fake)[2]));
+    let shown = canvas(&fake);
+    assert_eq!(shown.pixel(55, 70), [30, 110, 240, 255], "粗档线宽 6 像素");
+    assert!(shown.pixel(56, 70) == base.pixel(56, 70));
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    let shown = canvas(&fake);
+    assert!(shown.pixel(55, 70) == base.pixel(55, 70), "撤销线宽");
+    assert_eq!(shown.pixel(51, 70), [30, 110, 240, 255]);
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    assert!(is_red(canvas(&fake).pixel(51, 70)), "撤销颜色");
+}
+
+#[test]
+fn restyling_without_a_selection_only_affects_later_annotations() {
+    let (fake, mut instance, _) = with_box();
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 70)), "没有选中时已画的框不变");
+}
+
+#[test]
+fn clicking_a_toolbar_button_keeps_the_selection() {
+    let (fake, mut instance, _) = with_box();
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, ORIGINAL_BOX_EDGE),
+    );
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+    feed(&mut instance, click_on(&fake, swatch(&fake, PALETTE[1])));
+
+    let png = copy_result(&fake, &mut instance);
+    assert_eq!(
+        png.pixel(51, 70),
+        [255, 190, 0, 255],
+        "两次改色都作用在同一个框上"
+    );
+}
+
+#[test]
+fn topmost_annotation_is_selected_and_moved_alone() {
+    let (fake, mut instance, region) = with_box();
+    let base = desktop_pattern(region);
+    // 再画一个与第一个框左边线重叠的框：截图坐标 (50,60)–(120,120)。
+    feed(
+        &mut instance,
+        fake.drag(Point::new(150, 140), Point::new(220, 200)),
+    );
+    feed(&mut instance, fake.click_text("选择"));
+    feed(
+        &mut instance,
+        fake.drag(Point::new(151, 170), Point::new(191, 170)),
+    );
+
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 50)), "下面那个框的左边线不动");
+    assert!(
+        png.pixel(51, 110) == base.pixel(51, 110),
+        "上面那个框原来的位置空了"
+    );
+    assert!(is_red(png.pixel(91, 110)), "上面那个框右移了 40 像素");
+}
+
+#[test]
+fn text_can_be_selected_moved_recolored_and_resized() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+    feed(&mut instance, fake.type_text("你好"));
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Escape)]);
+    let base = desktop_pattern(region);
+
+    feed(&mut instance, fake.click_text("选择"));
+    // 点在“你”的字形上选中，再改成粗档（字号 30）和蓝色。
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(160, 134)),
+    );
+    feed(&mut instance, click_on(&fake, thickness_samples(&fake)[2]));
+    feed(&mut instance, click_on(&fake, swatch(&fake, BLUE)));
+    assert_eq!(
+        canvas(&fake).pixel(60, 68),
+        [30, 110, 240, 255],
+        "字号变大、颜色变蓝"
+    );
+
+    // 向右拖 40 像素。
+    feed(
+        &mut instance,
+        fake.drag(Point::new(160, 134), Point::new(200, 134)),
+    );
+    let shown = canvas(&fake);
+    assert_eq!(shown.pixel(100, 54), [30, 110, 240, 255]);
+    assert!(shown.pixel(60, 54) == base.pixel(60, 54), "原位置空了");
+
+    // 撤销移动、颜色、字号：回到最初的字。
+    for _ in 0..3 {
+        press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    }
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(60, 54)), "“你”回到原位、原色");
+    assert!(png.pixel(60, 68) == base.pixel(60, 68), "字号也回到中档");
+}
+
+#[test]
+fn finished_text_is_one_undo_step() {
+    let fake = single_display();
+    let region = Rect::new(100, 80, 400, 300);
+    let mut instance = typing(&fake, region);
+    feed(&mut instance, fake.type_text("你好"));
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Escape)]);
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    assert!(
+        canvas(&fake) == desktop_pattern(region),
+        "整段文字一起被撤销"
+    );
+}
+
+#[test]
+fn undo_and_delete_keys_while_typing_do_not_touch_the_annotations() {
+    let (fake, mut instance, _) = with_box();
+    feed(&mut instance, fake.click_text("文字"));
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(300, 250)),
+    );
+    feed(&mut instance, fake.type_text("a"));
+
+    press(&mut instance, &fake, OverlayKey::Z, Modifiers::CTRL);
+    press(&mut instance, &fake, OverlayKey::Delete, Modifiers::NONE);
+    let png = copy_result(&fake, &mut instance);
+    assert!(is_red(png.pixel(51, 70)), "打字时快捷键不影响已有的框");
+}

@@ -345,3 +345,189 @@ fn text_partly_outside_the_screenshot_is_clipped() {
     assert!((127..=129).contains(&r), "覆盖一半：{r}");
     assert_eq!(composed.pixel(0, 2), [0, 0, 255, 255]);
 }
+
+// ---- 撤销 / 重做与再编辑 ----
+
+fn red_box(x: i32) -> Annotation {
+    rectangle(Rect::new(x, 2, 6, 6), 1, RED)
+}
+
+#[test]
+fn undo_removes_the_last_added_annotation_and_redo_brings_it_back() {
+    let mut document = AnnotationDocument::new();
+    assert!(!document.can_undo() && !document.can_redo());
+    document.add(red_box(1));
+    document.add(red_box(10));
+
+    assert!(document.undo());
+    assert_eq!(document.annotations(), [red_box(1)]);
+    assert!(document.can_redo());
+    assert!(document.undo());
+    assert!(document.is_empty());
+    assert!(!document.undo(), "没有可撤销的了");
+
+    assert!(document.redo());
+    assert!(document.redo());
+    assert_eq!(document.annotations(), [red_box(1), red_box(10)]);
+    assert!(!document.redo(), "没有可重做的了");
+}
+
+#[test]
+fn a_new_edit_discards_the_redo_history() {
+    let mut document = AnnotationDocument::new();
+    document.add(red_box(1));
+    document.undo();
+    document.add(red_box(20));
+
+    assert!(!document.can_redo());
+    assert_eq!(document.annotations(), [red_box(20)]);
+}
+
+#[test]
+fn replacing_an_annotation_edits_it_in_place_and_can_be_undone_and_redone() {
+    let mut document = AnnotationDocument::new();
+    document.add(red_box(1));
+    document.add(red_box(10));
+
+    assert!(document.replace(0, red_box(4)));
+    assert_eq!(document.annotations(), [red_box(4), red_box(10)]);
+    document.undo();
+    assert_eq!(document.annotations(), [red_box(1), red_box(10)]);
+    document.redo();
+    assert_eq!(document.annotations(), [red_box(4), red_box(10)]);
+}
+
+#[test]
+fn replacing_with_an_identical_annotation_or_a_missing_index_changes_nothing() {
+    let mut document = AnnotationDocument::new();
+    document.add(red_box(1));
+
+    assert!(!document.replace(0, red_box(1)));
+    assert!(!document.replace(5, red_box(2)));
+    assert!(!document.remove(5));
+    // 历史里只有那次添加。
+    document.undo();
+    assert!(!document.can_undo());
+}
+
+#[test]
+fn removing_an_annotation_keeps_the_order_of_the_rest_and_can_be_undone() {
+    let mut document = AnnotationDocument::new();
+    document.add(red_box(1));
+    document.add(red_box(10));
+    document.add(red_box(20));
+
+    assert!(document.remove(1));
+    assert_eq!(document.annotations(), [red_box(1), red_box(20)]);
+    document.undo();
+    assert_eq!(
+        document.annotations(),
+        [red_box(1), red_box(10), red_box(20)]
+    );
+    document.redo();
+    assert_eq!(document.annotations(), [red_box(1), red_box(20)]);
+}
+
+#[test]
+fn undo_and_redo_cover_add_move_restyle_and_delete_in_order() {
+    let mut document = AnnotationDocument::new();
+    document.add(red_box(1));
+    let moved = document.annotations()[0].translated(3, 2);
+    document.replace(0, moved.clone());
+    let blue = Color::rgba(30, 110, 240, 255);
+    document.replace(0, moved.with_color(blue).unwrap());
+    document.remove(0);
+    assert!(document.is_empty());
+
+    document.undo();
+    assert_eq!(document.annotations()[0].color(), Some(blue));
+    document.undo();
+    assert_eq!(document.annotations(), [moved]);
+    document.undo();
+    assert_eq!(document.annotations(), [red_box(1)]);
+    document.undo();
+    assert!(document.is_empty());
+    for _ in 0..4 {
+        assert!(document.redo());
+    }
+    assert!(document.is_empty());
+}
+
+#[test]
+fn translating_moves_every_kind_of_annotation_without_changing_its_look() {
+    // 纯色底图上，平移后合成的图应当是原图整体平移。
+    let base = Image::from_rgba(40, 30, [90, 120, 150, 255].repeat(40 * 30));
+    for original in [
+        rectangle(Rect::new(2, 3, 10, 8), 2, RED),
+        arrow(Point::new(3, 4), Point::new(20, 9), 2),
+    ] {
+        let mut before = AnnotationDocument::new();
+        before.add(original.clone());
+        let mut after = AnnotationDocument::new();
+        after.add(original.translated(7, 5));
+        let (a, b) = (before.compose(&base), after.compose(&base));
+        for y in 0..20 {
+            for x in 0..25 {
+                assert_eq!(
+                    a.pixel(x, y),
+                    b.pixel(x + 7, y + 5),
+                    "{original:?} ({x},{y})"
+                );
+            }
+        }
+    }
+    let mosaic = Annotation::Mosaic {
+        rect: Rect::new(4, 4, 8, 8),
+        block: 4,
+    };
+    assert_eq!(mosaic.translated(7, 5).bounds(), Rect::new(11, 9, 8, 8));
+}
+
+#[test]
+fn restyling_changes_color_and_line_width_but_not_what_has_no_such_attribute() {
+    let blue = Color::rgba(30, 110, 240, 255);
+    let rect = rectangle(Rect::new(0, 0, 20, 20), 2, RED);
+    assert_eq!(
+        rect.with_color(blue),
+        Some(rectangle(Rect::new(0, 0, 20, 20), 2, blue))
+    );
+    assert_eq!(
+        rect.with_line_width(5),
+        Some(rectangle(Rect::new(0, 0, 20, 20), 5, RED))
+    );
+    let mosaic = Annotation::Mosaic {
+        rect: Rect::new(0, 0, 8, 8),
+        block: 4,
+    };
+    assert_eq!(mosaic.with_color(blue), None, "马赛克没有颜色");
+    assert_eq!(
+        mosaic.with_line_width(6),
+        Some(Annotation::Mosaic {
+            rect: Rect::new(0, 0, 8, 8),
+            block: 6
+        }),
+        "马赛克的“线宽”是色块边长"
+    );
+}
+
+#[test]
+fn hit_testing_follows_the_visible_shape_of_each_annotation() {
+    let rect = rectangle(Rect::new(10, 10, 40, 30), 2, RED);
+    assert!(rect.hit(Point::new(10, 20), 0), "框的边");
+    assert!(rect.hit(Point::new(30, 39), 0), "框的下边");
+    assert!(!rect.hit(Point::new(30, 25), 0), "框内部是空的，点不中");
+    assert!(rect.hit(Point::new(30, 44), 5), "容差内也算点中");
+    assert!(!rect.hit(Point::new(30, 60), 5));
+
+    let arrow = arrow(Point::new(10, 10), Point::new(60, 10), 4);
+    assert!(arrow.hit(Point::new(30, 10), 0));
+    assert!(arrow.hit(Point::new(30, 13), 2), "离箭杆一点点");
+    assert!(!arrow.hit(Point::new(30, 30), 2));
+
+    let mosaic = Annotation::Mosaic {
+        rect: Rect::new(5, 5, 20, 20),
+        block: 4,
+    };
+    assert!(mosaic.hit(Point::new(15, 15), 0), "马赛克整块都点得中");
+    assert!(!mosaic.hit(Point::new(40, 15), 0));
+}

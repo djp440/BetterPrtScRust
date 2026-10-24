@@ -184,6 +184,169 @@ impl Annotation {
         }
     }
 
+    /// 标注的颜色；马赛克没有颜色，为 `None`。
+    pub fn color(&self) -> Option<Color> {
+        match *self {
+            Annotation::Rectangle { stroke, .. } | Annotation::Arrow { stroke, .. } => {
+                Some(stroke.color)
+            }
+            Annotation::Text { color, .. } => Some(color),
+            Annotation::Mosaic { .. } => None,
+        }
+    }
+
+    /// 平移 (`dx`, `dy`) 像素后的标注，样子不变。
+    pub fn translated(&self, dx: i32, dy: i32) -> Annotation {
+        let shift = |p: Point| Point::new(p.x.saturating_add(dx), p.y.saturating_add(dy));
+        let shift_rect = |r: Rect| {
+            Rect::new(
+                shift(Point::new(r.x, r.y)).x,
+                shift(Point::new(r.x, r.y)).y,
+                r.width,
+                r.height,
+            )
+        };
+        match *self {
+            Annotation::Rectangle { rect, stroke } => Annotation::Rectangle {
+                rect: shift_rect(rect),
+                stroke,
+            },
+            Annotation::Arrow { from, to, stroke } => Annotation::Arrow {
+                from: shift(from),
+                to: shift(to),
+                stroke,
+            },
+            Annotation::Mosaic { rect, block } => Annotation::Mosaic {
+                rect: shift_rect(rect),
+                block,
+            },
+            Annotation::Text {
+                origin,
+                ref text,
+                size,
+                color,
+                ref mask,
+            } => Annotation::Text {
+                origin: shift(origin),
+                text: text.clone(),
+                size,
+                color,
+                mask: mask.clone(),
+            },
+        }
+    }
+
+    /// 换了颜色的标注；马赛克没有颜色，为 `None`。
+    pub fn with_color(&self, color: Color) -> Option<Annotation> {
+        match self.clone() {
+            Annotation::Rectangle { rect, stroke } => Some(Annotation::Rectangle {
+                rect,
+                stroke: Stroke { color, ..stroke },
+            }),
+            Annotation::Arrow { from, to, stroke } => Some(Annotation::Arrow {
+                from,
+                to,
+                stroke: Stroke { color, ..stroke },
+            }),
+            Annotation::Text {
+                origin,
+                text,
+                size,
+                mask,
+                ..
+            } => Some(Annotation::Text {
+                origin,
+                text,
+                size,
+                color,
+                mask,
+            }),
+            Annotation::Mosaic { .. } => None,
+        }
+    }
+
+    /// 换了线宽的标注：框和箭头的线宽、马赛克的色块边长取 `width`。文字的“线宽”是字号，
+    /// 要重新栅格化蒙版（[`Annotation::with_text_mask`]），不能只改数字，这里返回 `None`。
+    pub fn with_line_width(&self, width: u32) -> Option<Annotation> {
+        match *self {
+            Annotation::Rectangle { rect, stroke } => Some(Annotation::Rectangle {
+                rect,
+                stroke: Stroke { width, ..stroke },
+            }),
+            Annotation::Arrow { from, to, stroke } => Some(Annotation::Arrow {
+                from,
+                to,
+                stroke: Stroke { width, ..stroke },
+            }),
+            Annotation::Mosaic { rect, .. } => Some(Annotation::Mosaic { rect, block: width }),
+            Annotation::Text { .. } => None,
+        }
+    }
+
+    /// 换了字号和蒙版的文字标注；不是文字时为 `None`。
+    pub(crate) fn with_text_mask(&self, size: u32, mask: Arc<TextMask>) -> Option<Annotation> {
+        match self.clone() {
+            Annotation::Text {
+                origin,
+                text,
+                color,
+                ..
+            } => Some(Annotation::Text {
+                origin,
+                text,
+                size,
+                color,
+                mask,
+            }),
+            _ => None,
+        }
+    }
+
+    /// 截图上的 `point` 是否点中了这个标注：在画出来的形状上，或离它不超过 `tolerance` 像素。
+    /// 框只有四条边能点中（框内部是空的），马赛克和文字整块都点得中。
+    pub fn hit(&self, point: Point, tolerance: u32) -> bool {
+        let tolerance = i64::from(tolerance);
+        let near = |rect: Rect| {
+            let (px, py) = (i64::from(point.x), i64::from(point.y));
+            px >= i64::from(rect.x) - tolerance
+                && px < i64::from(rect.x) + i64::from(rect.width) + tolerance
+                && py >= i64::from(rect.y) - tolerance
+                && py < i64::from(rect.y) + i64::from(rect.height) + tolerance
+        };
+        match *self {
+            Annotation::Rectangle { rect, stroke } => {
+                rectangle_strips(rect, stroke.width).into_iter().any(near)
+            }
+            Annotation::Mosaic { rect, .. } => near(rect),
+            Annotation::Text {
+                origin, ref mask, ..
+            } => near(text_ink(origin, mask).union(offset(mask.layout(), origin))),
+            Annotation::Arrow { from, to, stroke } => {
+                let (ax, ay) = (from.x as f32 + 0.5, from.y as f32 + 0.5);
+                let (bx, by) = (to.x as f32 + 0.5, to.y as f32 + 0.5);
+                let (px, py) = (point.x as f32 + 0.5, point.y as f32 + 0.5);
+                let (dx, dy) = (bx - ax, by - ay);
+                let length = dx.hypot(dy);
+                let width = stroke.width.max(1) as f32;
+                let t = if length < 0.5 {
+                    0.0
+                } else {
+                    (((px - ax) * dx + (py - ay) * dy) / (length * length)).clamp(0.0, 1.0)
+                };
+                let distance = (px - (ax + t * dx)).hypot(py - (ay + t * dy));
+                // 离箭尖 `along` 处，箭头的半宽线性变宽；超出箭头长度就只剩箭杆。
+                let head_length = (4.0 * width + 6.0).min(length);
+                let along = (1.0 - t) * length;
+                let cone = if along <= head_length {
+                    0.6 * along
+                } else {
+                    0.0
+                };
+                distance <= (width / 2.0).max(cone) + tolerance as f32
+            }
+        }
+    }
+
     fn paint(&self, target: &mut Target<'_>) {
         match *self {
             Annotation::Rectangle { rect, stroke } => {
@@ -206,9 +369,17 @@ impl Annotation {
 }
 
 /// 标注文档：叠加在一张截图上的标注，按添加顺序从下往上画。
+///
+/// 每一次修改（添加、改动、删除）是一步历史，可以撤销和重做；撤销后做了新的修改，
+/// 被撤销的步骤就不能再重做。历史存的是整张标注列表（`Annotation` 的克隆很便宜：文字的
+/// 蒙版是共享的），所以任何组合的撤销、重做都精确还原。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnnotationDocument {
     annotations: Vec<Annotation>,
+    /// 每一步修改之前的标注列表，最近的在最后。
+    undo: Vec<Vec<Annotation>>,
+    /// 被撤销的步骤做完之后的标注列表，最近撤销的在最后。
+    redo: Vec<Vec<Annotation>>,
 }
 
 impl AnnotationDocument {
@@ -217,9 +388,65 @@ impl AnnotationDocument {
         Self::default()
     }
 
+    /// 记下一步历史，然后让 `edit` 修改标注列表。
+    fn record(&mut self, edit: impl FnOnce(&mut Vec<Annotation>)) {
+        self.undo.push(self.annotations.clone());
+        self.redo.clear();
+        edit(&mut self.annotations);
+    }
+
     /// 在最上面加一个标注。
     pub fn add(&mut self, annotation: Annotation) {
-        self.annotations.push(annotation);
+        self.record(|annotations| annotations.push(annotation));
+    }
+
+    /// 把第 `index` 个标注（从下往上数）换成 `annotation`，用于移动、改样式。下标不存在或
+    /// 内容没有变化时什么也不做，返回 `false`（不产生历史）。
+    pub fn replace(&mut self, index: usize, annotation: Annotation) -> bool {
+        if self.annotations.get(index).is_none_or(|a| *a == annotation) {
+            return false;
+        }
+        self.record(|annotations| annotations[index] = annotation);
+        true
+    }
+
+    /// 删除第 `index` 个标注，其余的顺序不变。下标不存在时什么也不做，返回 `false`。
+    pub fn remove(&mut self, index: usize) -> bool {
+        if index >= self.annotations.len() {
+            return false;
+        }
+        self.record(|annotations| {
+            annotations.remove(index);
+        });
+        true
+    }
+
+    /// 撤销最近一步修改；没有可撤销的时返回 `false`。
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo.pop() else {
+            return false;
+        };
+        let current = std::mem::replace(&mut self.annotations, previous);
+        self.redo.push(current);
+        true
+    }
+
+    /// 重做最近撤销的一步修改；没有可重做的时返回 `false`。
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        let current = std::mem::replace(&mut self.annotations, next);
+        self.undo.push(current);
+        true
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
     }
 
     /// 全部标注，从下往上排列。
