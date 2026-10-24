@@ -21,6 +21,7 @@ mod hotkey;
 mod image;
 mod language;
 mod notifier;
+mod overlay;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
@@ -43,6 +44,10 @@ pub use hotkey::{
 pub use image::Image;
 pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
+pub use overlay::{
+    Backdrop, Color, Corner, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
+    OverlayScene, PointerButton, SelectionOverlay,
+};
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
@@ -82,4 +87,6 @@ pub struct Platform {
     pub system_language: Box<dyn SystemLanguage>,
     /// 检查更新；结果经平台事件循环以 [`PlatformEvent`] 递交。
     pub updates: Box<dyn UpdateService>,
+    /// 选区遮罩：拍冻结帧、按 `core` 给出的场景绘制，用户输入以 [`PlatformEvent::OverlayInput`] 递交。
+    pub overlay: Box<dyn SelectionOverlay>,
 }

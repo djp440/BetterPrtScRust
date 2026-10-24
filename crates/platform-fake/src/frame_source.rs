@@ -78,17 +78,10 @@ pub(crate) struct FrameState {
     pub cursor: Point,
 }
 
-pub(crate) struct FakeFrameSource(pub Arc<Mutex<FrameState>>);
-
-fn id_of(index: usize) -> DisplayId {
-    DisplayId(index as u64 + 1)
-}
-
-impl FrameSource for FakeFrameSource {
-    fn displays(&self) -> Result<Vec<Display>, PlatformError> {
-        let state = self.0.lock().unwrap();
-        Ok(state
-            .displays
+impl FrameState {
+    /// 当前的显示器布局，`DisplayId` 按添加顺序分配。
+    pub fn describe(&self) -> Vec<Display> {
+        self.displays
             .iter()
             .enumerate()
             .map(|(index, d)| Display {
@@ -97,7 +90,19 @@ impl FrameSource for FakeFrameSource {
                 scale_factor: d.scale_factor,
                 is_primary: d.is_primary,
             })
-            .collect())
+            .collect()
+    }
+}
+
+pub(crate) struct FakeFrameSource(pub Arc<Mutex<FrameState>>);
+
+fn id_of(index: usize) -> DisplayId {
+    DisplayId(index as u64 + 1)
+}
+
+impl FrameSource for FakeFrameSource {
+    fn displays(&self) -> Result<Vec<Display>, PlatformError> {
+        Ok(self.0.lock().unwrap().describe())
     }
 
     fn cursor_position(&self) -> Result<Point, PlatformError> {

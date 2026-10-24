@@ -83,7 +83,7 @@ unsafe extern "system" fn collect_monitor(
     true.into()
 }
 
-fn describe_monitor(monitor: HMONITOR) -> Result<Display, PlatformError> {
+pub(crate) fn describe_monitor(monitor: HMONITOR) -> Result<Display, PlatformError> {
     let mut info = MONITORINFO {
         cbSize: size_of::<MONITORINFO>() as u32,
         ..Default::default()
@@ -170,7 +170,7 @@ unsafe fn find_output(
 ///
 /// 优先用 `IDXGIOutput5::DuplicateOutput1`（Win10 1703+，要求 Per-Monitor V2）声明支持的格式；
 /// 注意 HDR / 高级颜色桌面即使只声明 BGRA8 也会给出 FP16 画面，两种格式都要处理。
-unsafe fn duplicate_output(
+pub(crate) unsafe fn duplicate_output(
     output: &IDXGIOutput,
     device: &ID3D11Device,
 ) -> Result<IDXGIOutputDuplication, PlatformError> {
@@ -188,7 +188,7 @@ unsafe fn duplicate_output(
 }
 
 /// 已取得的一帧；离开作用域时调用 `ReleaseFrame`。
-struct AcquiredFrame<'a>(&'a IDXGIOutputDuplication);
+pub(crate) struct AcquiredFrame<'a>(&'a IDXGIOutputDuplication);
 
 impl Drop for AcquiredFrame<'_> {
     fn drop(&mut self) {
@@ -200,7 +200,7 @@ impl Drop for AcquiredFrame<'_> {
 ///
 /// 新建 Duplication 后第一次取到的帧可能还没有桌面画面（`LastPresentTime == 0`，
 /// 纹理是全黑的），只有画面更新过的帧才可用，所以跳过这类帧继续等。
-unsafe fn acquire_frame(
+pub(crate) unsafe fn acquire_frame(
     duplication: &IDXGIOutputDuplication,
 ) -> Result<(ID3D11Texture2D, AcquiredFrame<'_>), PlatformError> {
     let mut last_error = None;
@@ -232,7 +232,7 @@ unsafe fn acquire_frame(
 }
 
 /// 把 GPU 上的桌面纹理拷到内存并转换成 RGBA8。
-unsafe fn copy_to_cpu(
+pub(crate) unsafe fn copy_to_cpu(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     texture: &ID3D11Texture2D,
@@ -279,13 +279,10 @@ unsafe fn copy_to_cpu(
     unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
         .map_err(|e| win_error("读取暂存纹理失败", e))?;
     let (width, height) = (desc.Width as usize, desc.Height as usize);
-    let rows = (0..height).map(|y| unsafe {
-        std::slice::from_raw_parts(
-            (mapped.pData as *const u8).add(y * mapped.RowPitch as usize),
-            width * bytes_per_pixel,
-        )
-    });
-    let rgba = pixels::to_rgba(&format, width, rows);
+    let row_pitch = mapped.RowPitch as usize;
+    let len = (row_pitch * height.saturating_sub(1)) + width * bytes_per_pixel;
+    let data = unsafe { std::slice::from_raw_parts(mapped.pData as *const u8, len) };
+    let rgba = pixels::to_rgba(&format, width, height, row_pitch, data);
     unsafe { context.Unmap(&staging, 0) };
     Ok(Image::from_rgba(desc.Width, desc.Height, rgba))
 }

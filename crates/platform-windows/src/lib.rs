@@ -11,6 +11,7 @@
 //! - [`WindowsElevation`]：是否以管理员权限运行、以管理员身份重新启动
 //! - [`WindowsScreenshotTool`]：读取系统“截图工具”是否占用 PrtSc 键（只读），设置变化时由
 //!   [`EventLoop`] 递交 `PlatformEvent`
+//! - [`D2dSelectionOverlay`]：选区遮罩（Win32 + D3D11 + Direct2D，设备与窗口常驻预热），用户输入由 [`EventLoop`] 递交
 //! - [`EventLoop`]：常驻实例的隐藏窗口、消息循环和托盘图标；[`EventSender`] 供其他线程投递事件；
 //!   [`WindowsTrayMenu`]：托盘菜单的内容
 //! - [`ChildProcessWindows`]：以子进程（`BetterPrtSc.exe --settings` 等）打开独立窗口界面
@@ -42,6 +43,7 @@ mod frame_source;
 mod hotkeys;
 mod language;
 mod notifier;
+mod overlay;
 mod pipe;
 mod pixels;
 mod registry;
@@ -62,6 +64,7 @@ pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
+pub use overlay::D2dSelectionOverlay;
 pub use pipe::{PipeChannel, PipeClaim, ResidentPipe, resident_pipe_name};
 pub use screenshot_tool::WindowsScreenshotTool;
 pub use shell::{
@@ -96,5 +99,6 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         autostart: Box::new(WindowsAutostart::new()),
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
+        overlay: Box::new(event_loop.selection_overlay()),
     }
 }

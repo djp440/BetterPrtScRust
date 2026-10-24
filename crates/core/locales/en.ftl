@@ -64,6 +64,7 @@ error-too-many-same-name-files = Too many files with the same name; no free file
 error-unsupported-capture-mode = The “{ $mode }” capture mode is not supported yet
 error-unsupported-action = The “{ $action }” post-capture action is not supported yet
 error-invalid-request = The resident instance did not understand the request “{ $request }”; make sure bps and BetterPrtSc are the same version
+error-capture-in-progress = The previous capture has not finished yet
 
 ## Why a hotkey could not be registered
 
@@ -155,3 +156,6 @@ settings-unsaved-body = Save your changes before closing?
 settings-save-and-close = Save and close
 settings-discard-and-close = Don't save
 settings-cancel = Cancel
+
+## 选区遮罩
+overlay-selected-hint = Enter or double-click the selection: done   Esc: cancel

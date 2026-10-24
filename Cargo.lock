@@ -235,6 +235,7 @@ dependencies = [
  "bps-platform",
  "bps-platform-windows",
  "bps-ui",
+ "windows",
 ]
 
 [[package]]

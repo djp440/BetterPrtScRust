@@ -1,5 +1,7 @@
 //! 把 Desktop Duplication 的像素格式转换成 `bps_platform::Image` 的 RGBA8。
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use bps_platform::Image;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_ROTATION, DXGI_MODE_ROTATION_ROTATE90, DXGI_MODE_ROTATION_ROTATE180,
@@ -15,27 +17,46 @@ pub(crate) enum DesktopFormat {
     ScRgbF16 { sdr_white: f32 },
 }
 
-/// 逐行把 `rows`（每行是纹理中的一行原始字节）转换成 RGBA8，alpha 固定为 255。
-pub(crate) fn to_rgba<'a>(
+/// 每段至少这么多行才值得开线程。
+const MIN_ROWS_PER_BAND: usize = 64;
+/// 并行转换最多使用的线程数（再多会受内存带宽限制）。
+const MAX_BANDS: usize = 4;
+
+/// 把纹理映射出来的像素（`height` 行，每行起点相隔 `row_pitch` 字节）转换成 RGBA8，
+/// alpha 固定为 255。大图按行分段并行转换（4K HDR 单线程约 20 ms）。
+pub(crate) fn to_rgba(
     format: &DesktopFormat,
     width: usize,
-    rows: impl Iterator<Item = &'a [u8]>,
+    height: usize,
+    row_pitch: usize,
+    data: &[u8],
 ) -> Vec<u8> {
-    let mut rgba = Vec::new();
-    match format {
-        DesktopFormat::Bgra8 => {
-            for row in rows {
-                for p in row[..width * 4].chunks_exact(4) {
-                    rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+    let mut rgba = vec![0; width * height * 4];
+    if rgba.is_empty() {
+        return rgba;
+    }
+    let lut = match format {
+        DesktopFormat::Bgra8 => None,
+        DesktopFormat::ScRgbF16 { sdr_white } => Some(scrgb_to_srgb_lut(*sdr_white)),
+    };
+    let convert_row = |y: usize, out: &mut [u8]| {
+        let row = &data[y * row_pitch..];
+        match &lut {
+            None => {
+                for (p, o) in row[..width * 4]
+                    .chunks_exact(4)
+                    .zip(out.chunks_exact_mut(4))
+                {
+                    o.copy_from_slice(&[p[2], p[1], p[0], 255]);
                 }
             }
-        }
-        DesktopFormat::ScRgbF16 { sdr_white } => {
-            let lut = scrgb_to_srgb_lut(*sdr_white);
-            let channel = |lo: u8, hi: u8| lut[usize::from(u16::from_le_bytes([lo, hi]))];
-            for row in rows {
-                for p in row[..width * 8].chunks_exact(8) {
-                    rgba.extend_from_slice(&[
+            Some(lut) => {
+                let channel = |lo: u8, hi: u8| lut[usize::from(u16::from_le_bytes([lo, hi]))];
+                for (p, o) in row[..width * 8]
+                    .chunks_exact(8)
+                    .zip(out.chunks_exact_mut(4))
+                {
+                    o.copy_from_slice(&[
                         channel(p[0], p[1]),
                         channel(p[2], p[3]),
                         channel(p[4], p[5]),
@@ -44,13 +65,47 @@ pub(crate) fn to_rgba<'a>(
                 }
             }
         }
+    };
+    let convert_band = |first_row: usize, band: &mut [u8]| {
+        for (i, out) in band.chunks_exact_mut(width * 4).enumerate() {
+            convert_row(first_row + i, out);
+        }
+    };
+
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let bands = threads
+        .min(MAX_BANDS)
+        .min(height / MIN_ROWS_PER_BAND)
+        .max(1);
+    if bands == 1 {
+        convert_band(0, &mut rgba);
+        return rgba;
     }
+    let rows_per_band = height.div_ceil(bands);
+    std::thread::scope(|scope| {
+        for (index, band) in rgba.chunks_mut(rows_per_band * width * 4).enumerate() {
+            let convert_band = &convert_band;
+            scope.spawn(move || convert_band(index * rows_per_band, band));
+        }
+    });
     rgba
 }
 
 /// 半精度浮点位模式 → sRGB 8 位分量的查找表：先按 SDR 白电平归一化，
-/// 超出 SDR 范围的高光截断，再做 sRGB 编码。
-fn scrgb_to_srgb_lut(sdr_white: f32) -> Vec<u8> {
+/// 超出 SDR 范围的高光截断，再做 sRGB 编码。最近一次的表会缓存起来（白电平很少变）。
+fn scrgb_to_srgb_lut(sdr_white: f32) -> Arc<[u8]> {
+    static CACHE: Mutex<Option<(u32, Arc<[u8]>)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    match &*cache {
+        Some((bits, lut)) if *bits == sdr_white.to_bits() => return lut.clone(),
+        _ => {}
+    }
+    let lut = build_scrgb_to_srgb_lut(sdr_white);
+    *cache = Some((sdr_white.to_bits(), lut.clone()));
+    lut
+}
+
+fn build_scrgb_to_srgb_lut(sdr_white: f32) -> Arc<[u8]> {
     (0..=u16::MAX)
         .map(|bits| {
             let linear = f16_to_f32(bits) / sdr_white;
@@ -103,4 +158,81 @@ pub(crate) fn rotate(image: Image, rotation: DXGI_MODE_ROTATION) -> Image {
         }
     }
     Image::from_rgba(dw as u32, dh as u32, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 半精度浮点的位模式。
+    const F16_ONE: u16 = 0x3C00;
+    const F16_HALF: u16 = 0x3800;
+    const F16_TWO: u16 = 0x4000;
+    const F16_MINUS_ONE: u16 = 0xBC00;
+
+    fn f16_pixel(r: u16, g: u16, b: u16) -> Vec<u8> {
+        [r, g, b, F16_ONE]
+            .iter()
+            .flat_map(|c| c.to_le_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn bgra8_is_swizzled_to_opaque_rgba_ignoring_row_padding() {
+        // 2×2，每行 8 字节像素 + 4 字节填充。
+        let data = [
+            1, 2, 3, 0, 4, 5, 6, 0, 0xEE, 0xEE, 0xEE, 0xEE, //
+            7, 8, 9, 0, 10, 11, 12, 0,
+        ];
+        let rgba = to_rgba(&DesktopFormat::Bgra8, 2, 2, 12, &data);
+        assert_eq!(
+            rgba,
+            [3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255]
+        );
+    }
+
+    #[test]
+    fn scrgb_is_normalized_by_sdr_white_clipped_and_srgb_encoded() {
+        let data: Vec<u8> = [
+            f16_pixel(F16_ONE, F16_HALF, 0),
+            f16_pixel(F16_TWO, F16_MINUS_ONE, F16_ONE),
+        ]
+        .concat();
+        let format = DesktopFormat::ScRgbF16 { sdr_white: 1.0 };
+        assert_eq!(
+            to_rgba(&format, 2, 1, 16, &data),
+            [255, 188, 0, 255, 255, 0, 255, 255]
+        );
+        let brighter_white = DesktopFormat::ScRgbF16 { sdr_white: 2.0 };
+        assert_eq!(
+            to_rgba(&brighter_white, 2, 1, 16, &data),
+            [188, 137, 0, 255, 255, 0, 188, 255]
+        );
+    }
+
+    #[test]
+    fn large_images_keep_every_row_in_place() {
+        let (width, height) = (300, 517);
+        let row_pitch = width * 4 + 8;
+        let mut data = vec![0u8; row_pitch * height];
+        for y in 0..height {
+            for x in 0..width {
+                let p = y * row_pitch + x * 4;
+                data[p + 2] = (y % 256) as u8; // R
+                data[p] = (x % 256) as u8; // B
+            }
+        }
+        let rgba = to_rgba(&DesktopFormat::Bgra8, width, height, row_pitch, &data);
+        assert_eq!(rgba.len(), width * height * 4);
+        for y in 0..height {
+            for x in 0..width {
+                let p = (y * width + x) * 4;
+                assert_eq!(
+                    rgba[p..p + 4],
+                    [(y % 256) as u8, 0, (x % 256) as u8, 255],
+                    "({x}, {y})"
+                );
+            }
+        }
+    }
 }

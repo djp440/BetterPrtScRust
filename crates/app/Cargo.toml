@@ -24,3 +24,20 @@ bps-platform.workspace = true
 bps-platform-windows.workspace = true
 # 设置界面等独立窗口（egui），只在 `--settings` 等界面子进程里初始化。
 bps-ui.workspace = true
+
+# 只给忽略的真机测量测试（tests/overlay_latency.rs）用。
+[target.'cfg(windows)'.dev-dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+]

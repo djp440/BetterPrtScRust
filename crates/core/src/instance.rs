@@ -1,11 +1,13 @@
 use bps_platform::{
     AutostartMethod, Hotkey, HotkeyId, IncomingRequest, Key, LatestRelease, Modifiers,
-    Notification, NotificationClick, Platform, PlatformError, PlatformEvent, RegisterHotkeyError,
-    StandaloneWindow, TrayMenuItem, TrayMenuItemId,
+    Notification, NotificationClick, OverlayInput, Platform, PlatformError, PlatformEvent,
+    RegisterHotkeyError, StandaloneWindow, TrayMenuItem, TrayMenuItemId,
 };
 
+use crate::capture::CaptureFailure;
+use crate::region::{Ending, RegionCapture};
 use crate::{
-    BindingFailure, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow,
+    BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow,
     HotkeyBinding, HotkeyRegistrationFailure, Locale, PostCaptureAction, RegistrationError, Reply,
     Request, ResidentStatus, Texts, UpdateStatus, VERSION, action, capture, update,
 };
@@ -28,6 +30,10 @@ pub struct StartOptions {
 ///
 /// 宿主（`app` 里的平台事件循环）用 [`start_with`](Self::start_with) 创建它，把
 /// [`PlatformEvent`] 交给 [`handle`](Self::handle)，在返回 [`Flow::Exit`] 时退出循环。
+///
+/// 需要用户在选区遮罩上操作的捕获（区域）不会在一次调用里完成：命令打开遮罩后就返回，
+/// 之后的 [`PlatformEvent::OverlayInput`] 推进这次捕获，直到用户确定或取消。
+/// 捕获进行期间，新的捕获命令会被拒绝（[`CoreError::CaptureInProgress`]）。
 pub struct ResidentInstance {
     platform: Platform,
     config: Config,
@@ -44,6 +50,16 @@ pub struct ResidentInstance {
     update: UpdateStatus,
     /// 本次运行中已经提示过的新版本，同一个版本只提示一次。
     announced_version: Option<String>,
+    /// 进行中的区域捕获。
+    region_capture: Option<RegionCapture>,
+}
+
+/// 命令执行到哪一步了。
+enum Progress {
+    /// 命令已执行完。
+    Done(Flow),
+    /// 已开始一次需要用户操作的捕获，结束时才有结果。
+    Pending,
 }
 
 impl ResidentInstance {
@@ -64,6 +80,7 @@ impl ResidentInstance {
             restarting_as_administrator: false,
             update: UpdateStatus::Disabled,
             announced_version: None,
+            region_capture: None,
         }
     }
 
@@ -272,7 +289,7 @@ impl ResidentInstance {
         self.failures.sort_by_key(|f| f.index);
     }
 
-    /// 把平台事件转换成命令；与任何绑定都无关的事件、无法识别的请求返回 `None`。
+    /// 把平台事件转换成命令；与任何绑定都无关的事件、无法识别的请求、遮罩上的输入返回 `None`。
     pub fn command_for(&self, event: &PlatformEvent) -> Option<Command> {
         match event {
             PlatformEvent::HotkeyPressed(id) => self
@@ -288,7 +305,8 @@ impl ResidentInstance {
             PlatformEvent::TrayMenuItemSelected(_) => None,
             PlatformEvent::ConfigFileChanged
             | PlatformEvent::PrintScreenKeySettingChanged
-            | PlatformEvent::LatestReleaseFetched(_) => None,
+            | PlatformEvent::LatestReleaseFetched(_)
+            | PlatformEvent::OverlayInput(_) => None,
             PlatformEvent::RequestReceived(request) => {
                 Request::decode(request.message()).and_then(|r| self.command_for_request(&r))
             }
@@ -296,8 +314,9 @@ impl ResidentInstance {
     }
 
     /// 处理一个平台事件：配置文件变更时重新加载配置；PrtSc 键的系统设置变化时重试被系统
-    /// 截图工具挡住的热键绑定；请求事件执行后把结果回复给发起方；检查更新有结果时按需提示；
-    /// 其余事件转换成命令后执行，失败时发通知。
+    /// 截图工具挡住的热键绑定；遮罩上的输入交给进行中的区域捕获；请求事件执行后把结果回复给
+    /// 发起方（需要用户操作的捕获等捕获结束再回复）；检查更新有结果时按需提示；其余事件转换成
+    /// 命令后执行，失败时发通知。
     pub fn handle(&mut self, event: PlatformEvent) -> Result<Flow, CoreError> {
         match event {
             PlatformEvent::ConfigFileChanged => return Ok(self.reload_config()),
@@ -306,6 +325,7 @@ impl ResidentInstance {
                 return Ok(Flow::Continue);
             }
             PlatformEvent::RequestReceived(request) => return self.serve(request),
+            PlatformEvent::OverlayInput(input) => return self.on_overlay_input(&input),
             PlatformEvent::LatestReleaseFetched(result) => {
                 self.latest_release_fetched(result);
                 return Ok(Flow::Continue);
@@ -322,48 +342,61 @@ impl ResidentInstance {
         };
         // 热键触发的捕获没有别的反馈渠道，失败时用通知告诉用户（截后动作已经通知过的除外）。
         match self.capture(&request) {
-            Ok(()) => Ok(Flow::Continue),
-            Err(CaptureFailure { error, notified }) => {
-                if !notified {
-                    let texts = self.texts();
-                    let title = match error {
-                        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-                            "notification-unsupported-title"
-                        }
-                        _ => "notification-capture-failed-title",
-                    };
-                    self.platform.notifier.notify(Notification {
-                        title: texts.get(title),
-                        body: error.localized(texts),
-                        on_click: None,
-                    });
-                }
-                Err(error)
+            Ok(_) => Ok(Flow::Continue),
+            Err(failure) => {
+                self.notify_capture_failure(&failure);
+                Err(failure.error)
             }
         }
     }
 
-    /// 执行转交来的请求，并把结果回复给发起方。状态查询只读取、不执行命令。
+    /// 热键触发的捕获失败时通知用户；截后动作已经就这次失败通知过的不再重复。
+    fn notify_capture_failure(&self, failure: &CaptureFailure) {
+        if failure.notified {
+            return;
+        }
+        let texts = self.texts();
+        let title = match failure.error {
+            CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+                "notification-unsupported-title"
+            }
+            _ => "notification-capture-failed-title",
+        };
+        self.platform.notifier.notify(Notification {
+            title: texts.get(title),
+            body: failure.error.localized(texts),
+            on_click: None,
+        });
+    }
+
+    /// 执行转交来的请求，并把结果回复给发起方；需要用户操作的捕获等捕获结束再回复。
+    /// 状态查询只读取、不执行命令。
     fn serve(&mut self, incoming: IncomingRequest) -> Result<Flow, CoreError> {
         let request = Request::decode(incoming.message());
         let result = match request.as_ref().map(|r| (r, self.command_for_request(r))) {
-            Some((_, Some(command))) => self.execute(command),
+            Some((_, Some(command))) => self.run(command),
             Some((Request::Status, None)) => {
                 incoming.reply(Reply::Status(self.status()).encode());
                 return Ok(Flow::Continue);
             }
             Some((_, None)) | None => Err(CoreError::InvalidRequest(incoming.message().to_owned())),
         };
-        let texts = self.texts();
-        let reply = match &result {
-            Ok(_) => Reply::Done,
-            Err(e @ (CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_))) => {
-                Reply::Unsupported(e.localized(texts))
+        match result {
+            Ok(Progress::Done(flow)) => {
+                incoming.reply(Reply::Done.encode());
+                Ok(flow)
             }
-            Err(e) => Reply::Failed(e.localized(texts)),
-        };
-        incoming.reply(reply.encode());
-        result
+            Ok(Progress::Pending) => {
+                if let Some(capture) = self.region_capture.as_mut() {
+                    capture.requester = Some(incoming);
+                }
+                Ok(Flow::Continue)
+            }
+            Err(e) => {
+                incoming.reply(reply_for_error(&e, self.texts()).encode());
+                Err(e)
+            }
+        }
     }
 
     /// 请求对应的命令；只读的状态查询没有命令。`capture <捕获模式>` 与按下该捕获模式的热键
@@ -387,37 +420,93 @@ impl ResidentInstance {
     }
 
     /// 执行一次捕获：先确认捕获模式和截后动作都已实现，再捕获、执行截后动作。
-    fn capture(&mut self, request: &CaptureRequest) -> Result<(), CaptureFailure> {
-        let not_notified = |error| CaptureFailure {
-            error,
-            notified: false,
-        };
-        ensure_implemented(request).map_err(not_notified)?;
-        let screenshot = capture::capture(&self.platform, request.mode).map_err(not_notified)?;
+    ///
+    /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::Pending`]），之后由遮罩上的输入推进。
+    fn capture(&mut self, request: &CaptureRequest) -> Result<Progress, CaptureFailure> {
+        if self.region_capture.is_some() {
+            // 遮罩正显示着，用户看得到这次捕获还没结束，热键触发时不再通知。
+            return Err(CaptureFailure {
+                error: CoreError::CaptureInProgress,
+                notified: true,
+            });
+        }
+        ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
         let texts = self.texts();
-        action::run(&mut self.platform, &screenshot, request, texts).map_err(|error| {
-            CaptureFailure {
-                error,
-                // 做了自动存储时，截后动作已经就结果发过通知（“截图已保存”或“自动存储失败”）。
-                notified: request.actions.contains(&PostCaptureAction::AutoSave),
-            }
-        })
+        if request.mode == CaptureMode::Region {
+            let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
+                .map_err(CaptureFailure::before_actions)?;
+            self.region_capture = Some(capture);
+            return Ok(Progress::Pending);
+        }
+        let screenshot = capture::capture(&self.platform, request.mode)
+            .map_err(CaptureFailure::before_actions)?;
+        action::run(&mut self.platform, &screenshot, request, texts)
+            .map_err(|error| CaptureFailure::in_actions(error, request))?;
+        Ok(Progress::Done(Flow::Continue))
     }
 
     /// 执行一条命令。
+    ///
+    /// 区域捕获在显示出选区遮罩后就返回 `Ok(Flow::Continue)`，之后由遮罩上的输入事件推进。
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
+        match self.run(command)? {
+            Progress::Done(flow) => Ok(flow),
+            Progress::Pending => Ok(Flow::Continue),
+        }
+    }
+
+    fn run(&mut self, command: Command) -> Result<Progress, CoreError> {
         match command {
-            Command::Capture(request) => {
-                self.capture(&request).map_err(|failure| failure.error)?;
-                Ok(Flow::Continue)
-            }
+            Command::Capture(request) => self.capture(&request).map_err(|failure| failure.error),
             Command::Activate | Command::OpenSettings => {
                 self.open_settings()?;
-                Ok(Flow::Continue)
+                Ok(Progress::Done(Flow::Continue))
             }
             Command::Exit => {
+                self.abandon_region_capture();
                 self.unregister_hotkeys();
-                Ok(Flow::Exit)
+                Ok(Progress::Done(Flow::Exit))
+            }
+        }
+    }
+
+    /// 把遮罩上的输入交给进行中的区域捕获。捕获结束时回复等待中的请求；
+    /// 热键触发的捕获失败时通知用户。
+    fn on_overlay_input(&mut self, input: &OverlayInput) -> Result<Flow, CoreError> {
+        let Some(capture) = self.region_capture.as_mut() else {
+            return Ok(Flow::Continue);
+        };
+        let Some(ending) = capture.handle(&mut self.platform, input) else {
+            return Ok(Flow::Continue);
+        };
+        let requester = self
+            .region_capture
+            .take()
+            .and_then(|capture| capture.requester);
+        match (requester, ending) {
+            (Some(requester), ending) => {
+                let reply = match &ending {
+                    Ok(Ending::Captured) => Reply::Done,
+                    Ok(Ending::Cancelled) => Reply::Cancelled,
+                    Err(failure) => reply_for_error(&failure.error, self.texts()),
+                };
+                requester.reply(reply.encode());
+                ending.map(|_| Flow::Continue).map_err(|f| f.error)
+            }
+            (None, Ok(_)) => Ok(Flow::Continue),
+            (None, Err(failure)) => {
+                self.notify_capture_failure(&failure);
+                Err(failure.error)
+            }
+        }
+    }
+
+    /// 放弃进行中的区域捕获：关闭遮罩，等待中的请求收到“已取消”。
+    fn abandon_region_capture(&mut self) {
+        if let Some(capture) = self.region_capture.take() {
+            self.platform.overlay.close();
+            if let Some(requester) = capture.requester {
+                requester.reply(Reply::Cancelled.encode());
             }
         }
     }
@@ -718,6 +807,16 @@ impl ResidentInstance {
     }
 }
 
+/// 命令执行失败时给请求发起方的回复，说明文字用 `texts` 的语言。
+fn reply_for_error(error: &CoreError, texts: &Texts) -> Reply {
+    match error {
+        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
+            Reply::Unsupported(error.localized(texts))
+        }
+        _ => Reply::Failed(error.localized(texts)),
+    }
+}
+
 /// 尚未实现的捕获模式或截后动作在捕获开始之前就拒绝整个请求，不产生任何产物。
 fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
     if !capture::is_implemented(request.mode) {
@@ -739,10 +838,4 @@ const PRINT_SCREEN: Hotkey = Hotkey::new(Modifiers::NONE, Key::PrintScreen);
 /// 第 `index` 条绑定使用的热键标识。
 fn hotkey_id(index: usize) -> HotkeyId {
     HotkeyId(index as u32 + 1)
-}
-
-/// 一次捕获失败的原因，以及截后动作是否已经就这次失败通知过用户。
-struct CaptureFailure {
-    error: CoreError,
-    notified: bool,
 }

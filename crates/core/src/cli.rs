@@ -18,6 +18,8 @@ pub enum CliStatus {
     Unsupported,
     /// 无法连接或拉起常驻实例。
     Unreachable,
+    /// 用户取消了这次捕获（例如在选区遮罩上按了 Esc），没有任何产物。
+    Cancelled,
 }
 
 impl CliStatus {
@@ -28,6 +30,7 @@ impl CliStatus {
             CliStatus::Usage => 2,
             CliStatus::Unsupported => 3,
             CliStatus::Unreachable => 4,
+            CliStatus::Cancelled => 5,
         }
     }
 }
@@ -81,6 +84,7 @@ where
     };
     match forward(&request, channel, WhenNotRunning::Launch) {
         Ok(Reply::Done | Reply::Status(_)) => CliOutcome::new(CliStatus::Success),
+        Ok(Reply::Cancelled) => CliOutcome::with_stderr(CliStatus::Cancelled, "已取消\n"),
         Ok(Reply::Unsupported(message)) => {
             CliOutcome::with_stderr(CliStatus::Unsupported, format!("{message}\n"))
         }
@@ -135,7 +139,8 @@ fn usage() -> String {
          \x20 1  常驻实例执行命令失败\n\
          \x20 2  参数有误\n\
          \x20 3  常驻实例暂不支持该捕获模式\n\
-         \x20 4  无法连接或启动常驻实例\n",
+         \x20 4  无法连接或启动常驻实例\n\
+         \x20 5  用户取消了这次捕获（例如在选区遮罩上按了 Esc）\n",
     );
     text
 }

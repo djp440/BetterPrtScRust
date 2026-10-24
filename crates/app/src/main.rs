@@ -91,7 +91,7 @@ mod resident {
         Flow, Reply, Request, ResidentInstance, StartOptions, WhenNotRunning, forward,
         remove_autostart,
     };
-    use bps_platform::{Autostart, AutostartMethod, PlatformError};
+    use bps_platform::{Autostart, AutostartMethod, PlatformError, PlatformEvent};
     use bps_platform_windows::{
         EventLoop, PipeChannel, PipeClaim, ResidentPipe, WindowsAutostart,
         allow_any_process_to_set_foreground, dpi, is_elevated, resident_pipe_name,
@@ -171,9 +171,13 @@ mod resident {
         event_loop.run(|event| {
             let started = Instant::now();
             let description = format!("{event:?}");
+            // 遮罩上的鼠标移动等输入很密集，只在出错时输出。
+            let quiet = matches!(event, PlatformEvent::OverlayInput(_));
             match instance.handle(event) {
                 Ok(Flow::Continue) => {
-                    eprintln!("已处理 {description}，耗时 {:?}", started.elapsed());
+                    if !quiet {
+                        eprintln!("已处理 {description}，耗时 {:?}", started.elapsed());
+                    }
                     ControlFlow::Continue(())
                 }
                 Ok(Flow::Exit) => ControlFlow::Break(()),
@@ -245,6 +249,7 @@ mod resident {
             Reply::Unsupported(message) | Reply::Failed(message) => {
                 Err(format!("激活常驻实例失败：{message}").into())
             }
+            Reply::Cancelled => Err("激活常驻实例失败：请求被取消".into()),
         }
     }
 }

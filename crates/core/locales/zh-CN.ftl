@@ -64,6 +64,7 @@ error-too-many-same-name-files = 同名文件过多，找不到可用的文件�
 error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
 error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
+error-capture-in-progress = 上一次捕获还没有结束
 
 ## 热键注册失败的原因
 
@@ -155,3 +156,6 @@ settings-unsaved-body = 关闭前要保存这些修改吗？
 settings-save-and-close = 保存并关闭
 settings-discard-and-close = 不保存
 settings-cancel = 取消
+
+## 选区遮罩
+overlay-selected-hint = Enter 或双击选区：完成　Esc：取消

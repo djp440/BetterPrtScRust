@@ -30,7 +30,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }),
         pick_folder: Arc::new(|title: &str, initial: Option<&Path>| pick_folder(title, initial)),
-        clock: Box::new(WindowsClock),
+        clock: Box::new(WindowsClock::new()),
         program_writable_by_standard_users: program_writable_by_standard_users(&exe),
     };
     run_settings_window(environment)?;

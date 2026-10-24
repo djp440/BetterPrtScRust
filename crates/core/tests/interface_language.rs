@@ -1,8 +1,12 @@
-//! 界面语言：默认跟随系统，可在配置里指定；切换后常驻实例里的文本（托盘菜单、通知）随之更新。
+//! 界面语言：默认跟随系统，可在配置里指定；切换后常驻实例里的文本（托盘菜单、通知、选区遮罩上的提示）
+//! 随之更新。
 
-use bps_core::{Language, Locale, ResidentInstance, Texts};
-use bps_platform::{Hotkey, Key, Modifiers};
-use bps_platform_fake::FakePlatform;
+use bps_core::{
+    CaptureMode, CaptureRequest, Command, Language, Locale, PostCaptureAction, ResidentInstance,
+    Texts,
+};
+use bps_platform::{Hotkey, Key, Modifiers, Point, Rect};
+use bps_platform_fake::{FakeDisplay, FakePlatform};
 
 const ONE_BINDING: &str = r#"
 [[bindings]]
@@ -159,6 +163,39 @@ fn print_screen_and_administrator_notices_follow_the_interface_language() {
         [
             "Could not run as administrator",
             "The PrtSc key is taken by the Windows screenshot tool",
+        ]
+    );
+}
+
+#[test]
+fn selection_overlay_hint_follows_the_interface_language() {
+    let fake = FakePlatform::new()
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 200, 150)).primary())
+        .with_system_languages(&["zh-CN"])
+        .with_config_file(&with_language("en"));
+    let mut instance = ResidentInstance::start(fake.platform());
+
+    instance
+        .execute(Command::Capture(CaptureRequest::new(
+            CaptureMode::Region,
+            vec![PostCaptureAction::CopyToClipboard],
+        )))
+        .unwrap();
+    for event in fake.drag(Point::new(20, 40), Point::new(119, 89)) {
+        instance.handle(event).unwrap();
+    }
+
+    let labels: Vec<String> = fake
+        .overlay_scene()
+        .unwrap()
+        .labels()
+        .map(|label| label.text.clone())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "100 × 50",
+            "Enter or double-click the selection: done   Esc: cancel"
         ]
     );
 }

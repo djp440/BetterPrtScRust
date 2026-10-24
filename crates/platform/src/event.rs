@@ -1,4 +1,6 @@
-use crate::{HotkeyId, IncomingRequest, LatestRelease, PlatformError, TrayMenuItemId};
+use crate::{
+    HotkeyId, IncomingRequest, LatestRelease, OverlayInput, PlatformError, TrayMenuItemId,
+};
 
 /// 平台事件循环递交给常驻实例的触发事件。
 ///
@@ -18,6 +20,8 @@ pub enum PlatformEvent {
     /// 其他进程（`bps` CLI、再次启动的程序、设置界面）经 [`crate::ResidentChannel`]
     /// 转交来一条请求。
     RequestReceived(IncomingRequest),
+    /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
+    OverlayInput(OverlayInput),
     /// 用户选中了托盘菜单（[`crate::TrayMenu`]）里的一项。
     TrayMenuItemSelected(TrayMenuItemId),
     /// [`crate::UpdateService::request_latest_release`] 的查询结果；

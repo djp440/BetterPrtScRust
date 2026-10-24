@@ -22,6 +22,8 @@ pub enum CoreError {
     UnsupportedAction(PostCaptureAction),
     /// 转交来的请求无法识别（例如 `bps` 与常驻实例的版本不一致），附带原始请求文本。
     InvalidRequest(String),
+    /// 上一次捕获还没有结束（例如选区遮罩还开着），这次捕获被拒绝。
+    CaptureInProgress,
 }
 
 impl CoreError {
@@ -46,6 +48,7 @@ impl CoreError {
             CoreError::InvalidRequest(message) => {
                 texts.format("error-invalid-request", &[("request", message)])
             }
+            CoreError::CaptureInProgress => texts.get("error-capture-in-progress"),
         }
     }
 }
