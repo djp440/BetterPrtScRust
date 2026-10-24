@@ -8,10 +8,17 @@
 //! - 选区确定后按 Enter 或双击选区内部，完成框选。
 //! - Esc 随时取消整次捕获；右键在有选区（或正在拖拽）时清除选区，没有选区时取消捕获。
 //! - 选区包含拖拽起点和终点两个像素；按下后没有移动就松开不算框选。
+//! - 选区框好后边框上有手柄：在边框附近按下拖动改变大小（靠近角时同时改两条边，拖过对边时
+//!   翻转），在选区内按下拖动移动选区；方向键逐像素微调（见 `adjust::nudged`）。都限制在
+//!   虚拟桌面内。
+//! - 还没有选区、拖拽框选、拖动手柄时显示放大镜（[`RegionSelection::magnifier_focus`]），
+//!   这时按 C 复制放大镜对准的像素的颜色值（[`Step::CopyColor`]）。
+//! - 选区锁定（[`RegionSelection::lock`]，开始标注）后不再显示手柄和放大镜。
 //! - 拖拽时选区的边吸附到附近窗口、控件的边缘，按住 Ctrl 临时不吸附（见 [`crate::snap`]）。
 //!
-//! 扩展点（后续 ticket）：在 [`State`] 里加状态或字段（如调整手柄、移动选区），在
-//! [`RegionSelection::handle`] 里处理新输入，在 [`RegionSelection::scene`] 里按层追加绘制元素。
+//! 扩展点（后续 ticket）：在 [`State`] 里加状态或字段，在 [`RegionSelection::handle`] 里处理
+//! 新输入，在 [`RegionSelection::scene`] 里按层追加绘制元素。调整选区的几何计算在 `adjust`
+//! 子模块；吸附（#11）可以在拖拽框选和 `adjust::dragged` 算出新边的那一步加入。
 
 use bps_platform::{
     Color, Corner, Display, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
@@ -20,6 +27,10 @@ use bps_platform::{
 
 use crate::snap::{DragEnd, SNAP_DISTANCE, Snapping};
 use crate::stitch::virtual_desktop_bounds;
+
+mod adjust;
+
+use adjust::Grip;
 
 /// 选区外的半透明遮挡。
 pub(crate) const MASK: Color = Color::rgba(0, 0, 0, 115);
@@ -33,6 +44,8 @@ pub(crate) const LABEL_PADDING: f64 = 4.0;
 pub(crate) const LABEL_GAP: f64 = 4.0;
 /// 估算标签高度用的行高系数；只用于判断标签放在选区外还是选区内，实际尺寸由平台按字体决定。
 const LINE_HEIGHT: f32 = 1.4;
+/// 离边框多近（100% 缩放下的物理像素）按下就抓住这条边调整大小。
+const GRIP_REACH: f64 = 6.0;
 
 /// 框选的下一步。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +56,8 @@ pub(crate) enum Step {
     Confirmed(Rect),
     /// 用户取消了这次捕获。
     Cancelled,
+    /// 用户要复制放大镜对准的这个像素的颜色值，框选继续。
+    CopyColor(Point),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +72,14 @@ enum State {
     },
     /// 已框出选区，等待确定或重新框选。
     Selected(Rect),
+    /// 按住左键拖动手柄或选区调整已框好的选区。`original` 是按下时的选区，指针从 `from`
+    /// 拖到了 `to`。
+    Adjusting {
+        original: Rect,
+        grip: Grip,
+        from: Point,
+        to: Point,
+    },
 }
 
 /// 一次区域框选的交互状态。
@@ -67,6 +90,10 @@ pub(crate) struct RegionSelection {
     state: State,
     /// 选区确定后的操作提示（已按界面语言翻译）；标注时由工具条代替，为 `None`。
     selected_hint: Option<String>,
+    /// 指针最近的位置（限制在虚拟桌面内）；指针还没在遮罩上动过时为 `None`。
+    pointer: Option<Point>,
+    /// 选区已锁定（开始标注），不再显示手柄和放大镜。
+    locked: bool,
     /// 拖拽框选时选区的边吸附到窗口、控件的边缘；默认没有目标，不吸附。
     snapping: Snapping,
 }
@@ -80,8 +107,16 @@ impl RegionSelection {
             bounds,
             state: State::Idle,
             selected_hint: Some(selected_hint),
+            pointer: None,
+            locked: false,
             snapping: Snapping::default(),
         })
+    }
+
+    /// 选区已锁定（例如开始标注）：此后不再显示手柄和放大镜。锁定后选区由别处接管输入，
+    /// 这里不再收到输入。
+    pub fn lock(&mut self) {
+        self.locked = true;
     }
 
     /// 拖拽框选时，选区的边按 `snapping` 吸附。
@@ -119,6 +154,21 @@ impl RegionSelection {
     pub fn handle(&mut self, input: &OverlayInput) -> Step {
         use OverlayInput::*;
         self.snapping.observe(input);
+        if let PointerMoved { position, .. }
+        | PointerPressed { position, .. }
+        | PointerReleased { position, .. } = *input
+        {
+            self.pointer = Some(self.clamp(position));
+        }
+        if let KeyPressed {
+            key: OverlayKey::C,
+            modifiers,
+        } = *input
+            && !(modifiers.ctrl || modifiers.alt || modifiers.win)
+            && let Some(focus) = self.magnifier_focus()
+        {
+            return Step::CopyColor(focus);
+        }
         match (self.state, *input) {
             (_, Interrupted)
             | (
@@ -144,7 +194,7 @@ impl RegionSelection {
                     ..
                 },
             ) if region.contains(position) => return Step::Confirmed(region),
-            // 选区内单击留给以后（例如移动选区），现在什么也不做。
+            // 在边框（手柄）附近按下调整大小，在选区内按下移动选区。
             (
                 State::Selected(region),
                 PointerPressed {
@@ -152,7 +202,54 @@ impl RegionSelection {
                     position,
                     ..
                 },
-            ) if region.contains(position) => {}
+            ) if self.grip_at(region, position).is_some() => {
+                let grip = self.grip_at(region, position).expect("刚检查过");
+                let from = self.clamp(position);
+                self.state = State::Adjusting {
+                    original: region,
+                    grip,
+                    from,
+                    to: from,
+                };
+            }
+            (
+                State::Adjusting {
+                    original,
+                    grip,
+                    from,
+                    ..
+                },
+                PointerMoved { position, .. },
+            ) => {
+                self.state = State::Adjusting {
+                    original,
+                    grip,
+                    from,
+                    to: self.clamp(position),
+                };
+            }
+            (
+                State::Adjusting {
+                    original,
+                    grip,
+                    from,
+                    ..
+                },
+                PointerReleased {
+                    button: PointerButton::Left,
+                    position,
+                    ..
+                },
+            ) => {
+                let to = self.clamp(position);
+                self.state =
+                    State::Selected(adjust::dragged(original, grip, from, to, self.bounds));
+            }
+            (State::Selected(region), KeyPressed { key, modifiers }) => {
+                if let Some(nudged) = adjust::nudged(region, key, modifiers, self.bounds) {
+                    self.state = State::Selected(nudged);
+                }
+            }
             (
                 State::Idle | State::Selected(_),
                 PointerPressed {
@@ -205,7 +302,7 @@ impl RegionSelection {
                 },
             ) => return Step::Cancelled,
             (
-                State::Dragging { .. } | State::Selected(_),
+                State::Dragging { .. } | State::Selected(_) | State::Adjusting { .. },
                 PointerReleased {
                     button: PointerButton::Right,
                     ..
@@ -216,7 +313,7 @@ impl RegionSelection {
         Step::Continue
     }
 
-    /// 当前的选区（拖拽中则是正在拖出的区域）。
+    /// 当前的选区（拖拽、调整中则是正在拖出的区域）。
     pub fn region(&self) -> Option<Rect> {
         match self.state {
             State::Idle => None,
@@ -224,7 +321,50 @@ impl RegionSelection {
                 anchor, current, ..
             } => Some(self.dragged(anchor, current)),
             State::Selected(region) => Some(region),
+            State::Adjusting {
+                original,
+                grip,
+                from,
+                to,
+            } => Some(adjust::dragged(original, grip, from, to, self.bounds)),
         }
+    }
+
+    /// 放大镜对准的像素；不显示放大镜时为 `None`。还没有选区时对准指针，拖拽框选时对准
+    /// 拖动的角，拖动手柄时对准被拖动的边；选区框好后、移动选区时和锁定后不显示。
+    pub fn magnifier_focus(&self) -> Option<Point> {
+        if self.locked {
+            return None;
+        }
+        match self.state {
+            State::Idle => self.pointer,
+            State::Dragging { current, .. } => Some(current),
+            State::Selected(_) => None,
+            State::Adjusting {
+                original,
+                grip,
+                from,
+                to,
+            } => adjust::dragged_pixel(original, grip, from, to, self.bounds),
+        }
+    }
+
+    /// `point` 处能抓住选区的哪个部位；抓取范围按指针所在显示器的缩放比例放大。
+    fn grip_at(&self, region: Rect, point: Point) -> Option<Grip> {
+        let reach = (GRIP_REACH * self.scale_at(point)).round() as i32;
+        adjust::grip_at(region, point, reach)
+    }
+
+    /// 指针形状：在手柄上、拖动手柄时是调整大小的箭头，在选区内、移动选区时是移动箭头，
+    /// 其余是十字。
+    fn cursor(&self) -> OverlayCursor {
+        let grip = match self.state {
+            _ if self.locked => None,
+            State::Adjusting { grip, .. } => Some(grip),
+            State::Selected(region) => self.pointer.and_then(|p| self.grip_at(region, p)),
+            State::Idle | State::Dragging { .. } => None,
+        };
+        grip.map_or(OverlayCursor::Crosshair, Grip::cursor)
     }
 
     /// 当前状态下遮罩上要画的内容，从下往上：遮挡、选区边框、标签。
@@ -244,6 +384,11 @@ impl RegionSelection {
                     width: border,
                     color: ACCENT,
                 });
+                if !self.locked
+                    && matches!(self.state, State::Selected(_) | State::Adjusting { .. })
+                {
+                    items.extend(adjust::handles(region, border, scale));
+                }
                 let size = format!("{} × {}", region.width, region.height);
                 items.push(OverlayItem::Label(self.label_beside(
                     region,
@@ -265,7 +410,7 @@ impl RegionSelection {
         }
         OverlayScene {
             items,
-            cursor: OverlayCursor::Crosshair,
+            cursor: self.cursor(),
         }
     }
 

@@ -41,6 +41,14 @@ impl ClipboardContent {
         })
     }
 
+    /// 剪贴板里的纯文本；没有文本格式时返回 `None`。
+    pub fn text(&self) -> Option<&str> {
+        self.items.iter().find_map(|item| match item {
+            ClipboardItem::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+    }
+
     /// 剪贴板里附带的文件；没有文件格式时返回 `None`。
     pub fn files(&self) -> Option<Vec<PathBuf>> {
         self.items.iter().find_map(|item| match item {

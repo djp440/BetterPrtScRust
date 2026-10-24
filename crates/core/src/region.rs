@@ -6,6 +6,10 @@
 //!
 //! 截后动作包含标注时，输入先交给标注（`annotation::session::Annotator`：工具条、画标注、
 //! 选择结束方式），标注不处理的再交给选区状态机；捕获以用户选择的结束方式结束。
+//! 选好工具开始标注之前，标注把手柄、方向键等输入都交给选区状态机，选区仍可调整，工具条随
+//! 调整后的选区重新定位；开始标注后区域锁定，选区状态机不再收到输入、不再画手柄和放大镜。
+//!
+//! 放大镜（`magnifier`）画在最上层；何时显示、对准哪个像素由选区状态机决定。
 
 use std::path::PathBuf;
 
@@ -17,6 +21,7 @@ use bps_platform::{
 use crate::annotation::finish;
 use crate::annotation::session::{Annotator, Finish, Response};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
+use crate::magnifier::Magnifier;
 use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::{DesktopImage, stitch, virtual_desktop_bounds};
@@ -41,6 +46,8 @@ pub(crate) struct RegionCapture {
     selection: RegionSelection,
     /// 截后动作包含标注时的标注界面；否则为 `None`。
     annotator: Option<Annotator>,
+    /// 框选时光标旁的放大镜。
+    magnifier: Magnifier,
     /// 遮罩上当前画着的场景；场景没变时不重画。
     drawn: Option<OverlayScene>,
     /// 开始捕获时的界面语言：遮罩上的提示和截后动作的通知都用它。
@@ -98,6 +105,7 @@ impl RegionCapture {
         let mut capture = Self {
             request,
             captured_at,
+            magnifier: Magnifier::new(displays.clone(), texts),
             displays,
             selection,
             annotator,
@@ -150,6 +158,13 @@ impl RegionCapture {
                 platform.overlay.close();
                 Some(Ok(Ending::Cancelled))
             }
+            Step::CopyColor(focus) => match self.magnifier.copy_color(platform, focus) {
+                Ok(()) => self.keep_going(platform),
+                Err(e) => {
+                    platform.overlay.close();
+                    Some(Err(CaptureFailure::before_actions(e)))
+                }
+            },
         }
     }
 
@@ -229,15 +244,26 @@ impl RegionCapture {
             window_title: None,
         };
         action::run(platform, &screenshot, &self.request, self.texts)
-            .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {
+        // 开始标注后区域锁定，选区不能再调整：不再画手柄和放大镜。
+        if self
+            .annotator
+            .as_ref()
+            .is_some_and(|a| a.locked_region().is_some())
+        {
+            self.selection.lock();
+        }
         let mut scene = self.selection.scene();
         let mut canvas_changed = false;
         if let Some(annotator) = self.annotator.as_mut() {
             canvas_changed = annotator.sync_canvas(platform.overlay.as_mut())?;
             annotator.decorate(&mut scene, self.selection.selected());
+        }
+        if let Some(focus) = self.selection.magnifier_focus() {
+            let magnifier = self.magnifier.items(platform.overlay.as_ref(), focus)?;
+            scene.items.extend(magnifier);
         }
         if canvas_changed || self.drawn.as_ref() != Some(&scene) {
             platform.overlay.render(&scene)?;

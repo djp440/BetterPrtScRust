@@ -2,12 +2,14 @@
 //!
 //! 只在按需启动的界面子进程（`BetterPrtSc.exe --settings` 等）里运行，用户关掉窗口进程就退出；
 //! 常驻实例自己不初始化任何界面库（ADR 0005）。每种窗口一个入口函数，例如
-//! [`run_settings_window`]，运行到用户关闭窗口为止。
+//! [`run_settings_window`]、[`run_result_panel`]，运行到用户关闭窗口为止。
 //!
 //! 平台相关的能力（字体、图标、打开文件、查询常驻实例……）由调用方注入：所有窗口共用的放在
 //! [`UiEnvironment`]，某个窗口特有的放在它自己的环境里（如 [`SettingsEnvironment`]）。
 //! 界面子进程需要常驻实例的数据时，经命名管道发请求查询（`bps_core::Request`）。
 
+mod clipboard;
+mod result_panel;
 mod settings_window;
 mod store;
 
@@ -17,6 +19,8 @@ use std::sync::Arc;
 use bps_core::{Language, Texts};
 use eframe::egui;
 
+pub use clipboard::{ReadClipboardText, SystemClipboard, WriteClipboardText};
+pub use result_panel::{ResultPanelEnvironment, run_result_panel};
 pub use settings_window::{PickFolder, SettingsEnvironment, run_settings_window};
 
 /// 界面用的一个字体文件（或字体集里的一个字体）。
@@ -49,6 +53,8 @@ pub struct UiEnvironment {
     /// 系统偏好的界面语言（如 `zh-CN`），界面语言设为“跟随系统”时据此选择。
     pub system_languages: Vec<String>,
     pub open: OpenWithDefaultProgram,
+    /// 系统剪贴板：文本框里的复制、剪切、粘贴经它与其他程序互通。
+    pub clipboard: SystemClipboard,
 }
 
 impl UiEnvironment {
@@ -94,6 +100,7 @@ fn run_window<A: eframe::App + 'static>(
         ..Default::default()
     };
     let fonts = environment.fonts.clone();
+    let clipboard = environment.clipboard.clone();
     eframe::run_native(
         "BetterPrtSc",
         options,
@@ -110,7 +117,7 @@ fn run_window<A: eframe::App + 'static>(
                 style.spacing.item_spacing = egui::vec2(8.0, 6.0);
                 style.spacing.button_padding = egui::vec2(8.0, 3.0);
             });
-            Ok(Box::new(create(&cc.egui_ctx)))
+            Ok(Box::new(clipboard.bridge(create(&cc.egui_ctx))))
         }),
     )
     .map_err(|e| e.to_string())

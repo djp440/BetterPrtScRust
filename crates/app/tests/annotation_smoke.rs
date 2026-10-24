@@ -52,6 +52,9 @@ impl SelectionOverlay for RecordingOverlay {
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError> {
         self.inner.frozen_image(display)
     }
+    fn frozen_pixels(&self, display: DisplayId, area: Rect) -> Result<Image, PlatformError> {
+        self.inner.frozen_pixels(display, area)
+    }
     fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError> {
         self.inner.show_canvas(area, image)
     }

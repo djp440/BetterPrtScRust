@@ -98,8 +98,7 @@ pub(crate) fn run(
         }
         result
     });
-    let ran = action::run(platform, screenshot, &effective, texts)
-        .map_err(|error| CaptureFailure::in_actions(error, &effective));
+    let ran = action::run(platform, screenshot, &effective, texts);
     match saved_as {
         Some(Err(error)) => Err(CaptureFailure {
             error,

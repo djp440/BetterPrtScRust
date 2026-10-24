@@ -20,12 +20,17 @@ fn unimplemented_action_rejects_whole_capture_before_earlier_actions_run() {
 
     let result = instance.execute(Command::Capture(CaptureRequest::new(
         CaptureMode::Display,
-        vec![PostCaptureAction::CopyToClipboard, PostCaptureAction::Ocr],
+        vec![
+            PostCaptureAction::CopyToClipboard,
+            PostCaptureAction::LongScreenshot,
+        ],
     )));
 
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedAction(PostCaptureAction::Ocr))
+        Err(CoreError::UnsupportedAction(
+            PostCaptureAction::LongScreenshot
+        ))
     );
     assert!(fake.clipboard().is_empty(), "不应只执行了一半的截后动作");
 }
@@ -35,23 +40,25 @@ fn pressing_unimplemented_default_binding_notifies_unsupported_and_keeps_running
     let fake = desktop();
     let mut instance = ResidentInstance::start(fake.platform());
 
-    let ocr = fake
+    let long_screenshot = fake
         .press(Hotkey::new(
-            Modifiers::WIN.with(Modifiers::SHIFT),
-            Key::Letter('O'),
+            Modifiers::CTRL.with(Modifiers::SHIFT),
+            Key::PrintScreen,
         ))
-        .expect("默认绑定应注册 Win+Shift+O");
-    let result = instance.handle(ocr);
+        .expect("默认绑定应注册 Ctrl+Shift+PrtSc");
+    let result = instance.handle(long_screenshot);
 
-    // 默认的 Win+Shift+O 是“区域 + OCR”：OCR 还没实现，在打开选区遮罩之前就整体拒绝。
+    // 默认的 Ctrl+Shift+PrtSc 是“区域 + 长截屏”：长截屏还没实现，在打开选区遮罩之前就整体拒绝。
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedAction(PostCaptureAction::Ocr))
+        Err(CoreError::UnsupportedAction(
+            PostCaptureAction::LongScreenshot
+        ))
     );
     let notifications = fake.notifications();
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert_eq!(notifications[0].title, "暂不支持");
-    assert_eq!(notifications[0].body, "暂不支持“OCR”截后动作");
+    assert_eq!(notifications[0].body, "暂不支持“长截屏”截后动作");
     assert!(!fake.overlay_visible(), "不应打开选区遮罩");
     assert!(fake.clipboard().is_empty());
     assert_eq!(

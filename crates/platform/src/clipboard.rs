@@ -20,6 +20,8 @@ pub enum ClipboardItem {
     Dib(Vec<u8>),
     /// 磁盘上的文件（绝对路径），在文件管理器里可以直接粘贴成文件。
     Files(Vec<PathBuf>),
+    /// 纯文本（例如放大镜复制的颜色值），Windows 上是 `CF_UNICODETEXT`。
+    Text(String),
 }
 
 impl ClipboardItem {
@@ -32,6 +34,7 @@ impl ClipboardItem {
             ClipboardItem::Avif(_) => "AVIF",
             ClipboardItem::Dib(_) => "DIB",
             ClipboardItem::Files(_) => "Files",
+            ClipboardItem::Text(_) => "Text",
         }
     }
 }

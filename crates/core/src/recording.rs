@@ -252,7 +252,8 @@ impl Recording {
             .snapping_mut()
             .load_controls(input, platform.window_source.as_ref());
         match selection.handle(input) {
-            Step::Continue => self.redraw_or_fail(platform),
+            // 录屏的背景是实时画面，没有冻结帧可取色，也不显示放大镜：C 键不做事。
+            Step::Continue | Step::CopyColor(_) => self.redraw_or_fail(platform),
             Step::Confirmed(region) => {
                 platform.overlay.close();
                 self.begin_recording(platform, Target::Region(region))
