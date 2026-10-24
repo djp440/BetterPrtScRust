@@ -11,7 +11,9 @@
 //! - `--remove-autostart`：卸载前移除指向本程序的开机自启（安装包的卸载流程调用），
 //!   移除计划任务需要管理员权限时以管理员身份再运行一次（弹出 UAC 提示）；
 //! - `--settings`：本程序也是独立窗口界面的子进程，打开设置界面（见 [`settings`]），
-//!   用户关掉窗口即退出。由常驻实例按需启动；常驻实例本身不初始化任何界面库。
+//!   用户关掉窗口即退出。由常驻实例按需启动；常驻实例本身不初始化任何界面库；
+//! - `--result-panel`：打开结果面板，识别常驻实例经标准输入交来的截图里的文字（见
+//!   [`result_panel`]），用户关掉窗口即退出。
 
 // release 版不弹控制台窗口；debug 版保留控制台，便于查看输出。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -19,24 +21,24 @@
 #[cfg(windows)]
 mod icon;
 #[cfg(windows)]
+mod result_panel;
+#[cfg(windows)]
 mod settings;
 
 use std::process::ExitCode;
 
 #[cfg(windows)]
 fn main() -> ExitCode {
-    use bps_platform::StandaloneWindow;
-    use bps_platform_windows::window_argument;
+    use bps_platform_windows::{RESULT_PANEL_ARGUMENT, SETTINGS_ARGUMENT};
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == resident::REMOVE_AUTOSTART_ARG) {
         return resident::remove_autostart_before_uninstall();
     }
-    let result = if args
-        .first()
-        .is_some_and(|a| a == window_argument(StandaloneWindow::Settings))
-    {
+    let result = if args.first().is_some_and(|a| a == SETTINGS_ARGUMENT) {
         settings::run()
+    } else if args.first().is_some_and(|a| a == RESULT_PANEL_ARGUMENT) {
+        result_panel::run()
     } else {
         let restarted = args
             .iter()

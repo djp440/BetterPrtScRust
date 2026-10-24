@@ -1,10 +1,12 @@
-//! 截后动作：复制到剪贴板、自动存储。标注的结束方式也经由这里输出（见 `annotation::finish`）。
+//! 截后动作：复制到剪贴板、自动存储、OCR。标注的结束方式也经由这里输出（见 `annotation::finish`）。
 
 use std::path::PathBuf;
 
-use bps_platform::{ClipboardItem, NewFile, Notification, NotificationClick, Platform};
+use bps_platform::{
+    ClipboardItem, Image, NewFile, Notification, NotificationClick, Platform, StandaloneWindow,
+};
 
-use crate::capture::Screenshot;
+use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
 use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::{
@@ -23,15 +25,64 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
             | PostCaptureAction::AutoSave
             | PostCaptureAction::Record
             | PostCaptureAction::Annotate
+            | PostCaptureAction::Ocr
     )
 }
 
-/// 对截图执行截后动作（标注在此之前已由区域捕获处理，这里忽略它）。
+/// 对截图执行截后动作：先复制到剪贴板、自动存储，再打开结果面板做 OCR
+/// （标注在此之前已由区域捕获处理，这里忽略它）。
 ///
-/// 复制到剪贴板和自动存储共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
-/// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。
-/// 自动存储的结果（成功或失败）都会发通知，通知文字用 `texts` 的语言。
+/// 某个动作失败不影响其他动作，返回第一个失败。通知文字用 `texts` 的语言。
 pub(crate) fn run(
+    platform: &mut Platform,
+    screenshot: &Screenshot,
+    request: &CaptureRequest,
+    texts: &Texts,
+) -> Result<(), CaptureFailure> {
+    let mut failure = None;
+    if let Err(error) = copy_and_save(platform, screenshot, request, texts) {
+        // 做了自动存储时，自动存储已经就结果发过通知（“截图已保存”或“自动存储失败”）。
+        let notified = request.actions.contains(&PostCaptureAction::AutoSave);
+        failure = Some(CaptureFailure { error, notified });
+    }
+    if request.actions.contains(&PostCaptureAction::Ocr)
+        && let Err(error) = open_result_panel(platform, screenshot.image.clone(), texts)
+    {
+        failure.get_or_insert(CaptureFailure {
+            error,
+            notified: true,
+        });
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+/// OCR：把截图交给一个新的结果面板，由它在本机识别文字并显示；打不开时通知用户。
+///
+/// 识别在结果面板的子进程里进行，常驻实例不加载 OCR（常驻内存的硬约束）。
+fn open_result_panel(
+    platform: &mut Platform,
+    screenshot: Image,
+    texts: &Texts,
+) -> Result<(), CoreError> {
+    let opened = platform
+        .windows
+        .open(StandaloneWindow::ResultPanel { screenshot });
+    if let Err(e) = &opened {
+        platform.notifier.notify(Notification {
+            title: texts.get("notification-result-panel-unavailable-title"),
+            body: e.to_string(),
+            on_click: None,
+        });
+    }
+    Ok(opened?)
+}
+
+/// 复制到剪贴板与自动存储。
+///
+/// 两者共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
+/// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。
+/// 自动存储的结果（成功或失败）都会发通知。
+fn copy_and_save(
     platform: &mut Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,
