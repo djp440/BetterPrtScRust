@@ -25,7 +25,7 @@ pub struct WgcRegionSampler {
 }
 
 impl WgcRegionSampler {
-    pub(crate) fn new(ticker: WindowsTicker) -> Self {
+    pub fn new(ticker: WindowsTicker) -> Self {
         Self {
             ticker,
             source: WgcVideoSource::new(),
