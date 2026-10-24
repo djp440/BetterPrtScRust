@@ -28,18 +28,20 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::Graphics::Gdi::ValidateRect;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::Ime::{HIMC, ImmAssociateContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_CONTROL,
-    VK_ESCAPE, VK_LWIN, VK_MENU, VK_RETURN, VK_RWIN, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_C, VK_CONTROL,
+    VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
-    HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, LoadCursorW, RegisterClassExW, SW_HIDE,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDBLCLK,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WNDCLASSEXW,
-    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    HTCLIENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, LoadCursorW, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -116,6 +118,10 @@ impl OverlayWindow {
             )
             .map_err(|e| win_error("创建遮罩窗口失败", e))?;
             cloak(hwnd, true);
+            // 遮罩上的字母键是快捷键（如 C 复制颜色）：不关联输入法，否则中文输入法会把按键
+            // 拿去组字，遮罩收不到。需要输入文字时（标注的文字工具）再用
+            // `ImmAssociateContextEx(hwnd, HIMC::default(), IACE_DEFAULT)` 恢复。
+            ImmAssociateContext(hwnd, HIMC::default());
             let shared = Rc::new(Shared {
                 queue,
                 origin: Cell::new(Point::new(bounds.x, bounds.y)),
@@ -283,6 +289,11 @@ fn apply_cursor(cursor: OverlayCursor) {
     let id = match cursor {
         OverlayCursor::Crosshair => IDC_CROSS,
         OverlayCursor::Arrow => IDC_ARROW,
+        OverlayCursor::ResizeEw => IDC_SIZEWE,
+        OverlayCursor::ResizeNs => IDC_SIZENS,
+        OverlayCursor::ResizeNwse => IDC_SIZENWSE,
+        OverlayCursor::ResizeNesw => IDC_SIZENESW,
+        OverlayCursor::Move => IDC_SIZEALL,
     };
     unsafe {
         if let Ok(cursor) = LoadCursorW(None, id) {
@@ -380,6 +391,11 @@ fn key(wparam: WPARAM) -> Option<OverlayKey> {
     match VIRTUAL_KEY(wparam.0 as u16) {
         VK_ESCAPE => Some(OverlayKey::Escape),
         VK_RETURN => Some(OverlayKey::Enter),
+        VK_LEFT => Some(OverlayKey::Left),
+        VK_RIGHT => Some(OverlayKey::Right),
+        VK_UP => Some(OverlayKey::Up),
+        VK_DOWN => Some(OverlayKey::Down),
+        VK_C => Some(OverlayKey::C),
         _ => None,
     }
 }

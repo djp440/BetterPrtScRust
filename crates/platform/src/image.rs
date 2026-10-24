@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::Rect;
+
 /// 内存中的位图：RGBA8、非预乘 alpha、行从上到下、行间无填充。
 ///
 /// 平台实现负责把系统给出的像素格式（如 BGRA、自下而上）转换成这种格式。
@@ -52,6 +54,25 @@ impl Image {
             self.pixels[i + 2],
             self.pixels[i + 3],
         ]
+    }
+
+    /// 图像中 `area`（图像内像素坐标）这一块；`area` 超出图像时返回 `None`。
+    pub fn crop(&self, area: Rect) -> Option<Image> {
+        let inside = area.x >= 0
+            && area.y >= 0
+            && area.x as u64 + u64::from(area.width) <= u64::from(self.width)
+            && area.y as u64 + u64::from(area.height) <= u64::from(self.height);
+        if !inside {
+            return None;
+        }
+        let row_bytes = area.width as usize * 4;
+        let stride = self.width as usize * 4;
+        let mut pixels = Vec::with_capacity(row_bytes * area.height as usize);
+        for row in 0..area.height as usize {
+            let start = (area.y as usize + row) * stride + area.x as usize * 4;
+            pixels.extend_from_slice(&self.pixels[start..start + row_bytes]);
+        }
+        Some(Image::from_rgba(area.width, area.height, pixels))
     }
 }
 

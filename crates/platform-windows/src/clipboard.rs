@@ -12,7 +12,7 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::{CF_DIB, CF_HDROP};
+use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
 use windows::core::{PCWSTR, w};
 
 use crate::EventLoop;
@@ -25,7 +25,7 @@ const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
 /// Windows 剪贴板。
 ///
 /// 编码好的图像写入注册格式：PNG → `"PNG"`，JPEG → `"JFIF"`，WebP → `"image/webp"`，
-/// AVIF → `"image/avif"`；DIB 写入 `CF_DIB`，文件写入 `CF_HDROP`。
+/// AVIF → `"image/avif"`；DIB 写入 `CF_DIB`，文件写入 `CF_HDROP`，文本写入 `CF_UNICODETEXT`。
 pub struct WindowsClipboard {
     owner: Option<HWND>,
 }
@@ -53,6 +53,9 @@ impl Clipboard for WindowsClipboard {
                 ClipboardItem::Dib(bytes) => (u32::from(CF_DIB.0), Cow::Borrowed(bytes)),
                 ClipboardItem::Files(paths) => {
                     (u32::from(CF_HDROP.0), Cow::Owned(drop_files(paths)))
+                }
+                ClipboardItem::Text(text) => {
+                    (u32::from(CF_UNICODETEXT.0), Cow::Owned(unicode_text(text)))
                 }
             };
             if format == 0 {
@@ -86,6 +89,14 @@ fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
     }
     out.extend_from_slice(&0u16.to_le_bytes());
     out
+}
+
+/// `CF_UNICODETEXT` 的内容：以 0 结尾的 UTF-16（系统会据此自动提供 ANSI 等其他文本格式）。
+fn unicode_text(text: &str) -> Vec<u8> {
+    text.encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }
 
 /// 已打开的剪贴板；离开作用域时关闭。

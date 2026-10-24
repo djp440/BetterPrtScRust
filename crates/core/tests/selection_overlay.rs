@@ -53,12 +53,17 @@ fn drag_without_release(fake: &FakePlatform, from: Point, to: Point) -> Vec<Plat
     ]
 }
 
+/// 让画面变暗的填充（半透明黑色）；手柄等其他填充不算。
 fn fills(scene: &OverlayScene) -> Vec<Rect> {
     scene
         .items
         .iter()
         .filter_map(|item| match item {
-            OverlayItem::Fill { rect, color } if color.a > 0 => Some(*rect),
+            OverlayItem::Fill { rect, color }
+                if (color.r, color.g, color.b) == (0, 0, 0) && color.a > 0 && color.a < 255 =>
+            {
+                Some(*rect)
+            }
             _ => None,
         })
         .collect()

@@ -37,6 +37,22 @@ pub trait SelectionOverlay {
     /// 冻结帧中一块显示器的画面，尺寸等于它 `bounds` 的物理像素尺寸。只读取已拍下的冻结帧。
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError>;
 
+    /// 冻结帧中一块显示器画面的一小块（例如放大镜要显示的像素）。`area` 是这块显示器画面内的
+    /// 像素坐标（画面左上角为 (0, 0)），必须整个落在画面内。只读取已拍下的冻结帧。
+    ///
+    /// 默认实现取出整幅画面再裁剪；能只读取这一小块的平台应当覆盖它（放大镜每移动一次指针
+    /// 都会读取）。
+    fn frozen_pixels(&self, display: DisplayId, area: Rect) -> Result<Image, PlatformError> {
+        let image = self.frozen_image(display)?;
+        image.crop(area).ok_or_else(|| {
+            PlatformError::new(format!(
+                "{area:?} 超出了 {}x{} 的冻结帧画面",
+                image.width(),
+                image.height()
+            ))
+        })
+    }
+
     /// 在遮罩上 `area`（虚拟桌面物理像素）处显示画布，内容是 `image`（尺寸必须等于 `area`）；
     /// 替换已有的画布。
     ///
@@ -149,6 +165,16 @@ pub enum OverlayCursor {
     #[default]
     Crosshair,
     Arrow,
+    /// 左右调整大小（↔）。
+    ResizeEw,
+    /// 上下调整大小（↕）。
+    ResizeNs,
+    /// 沿左上—右下对角线调整大小（↖↘）。
+    ResizeNwse,
+    /// 沿右上—左下对角线调整大小（↗↙）。
+    ResizeNesw,
+    /// 移动（四向箭头）。
+    Move,
 }
 
 /// 用户在遮罩上的输入，坐标为虚拟桌面物理像素。
@@ -189,4 +215,11 @@ pub enum PointerButton {
 pub enum OverlayKey {
     Escape,
     Enter,
+    /// 方向键（按住时随系统的按键重复多次递交）。
+    Left,
+    Right,
+    Up,
+    Down,
+    /// 字母键 C（与大小写、输入法无关）。
+    C,
 }

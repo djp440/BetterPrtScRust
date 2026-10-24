@@ -132,6 +132,25 @@ impl D2dSelectionOverlay {
     }
 }
 
+impl D2dSelectionOverlay {
+    /// 遮罩打开期间冻结帧中的一块显示器。
+    fn frozen_display(
+        &self,
+        display: DisplayId,
+    ) -> Result<(&Resources, &FrozenDisplay), PlatformError> {
+        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
+        else {
+            return Err(PlatformError::new("选区遮罩没有打开"));
+        };
+        let frozen = session
+            .frozen
+            .iter()
+            .find(|f| f.display.id == display)
+            .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))?;
+        Ok((resources, frozen))
+    }
+}
+
 impl SelectionOverlay for D2dSelectionOverlay {
     fn open(&mut self, backdrop: Backdrop) -> Result<Vec<Display>, PlatformError> {
         let Backdrop::FrozenFrame = backdrop;
@@ -173,16 +192,13 @@ impl SelectionOverlay for D2dSelectionOverlay {
     }
 
     fn frozen_image(&self, display: DisplayId) -> Result<Image, PlatformError> {
-        let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
-        else {
-            return Err(PlatformError::new("选区遮罩没有打开"));
-        };
-        let frozen = session
-            .frozen
-            .iter()
-            .find(|f| f.display.id == display)
-            .ok_or_else(|| PlatformError::new(format!("冻结帧中没有显示器 {display:?}")))?;
+        let (resources, frozen) = self.frozen_display(display)?;
         resources.gpu.read_back(frozen)
+    }
+
+    fn frozen_pixels(&self, display: DisplayId, area: Rect) -> Result<Image, PlatformError> {
+        let (resources, frozen) = self.frozen_display(display)?;
+        resources.gpu.read_area(frozen, area)
     }
 
     fn show_canvas(&mut self, area: Rect, image: &Image) -> Result<(), PlatformError> {
