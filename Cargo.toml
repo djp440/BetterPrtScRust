@@ -5,6 +5,7 @@ members = [
     "crates/platform",
     "crates/platform-fake",
     "crates/platform-windows",
+    "crates/ui",
     "crates/app",
 ]
 
@@ -21,9 +22,11 @@ bps-core = { path = "crates/core" }
 bps-platform = { path = "crates/platform" }
 bps-platform-fake = { path = "crates/platform-fake" }
 bps-platform-windows = { path = "crates/platform-windows" }
+bps-ui = { path = "crates/ui" }
 
 png = { version = "0.18", default-features = false }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 windows = { version = "0.62", default-features = false }
 
@@ -33,6 +36,16 @@ jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
 image-webp = { version = "0.2", default-features = false }
 # 纯 Rust（rav1e）；不开 asm（需要 nasm），开 threading 用多线程编码。
 ravif = { version = "0.13", default-features = false, features = ["threading"] }
+
+# 界面文本（Fluent）。concurrent 版的 FluentBundle 可以放进 static 缓存。
+fluent-bundle = { version = "0.16", default-features = false }
+fluent-syntax = { version = "0.12", default-features = false }
+unic-langid = { version = "0.9", default-features = false }
+# 设置界面写回 config.toml 时保留用户的注释和格式。
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
+# 独立窗口界面（设置界面）。只在按需启动的子进程里加载，常驻实例不碰它（ADR 0005）。
+eframe = { version = "0.37", default-features = false, features = ["glow"] }
 
 # 只给 bps-platform-fake 用的解码器，测试里读回编码结果。
 zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }

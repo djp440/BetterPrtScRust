@@ -12,7 +12,7 @@ use bps_platform::{
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::selection::{RegionSelection, Step};
 use crate::stitch::{DesktopImage, stitch};
-use crate::{CaptureMode, CaptureRequest, CoreError, action};
+use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
 /// 一次区域捕获是怎么结束的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,16 +33,23 @@ pub(crate) struct RegionCapture {
     selection: RegionSelection,
     /// 遮罩上当前画着的场景；场景没变时不重画。
     drawn: Option<OverlayScene>,
+    /// 开始捕获时的界面语言：遮罩上的提示和截后动作的通知都用它。
+    texts: &'static Texts,
     /// 经 CLI 转交来、等捕获结束再回复的请求。
     pub requester: Option<IncomingRequest>,
 }
 
 impl RegionCapture {
-    /// 拍下冻结帧并显示选区遮罩。
-    pub fn start(platform: &mut Platform, request: CaptureRequest) -> Result<Self, CoreError> {
+    /// 拍下冻结帧并显示选区遮罩；遮罩上的提示和截后动作的通知用 `texts` 的语言。
+    pub fn start(
+        platform: &mut Platform,
+        request: CaptureRequest,
+        texts: &'static Texts,
+    ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
-        let Some(selection) = RegionSelection::new(displays.clone()) else {
+        let hint = texts.get("overlay-selected-hint");
+        let Some(selection) = RegionSelection::new(displays.clone(), hint) else {
             platform.overlay.close();
             return Err(CoreError::NoDisplay);
         };
@@ -52,6 +59,7 @@ impl RegionCapture {
             displays,
             selection,
             drawn: None,
+            texts,
             requester: None,
         };
         if let Err(e) = capture.redraw(platform) {
@@ -109,7 +117,7 @@ impl RegionCapture {
             captured_at: self.captured_at,
             window_title: None,
         };
-        action::run(platform, &screenshot, &self.request)
+        action::run(platform, &screenshot, &self.request, self.texts)
             .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 

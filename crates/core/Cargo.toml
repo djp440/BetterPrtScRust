@@ -14,6 +14,10 @@ image-webp.workspace = true
 ravif.workspace = true
 serde.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
+fluent-bundle.workspace = true
+fluent-syntax.workspace = true
+unic-langid.workspace = true
 
 [dev-dependencies]
 bps-platform-fake.workspace = true

@@ -7,15 +7,16 @@
 use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::str::FromStr;
 
-use bps_platform::Hotkey;
-use serde::{Deserialize, Deserializer, de::Error as _};
+use bps_platform::{Hotkey, ParseHotkeyError};
+use serde::Deserialize;
 use toml::Spanned;
 
+use crate::i18n::UnknownLanguage;
 use crate::{
-    CaptureMode, CaptureRequest, FilenameTemplate, HotkeyBinding, OutputFormat, OutputOptions,
-    PostCaptureAction, RecordingFormat, RecordingOptions, SaveDir,
+    CaptureMode, CaptureRequest, FilenameTemplate, FilenameTemplateError, HotkeyBinding, Language,
+    Locale, OutputFormat, OutputOptions, PostCaptureAction, RecordingFormat, RecordingOptions,
+    SaveDir, Texts,
 };
 
 /// 首次运行时写入的配置文件，包含 spec #1 规定的 6 条默认热键绑定。
@@ -28,6 +29,8 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   save_dir = 'D:\Screenshots'                    自动存储目录（Windows 路径用单引号）
 #   filename_template = "{yyyy-MM-dd HH-mm-ss}"    命名模板
 #   output_format = "png"                          截图的输出格式：png、jpg、webp、avif
+#   language = "auto"                              界面语言：auto（跟随系统）、zh-CN、en
+#   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
 #   autostart = false                              开机自启：true / false
 #   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
 #                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
@@ -82,6 +85,10 @@ pub struct Config {
     pub output: OutputOptions,
     /// 按配置文件中的顺序排列的热键绑定，覆盖项已与全局设置合并。
     pub bindings: Vec<HotkeyBinding>,
+    /// 界面语言，默认跟随系统。
+    pub language: Language,
+    /// 是否检查更新，默认关闭（ADR 0004）：开启后只查询 GitHub Releases 上的最新版本并提示。
+    pub check_for_updates: bool,
     /// 开机自启（默认关闭）。
     pub autostart: bool,
     /// 以管理员身份运行（默认关闭）：常驻实例以管理员权限运行，管理员权限的窗口在前台时
@@ -90,11 +97,13 @@ pub struct Config {
 }
 
 impl Config {
-    /// 只有 `bindings`、全局设置都取内置默认值的配置。
+    /// 只有 `bindings`、其余设置都取内置默认值的配置。
     pub fn with_bindings(bindings: Vec<HotkeyBinding>) -> Self {
         Self {
             output: OutputOptions::default(),
             bindings,
+            language: Language::default(),
+            check_for_updates: false,
             autostart: false,
             run_as_admin: false,
         }
@@ -105,10 +114,27 @@ impl Config {
         // 记事本可能写入 UTF-8 BOM。
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let raw: RawConfig = toml::from_str(text).map_err(|e| ConfigError::from_toml(text, &e))?;
+        let at = |span: Range<usize>, problem| ConfigError::at(text, span, problem);
+        let language = match raw.language {
+            Some(name) => name
+                .get_ref()
+                .parse()
+                .map_err(|UnknownLanguage(n)| at(name.span(), ConfigProblem::UnknownLanguage(n)))?,
+            None => Language::default(),
+        };
+        let output_format = match raw.output_format {
+            Some(name) => match parse_format(&name, text)? {
+                Format::Image(format) => format,
+                Format::Recording(_) => {
+                    return Err(at(name.span(), ConfigProblem::RecordingFormatInGlobal));
+                }
+            },
+            None => OutputFormat::default(),
+        };
         let output = OutputOptions {
             save_dir: raw.save_dir.map_or(SaveDir::Default, SaveDir::Custom),
-            filename_template: raw.filename_template.unwrap_or_default(),
-            output_format: raw.output_format.unwrap_or_default(),
+            filename_template: parse_template(raw.filename_template, text)?.unwrap_or_default(),
+            output_format,
         };
         let bindings = raw
             .bindings
@@ -118,6 +144,8 @@ impl Config {
         Ok(Config {
             output,
             bindings,
+            language,
+            check_for_updates: raw.check_for_updates.unwrap_or(false),
             autostart: raw.autostart.unwrap_or(false),
             run_as_admin: raw.run_as_admin.unwrap_or(false),
         })
@@ -135,7 +163,25 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     line: Option<usize>,
-    message: String,
+    problem: ConfigProblem,
+}
+
+/// 配置文件里具体哪里不对。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigProblem {
+    /// TOML 语法错误、取值类型不符、未知的键等，附带 TOML 解析器的说明（英文，不随界面语言变化）。
+    Toml(String),
+    InvalidHotkey(ParseHotkeyError),
+    /// 字母、数字热键没有搭配 Ctrl、Alt 或 Win；附带热键原文。
+    TypingKeyWithoutModifier(String),
+    NoActions,
+    InvalidFilenameTemplate(FilenameTemplateError),
+    UnknownOutputFormat(String),
+    ImageFormatForRecording,
+    RecordingFormatForScreenshot,
+    RecordingFormatInGlobal,
+    ZeroFrameRate,
+    UnknownLanguage(String),
 }
 
 impl ConfigError {
@@ -144,22 +190,90 @@ impl ConfigError {
         self.line
     }
 
-    pub fn message(&self) -> &str {
-        &self.message
+    /// 出了什么错（中文，不含行号）。
+    pub fn message(&self) -> String {
+        self.problem.localized(Texts::of(Locale::ZhCn))
+    }
+
+    /// 用 `texts` 的语言说明错误，带行号。
+    pub fn localized(&self, texts: &Texts) -> String {
+        let message = self.problem.localized(texts);
+        match self.line {
+            Some(line) => texts.format(
+                "config-error-at-line",
+                &[("line", &line), ("message", &message)],
+            ),
+            None => message,
+        }
+    }
+
+    /// 无法解析、也无法定位到行的错误。
+    pub(crate) fn unparsable(message: &str) -> Self {
+        Self {
+            line: None,
+            problem: ConfigProblem::Toml(message.trim_end().to_owned()),
+        }
     }
 
     fn from_toml(text: &str, error: &toml::de::Error) -> Self {
         Self {
             line: error.span().map(|span| line_of(text, span.start)),
-            message: error.message().trim_end().to_owned(),
+            problem: ConfigProblem::Toml(error.message().trim_end().to_owned()),
         }
     }
 
-    fn at(text: &str, span: Range<usize>, message: &str) -> Self {
+    fn at(text: &str, span: Range<usize>, problem: ConfigProblem) -> Self {
         Self {
             line: Some(line_of(text, span.start)),
-            message: message.to_owned(),
+            problem,
         }
+    }
+}
+
+impl ConfigProblem {
+    fn localized(&self, texts: &Texts) -> String {
+        match self {
+            ConfigProblem::Toml(message) => message.clone(),
+            ConfigProblem::InvalidHotkey(error) => hotkey_error(error, texts),
+            ConfigProblem::TypingKeyWithoutModifier(hotkey) => {
+                texts.format("config-hotkey-typing-key", &[("hotkey", hotkey)])
+            }
+            ConfigProblem::NoActions => texts.get("config-no-actions"),
+            ConfigProblem::InvalidFilenameTemplate(error) => error.localized(texts),
+            ConfigProblem::UnknownOutputFormat(format) => {
+                texts.format("config-unknown-format", &[("format", format)])
+            }
+            ConfigProblem::ImageFormatForRecording => {
+                texts.get("config-image-format-for-recording")
+            }
+            ConfigProblem::RecordingFormatForScreenshot => {
+                texts.get("config-recording-format-for-screenshot")
+            }
+            ConfigProblem::RecordingFormatInGlobal => {
+                texts.get("config-recording-format-in-global")
+            }
+            ConfigProblem::ZeroFrameRate => texts.get("config-zero-frame-rate"),
+            ConfigProblem::UnknownLanguage(language) => {
+                texts.format("config-unknown-language", &[("language", language)])
+            }
+        }
+    }
+}
+
+/// 用 `texts` 的语言说明热键文本为什么无法解析。
+pub(crate) fn hotkey_error(error: &ParseHotkeyError, texts: &Texts) -> String {
+    match error {
+        ParseHotkeyError::NotAModifier { hotkey, part } => texts.format(
+            "config-hotkey-not-a-modifier",
+            &[("hotkey", hotkey), ("part", part)],
+        ),
+        ParseHotkeyError::MissingKey { hotkey } => {
+            texts.format("config-hotkey-missing-key", &[("hotkey", hotkey)])
+        }
+        ParseHotkeyError::UnsupportedKey { hotkey, key } => texts.format(
+            "config-hotkey-unsupported-key",
+            &[("hotkey", hotkey), ("key", key)],
+        ),
     }
 }
 
@@ -170,25 +284,25 @@ fn line_of(text: &str, offset: usize) -> usize {
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.line {
-            Some(line) => write!(f, "第 {line} 行：{}", self.message),
-            None => f.write_str(&self.message),
-        }
+        f.write_str(&self.localized(Texts::of(Locale::ZhCn)))
     }
 }
 
 impl std::error::Error for ConfigError {}
 
+// 需要校验的取值先按原文读进来（带位置），解析成功后再逐项校验，
+// 这样出错时既能指出行号，又能按界面语言说明原因。
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
-    save_dir: Option<PathBuf>,
-    #[serde(default, deserialize_with = "filename_template")]
-    filename_template: Option<FilenameTemplate>,
-    #[serde(default, deserialize_with = "image_format")]
-    output_format: Option<OutputFormat>,
+    language: Option<Spanned<String>>,
+    check_for_updates: Option<bool>,
     autostart: Option<bool>,
     run_as_admin: Option<bool>,
+    save_dir: Option<PathBuf>,
+    filename_template: Option<Spanned<String>>,
+    output_format: Option<Spanned<String>>,
     #[serde(default)]
     bindings: Vec<RawBinding>,
 }
@@ -196,62 +310,61 @@ struct RawConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBinding {
-    #[serde(deserialize_with = "hotkey")]
-    hotkey: Hotkey,
+    hotkey: Spanned<String>,
     mode: CaptureMode,
-    #[serde(deserialize_with = "actions")]
-    actions: Vec<PostCaptureAction>,
+    actions: Spanned<Vec<PostCaptureAction>>,
     save_dir: Option<PathBuf>,
-    #[serde(default, deserialize_with = "filename_template")]
-    filename_template: Option<FilenameTemplate>,
-    #[serde(default, deserialize_with = "any_format")]
-    output_format: Option<Spanned<Format>>,
-    #[serde(default, deserialize_with = "frame_rate")]
-    frame_rate: Option<u32>,
+    filename_template: Option<Spanned<String>>,
+    output_format: Option<Spanned<String>>,
+    frame_rate: Option<Spanned<u32>>,
     show_cursor: Option<bool>,
 }
 
 impl RawBinding {
-    /// 把绑定的覆盖项与全局设置合并成完整的捕获请求。
+    /// 校验这条绑定，并把覆盖项与全局设置合并成完整的捕获请求。
     fn resolve(self, global: &OutputOptions, text: &str) -> Result<HotkeyBinding, ConfigError> {
-        let records = self.actions.contains(&PostCaptureAction::Record);
+        let at = |span: Range<usize>, problem| ConfigError::at(text, span, problem);
+        let hotkey = parse_hotkey(self.hotkey.get_ref()).map_err(|p| at(self.hotkey.span(), p))?;
+        if self.actions.get_ref().is_empty() {
+            return Err(at(self.actions.span(), ConfigProblem::NoActions));
+        }
+        let frame_rate = match self.frame_rate {
+            Some(rate) if *rate.get_ref() == 0 => {
+                return Err(at(rate.span(), ConfigProblem::ZeroFrameRate));
+            }
+            rate => rate.map(Spanned::into_inner),
+        };
+        let actions = self.actions.into_inner();
+        let records = actions.contains(&PostCaptureAction::Record);
         let mut output = global.clone();
         let mut recording = RecordingOptions {
             format: None,
-            frame_rate: self.frame_rate,
+            frame_rate,
             show_cursor: self.show_cursor,
         };
         if let Some(dir) = self.save_dir {
             output.save_dir = SaveDir::Custom(dir);
         }
-        if let Some(template) = self.filename_template {
+        if let Some(template) = parse_template(self.filename_template, text)? {
             output.filename_template = template;
         }
-        if let Some(format) = self.output_format {
-            match (*format.get_ref(), records) {
+        if let Some(name) = self.output_format {
+            match (parse_format(&name, text)?, records) {
                 (Format::Image(image), false) => output.output_format = image,
                 (Format::Recording(video), true) => recording.format = Some(video),
                 (Format::Image(_), true) => {
-                    return Err(ConfigError::at(
-                        text,
-                        format.span(),
-                        "录屏的 output_format 只能是 mp4 或 gif",
-                    ));
+                    return Err(at(name.span(), ConfigProblem::ImageFormatForRecording));
                 }
                 (Format::Recording(_), false) => {
-                    return Err(ConfigError::at(
-                        text,
-                        format.span(),
-                        "mp4、gif 只用于录屏（actions 含 record 的绑定）；截图可用 png、jpg、webp、avif",
-                    ));
+                    return Err(at(name.span(), ConfigProblem::RecordingFormatForScreenshot));
                 }
             }
         }
         Ok(HotkeyBinding {
-            hotkey: self.hotkey,
+            hotkey,
             capture: CaptureRequest {
                 mode: self.mode,
-                actions: self.actions,
+                actions,
                 output,
                 recording,
             },
@@ -259,88 +372,62 @@ impl RawBinding {
     }
 }
 
+/// 解析热键并检查它不会吞掉正常输入。
+fn parse_hotkey(text: &str) -> Result<Hotkey, ConfigProblem> {
+    let hotkey: Hotkey = text.parse().map_err(ConfigProblem::InvalidHotkey)?;
+    if !allows_typing(hotkey) {
+        return Err(ConfigProblem::TypingKeyWithoutModifier(text.to_owned()));
+    }
+    Ok(hotkey)
+}
+
+/// 字母和数字键单独或只配 Shift 注册成全局热键会吞掉正常输入，必须搭配 Ctrl、Alt 或 Win。
+pub(crate) fn allows_typing(hotkey: Hotkey) -> bool {
+    let m = hotkey.modifiers;
+    !hotkey.key.is_typing_key() || m.ctrl || m.alt || m.win
+}
+
+fn parse_template(
+    template: Option<Spanned<String>>,
+    text: &str,
+) -> Result<Option<FilenameTemplate>, ConfigError> {
+    template
+        .map(|t| {
+            FilenameTemplate::parse(t.get_ref()).map_err(|e| {
+                ConfigError::at(text, t.span(), ConfigProblem::InvalidFilenameTemplate(e))
+            })
+        })
+        .transpose()
+}
+
 /// 配置文件里 `output_format` 的取值：截图格式或录屏格式。
-#[derive(Debug, Clone, Copy)]
-enum Format {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Format {
     Image(OutputFormat),
     Recording(RecordingFormat),
 }
 
-impl FromStr for Format {
-    type Err = String;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Ok(match name.to_ascii_lowercase().as_str() {
+impl Format {
+    /// 配置文件里的写法（不区分大小写，`jpeg` 也可以）。
+    pub(crate) fn from_name(name: &str) -> Option<Format> {
+        Some(match name.to_ascii_lowercase().as_str() {
             "png" => Format::Image(OutputFormat::Png),
             "jpg" | "jpeg" => Format::Image(OutputFormat::Jpeg),
             "webp" => Format::Image(OutputFormat::WebP),
             "avif" => Format::Image(OutputFormat::Avif),
             "mp4" => Format::Recording(RecordingFormat::Mp4),
             "gif" => Format::Recording(RecordingFormat::Gif),
-            _ => {
-                return Err(format!(
-                    "未知的输出格式“{name}”：截图可用 png、jpg、webp、avif，录屏可用 mp4、gif"
-                ));
-            }
+            _ => return None,
         })
     }
 }
 
-fn hotkey<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Hotkey, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    let hotkey: Hotkey = text.parse().map_err(D::Error::custom)?;
-    let m = hotkey.modifiers;
-    if hotkey.key.is_typing_key() && !(m.ctrl || m.alt || m.win) {
-        return Err(D::Error::custom(format!(
-            "热键“{text}”会吞掉正常输入：字母和数字键需要搭配 Ctrl、Alt 或 Win"
-        )));
-    }
-    Ok(hotkey)
-}
-
-fn actions<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<PostCaptureAction>, D::Error> {
-    let actions = Vec::<PostCaptureAction>::deserialize(deserializer)?;
-    if actions.is_empty() {
-        return Err(D::Error::custom("actions 至少要有一个截后动作"));
-    }
-    Ok(actions)
-}
-
-fn filename_template<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<FilenameTemplate>, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    FilenameTemplate::parse(&text)
-        .map(Some)
-        .map_err(D::Error::custom)
-}
-
-/// 全局的 `output_format`：只能是截图格式。
-fn image_format<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<OutputFormat>, D::Error> {
-    let name = String::deserialize(deserializer)?;
-    match name.parse().map_err(D::Error::custom)? {
-        Format::Image(format) => Ok(Some(format)),
-        Format::Recording(_) => Err(D::Error::custom(
-            "全局的 output_format 只用于截图，可用 png、jpg、webp、avif；\
-             录屏格式（mp4、gif）写在 actions 含 record 的绑定里",
-        )),
-    }
-}
-
-/// 热键绑定的 `output_format`：截图格式或录屏格式，是否与截后动作相符在合并时检查。
-fn any_format<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Spanned<Format>>, D::Error> {
-    let name = Spanned::<String>::deserialize(deserializer)?;
-    let format = name.get_ref().parse().map_err(D::Error::custom)?;
-    Ok(Some(Spanned::new(name.span(), format)))
-}
-
-fn frame_rate<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
-    match u32::deserialize(deserializer)? {
-        0 => Err(D::Error::custom("frame_rate 必须大于 0")),
-        n => Ok(Some(n)),
-    }
+fn parse_format(name: &Spanned<String>, text: &str) -> Result<Format, ConfigError> {
+    Format::from_name(name.get_ref()).ok_or_else(|| {
+        ConfigError::at(
+            text,
+            name.span(),
+            ConfigProblem::UnknownOutputFormat(name.get_ref().clone()),
+        )
+    })
 }

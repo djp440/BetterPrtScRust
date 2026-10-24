@@ -1,4 +1,6 @@
-use crate::{HotkeyId, IncomingRequest, OverlayInput};
+use crate::{
+    HotkeyId, IncomingRequest, LatestRelease, OverlayInput, PlatformError, TrayMenuItemId,
+};
 
 /// 平台事件循环递交给常驻实例的触发事件。
 ///
@@ -15,8 +17,14 @@ pub enum PlatformEvent {
     /// 用 [`crate::SystemScreenshotTool::watch`] 监视的“PrtSc 键交给系统截图工具”这项系统设置
     /// 可能被修改了（也可能只是同一组设置里的其他项变了）。
     PrintScreenKeySettingChanged,
-    /// 其他进程（`bps` CLI、再次启动的程序）经 [`crate::ResidentChannel`] 转交来一条请求。
+    /// 其他进程（`bps` CLI、再次启动的程序、设置界面）经 [`crate::ResidentChannel`]
+    /// 转交来一条请求。
     RequestReceived(IncomingRequest),
     /// 用户在选区遮罩上的输入；只在遮罩显示期间递交。
     OverlayInput(OverlayInput),
+    /// 用户选中了托盘菜单（[`crate::TrayMenu`]）里的一项。
+    TrayMenuItemSelected(TrayMenuItemId),
+    /// [`crate::UpdateService::request_latest_release`] 的查询结果；
+    /// `Ok(None)` 表示仓库还没有发布过正式版本。
+    LatestReleaseFetched(Result<Option<LatestRelease>, PlatformError>),
 }

@@ -46,10 +46,7 @@ fn hotkey_taken_by_other_program_is_notified_and_queryable() {
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].index, 0);
     assert_eq!(failures[0].binding.hotkey, ctrl(Key::F(9)));
-    assert!(
-        matches!(&failures[0].error, RegistrationError::Platform(e) if e.message().contains("已被其他程序占用")),
-        "{failures:?}"
-    );
+    assert_eq!(failures[0].error, RegistrationError::TakenByOtherProgram);
 }
 
 #[test]

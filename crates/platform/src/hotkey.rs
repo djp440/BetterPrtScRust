@@ -111,13 +111,31 @@ impl fmt::Display for Hotkey {
     }
 }
 
-/// 热键文本无法解析。
+/// 热键文本无法解析。`hotkey` 是完整的原文。
+///
+/// 这里的 `Display` 是中文；界面上的本地化文字由 `core` 按变体生成。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseHotkeyError(String);
+pub enum ParseHotkeyError {
+    /// `part` 写在修饰键的位置，却不是 Ctrl、Alt、Shift、Win 之一。
+    NotAModifier { hotkey: String, part: String },
+    /// 没有主键，例如 `Ctrl+`。
+    MissingKey { hotkey: String },
+    /// 主键 `key` 不是支持的按键（PrintScreen、F1–F24、A–Z、0–9）。
+    UnsupportedKey { hotkey: String, key: String },
+}
 
 impl fmt::Display for ParseHotkeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            ParseHotkeyError::NotAModifier { hotkey, part } => write!(
+                f,
+                "热键“{hotkey}”中的“{part}”不是修饰键（Ctrl、Alt、Shift、Win）"
+            ),
+            ParseHotkeyError::MissingKey { hotkey } => write!(f, "热键“{hotkey}”缺少主键"),
+            ParseHotkeyError::UnsupportedKey { hotkey, key } => {
+                write!(f, "热键“{hotkey}”中的“{key}”不是支持的按键")
+            }
+        }
     }
 }
 
@@ -127,7 +145,6 @@ impl FromStr for Hotkey {
     type Err = ParseHotkeyError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let error = |message: String| Err(ParseHotkeyError(message));
         let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
         let key_name = parts.pop().unwrap_or_default();
         let mut modifiers = Modifiers::NONE;
@@ -138,17 +155,23 @@ impl FromStr for Hotkey {
                 "shift" => &mut modifiers.shift,
                 "win" => &mut modifiers.win,
                 _ => {
-                    return error(format!(
-                        "热键“{text}”中的“{part}”不是修饰键（Ctrl、Alt、Shift、Win）"
-                    ));
+                    return Err(ParseHotkeyError::NotAModifier {
+                        hotkey: text.to_owned(),
+                        part: part.to_owned(),
+                    });
                 }
             };
             *flag = true;
         }
         match parse_key(key_name) {
             Some(key) => Ok(Hotkey::new(modifiers, key)),
-            None if key_name.is_empty() => error(format!("热键“{text}”缺少主键")),
-            None => error(format!("热键“{text}”中的“{key_name}”不是支持的按键")),
+            None if key_name.is_empty() => Err(ParseHotkeyError::MissingKey {
+                hotkey: text.to_owned(),
+            }),
+            None => Err(ParseHotkeyError::UnsupportedKey {
+                hotkey: text.to_owned(),
+                key: key_name.to_owned(),
+            }),
         }
     }
 }
@@ -180,8 +203,34 @@ pub struct HotkeyId(pub u32);
 /// 全局热键能力。
 pub trait GlobalHotkeys {
     /// 注册全局热键；热键已被其他程序占用等情况返回错误。
-    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), PlatformError>;
+    fn register(&mut self, id: HotkeyId, hotkey: Hotkey) -> Result<(), RegisterHotkeyError>;
 
     /// 注销之前用 `id` 注册的热键。
     fn unregister(&mut self, id: HotkeyId) -> Result<(), PlatformError>;
+}
+
+/// 注册全局热键失败的原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisterHotkeyError {
+    /// 热键已被其他程序占用。最常见的失败，设置界面要能用界面语言说明它。
+    TakenByOtherProgram,
+    /// 其他原因，附带给人看的说明。
+    Failed(PlatformError),
+}
+
+impl fmt::Display for RegisterHotkeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RegisterHotkeyError::TakenByOtherProgram => f.write_str("已被其他程序占用"),
+            RegisterHotkeyError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for RegisterHotkeyError {}
+
+impl From<PlatformError> for RegisterHotkeyError {
+    fn from(e: PlatformError) -> Self {
+        RegisterHotkeyError::Failed(e)
+    }
 }
