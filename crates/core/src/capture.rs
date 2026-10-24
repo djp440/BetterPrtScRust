@@ -1,6 +1,6 @@
 use bps_platform::{Display, FrameSource, Image};
 
-use crate::{CaptureMode, CoreError};
+use crate::{CaptureMode, CoreError, stitch};
 
 /// 一次捕获的产物（截图）及其来源信息。
 pub(crate) struct Screenshot {
@@ -18,9 +18,13 @@ pub(crate) fn capture(
             let image = frames.capture_display(display.id)?;
             Ok(Screenshot { image })
         }
-        CaptureMode::VirtualDesktop | CaptureMode::Region | CaptureMode::Window => {
-            Err(CoreError::UnsupportedCaptureMode(mode))
+        CaptureMode::VirtualDesktop => {
+            let displays = frames.displays()?;
+            let bounds = stitch::virtual_desktop_bounds(&displays).ok_or(CoreError::NoDisplay)?;
+            let image = stitch::capture_displays(frames, &displays, bounds)?;
+            Ok(Screenshot { image })
         }
+        CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
     }
 }
 

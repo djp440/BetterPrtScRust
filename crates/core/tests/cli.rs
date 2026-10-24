@@ -54,6 +54,22 @@ fn bps_capture_display_copies_display_under_cursor_like_the_hotkey() {
 }
 
 #[test]
+fn bps_capture_virtual_desktop_copies_all_displays_stitched_together() {
+    let fake = two_displays_cursor_on_second();
+    let mut channel = FakeResidentChannel::running(resident_instance(&fake));
+
+    let outcome = run_cli(["capture", "virtual-desktop"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
+    let png = fake.clipboard().png_image().unwrap();
+    // 主显示器 (0,0) 64x48 与副显示器 (64,-10) 96x54 的外接矩形是 (0,-10) 160x58。
+    assert_eq!((png.width(), png.height()), (160, 58));
+    assert_eq!(png.pixel(0, 10), primary_display().image().pixel(0, 0));
+    assert_eq!(png.pixel(64, 0), second_display().image().pixel(0, 0));
+    assert_eq!(png.pixel(0, 0), [0, 0, 0, 0], "主显示器上方的空隙应透明");
+}
+
+#[test]
 fn bps_launches_resident_instance_when_not_running_then_completes_command() {
     let fake = two_displays_cursor_on_second();
     let mut channel = FakeResidentChannel::not_running(resident_instance(&fake));
@@ -70,7 +86,7 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
 
 #[test]
 fn bps_capture_accepts_every_capture_mode_and_reports_unimplemented_ones_as_unsupported() {
-    for mode in ["virtual-desktop", "region", "window"] {
+    for mode in ["region", "window"] {
         let fake = two_displays_cursor_on_second();
         let mut channel = FakeResidentChannel::running(resident_instance(&fake));
 
