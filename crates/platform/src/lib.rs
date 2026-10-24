@@ -30,6 +30,7 @@ mod screenshot_tool;
 mod tray;
 mod update;
 mod window;
+mod window_source;
 
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -58,6 +59,7 @@ pub use screenshot_tool::SystemScreenshotTool;
 pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
 pub use update::{LatestRelease, UpdateService};
 pub use window::{StandaloneWindow, WindowLauncher};
+pub use window_source::{TopLevelWindow, WindowId, WindowLayout, WindowSource};
 
 /// 交给 `bps-core` 的一整套平台能力。
 ///
@@ -95,4 +97,6 @@ pub struct Platform {
     pub overlay: Box<dyn SelectionOverlay>,
     /// 文件对话框（另存为）。
     pub file_dialog: Box<dyn FileDialog>,
+    /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。
+    pub window_source: Box<dyn WindowSource>,
 }

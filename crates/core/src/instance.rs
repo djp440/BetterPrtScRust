@@ -6,6 +6,7 @@ use bps_platform::{
 
 use crate::capture::CaptureFailure;
 use crate::region::{Ending, RegionCapture};
+use crate::window::WindowCapture;
 use crate::{
     BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow,
     HotkeyBinding, HotkeyRegistrationFailure, Locale, PostCaptureAction, RegistrationError, Reply,
@@ -52,6 +53,8 @@ pub struct ResidentInstance {
     announced_version: Option<String>,
     /// 进行中的区域捕获（以及其他要在选区遮罩上标注的捕获）。
     region_capture: Option<RegionCapture>,
+    /// 进行中的窗口捕获。
+    window_capture: Option<WindowCapture>,
 }
 
 /// 命令执行到哪一步了。
@@ -81,6 +84,7 @@ impl ResidentInstance {
             update: UpdateStatus::Disabled,
             announced_version: None,
             region_capture: None,
+            window_capture: None,
         }
     }
 
@@ -389,6 +393,8 @@ impl ResidentInstance {
             Ok(Progress::Pending) => {
                 if let Some(capture) = self.region_capture.as_mut() {
                     capture.requester = Some(incoming);
+                } else if let Some(capture) = self.window_capture.as_mut() {
+                    capture.requester = Some(incoming);
                 }
                 Ok(Flow::Continue)
             }
@@ -423,7 +429,7 @@ impl ResidentInstance {
     ///
     /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::Pending`]），之后由遮罩上的输入推进。
     fn capture(&mut self, request: &CaptureRequest) -> Result<Progress, CaptureFailure> {
-        if self.region_capture.is_some() {
+        if self.region_capture.is_some() || self.window_capture.is_some() {
             // 遮罩正显示着，用户看得到这次捕获还没结束，热键触发时不再通知。
             return Err(CaptureFailure {
                 error: CoreError::CaptureInProgress,
@@ -439,6 +445,12 @@ impl ResidentInstance {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.region_capture = Some(capture);
+            return Ok(Progress::Pending);
+        }
+        if request.mode == CaptureMode::Window {
+            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
+                .map_err(CaptureFailure::before_actions)?;
+            self.window_capture = Some(capture);
             return Ok(Progress::Pending);
         }
         let screenshot = capture::capture(&self.platform, request.mode)
@@ -472,9 +484,19 @@ impl ResidentInstance {
         }
     }
 
-    /// 把遮罩上的输入交给进行中的区域捕获。捕获结束时回复等待中的请求；
+    /// 把遮罩上的输入交给进行中的区域或窗口捕获。捕获结束时回复等待中的请求；
     /// 热键触发的捕获失败时通知用户。
     fn on_overlay_input(&mut self, input: &OverlayInput) -> Result<Flow, CoreError> {
+        if let Some(capture) = self.window_capture.as_mut() {
+            let Some(ending) = capture.handle(&mut self.platform, input) else {
+                return Ok(Flow::Continue);
+            };
+            let requester = self
+                .window_capture
+                .take()
+                .and_then(|capture| capture.requester);
+            return self.end_overlay_capture(requester, ending);
+        }
         let Some(capture) = self.region_capture.as_mut() else {
             return Ok(Flow::Continue);
         };
@@ -485,6 +507,15 @@ impl ResidentInstance {
             .region_capture
             .take()
             .and_then(|capture| capture.requester);
+        self.end_overlay_capture(requester, ending)
+    }
+
+    /// 遮罩上的捕获结束了：回复等待中的请求；热键触发的捕获失败时通知用户。
+    fn end_overlay_capture(
+        &mut self,
+        requester: Option<IncomingRequest>,
+        ending: Result<Ending, CaptureFailure>,
+    ) -> Result<Flow, CoreError> {
         match (requester, ending) {
             (Some(requester), ending) => {
                 let reply = match &ending {
@@ -503,11 +534,16 @@ impl ResidentInstance {
         }
     }
 
-    /// 放弃进行中的区域捕获：关闭遮罩，等待中的请求收到“已取消”。
+    /// 放弃进行中的区域或窗口捕获：关闭遮罩，等待中的请求收到“已取消”。
     fn abandon_region_capture(&mut self) {
-        if let Some(capture) = self.region_capture.take() {
+        let requester = match (self.region_capture.take(), self.window_capture.take()) {
+            (Some(capture), _) => Some(capture.requester),
+            (None, Some(capture)) => Some(capture.requester),
+            (None, None) => None,
+        };
+        if let Some(requester) = requester {
             self.platform.overlay.close();
-            if let Some(requester) = capture.requester {
+            if let Some(requester) = requester {
                 requester.reply(Reply::Cancelled.encode());
             }
         }

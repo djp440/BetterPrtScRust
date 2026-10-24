@@ -20,15 +20,15 @@ use bps_platform::{
 use crate::stitch::virtual_desktop_bounds;
 
 /// 选区外的半透明遮挡。
-const MASK: Color = Color::rgba(0, 0, 0, 115);
+pub(crate) const MASK: Color = Color::rgba(0, 0, 0, 115);
 /// 选区边框。
-const ACCENT: Color = Color::rgba(30, 144, 255, 255);
-const LABEL_TEXT: Color = Color::rgba(255, 255, 255, 255);
-const LABEL_BACKGROUND: Color = Color::rgba(0, 0, 0, 180);
+pub(crate) const ACCENT: Color = Color::rgba(30, 144, 255, 255);
+pub(crate) const LABEL_TEXT: Color = Color::rgba(255, 255, 255, 255);
+pub(crate) const LABEL_BACKGROUND: Color = Color::rgba(0, 0, 0, 180);
 /// 以下尺寸是 100% 缩放下的值（物理像素），按标签所在显示器的缩放比例放大。
-const FONT_SIZE: f32 = 13.0;
-const LABEL_PADDING: f64 = 4.0;
-const LABEL_GAP: f64 = 4.0;
+pub(crate) const FONT_SIZE: f32 = 13.0;
+pub(crate) const LABEL_PADDING: f64 = 4.0;
+pub(crate) const LABEL_GAP: f64 = 4.0;
 /// 估算标签高度用的行高系数；只用于判断标签放在选区外还是选区内，实际尺寸由平台按字体决定。
 const LINE_HEIGHT: f32 = 1.4;
 
@@ -341,7 +341,7 @@ pub(crate) fn between(a: Point, b: Point) -> Rect {
 }
 
 /// 覆盖 `bounds` 中 `region` 以外部分的遮挡：上、下、左、右四条。
-fn mask_around(bounds: Rect, region: Rect) -> Vec<OverlayItem> {
+pub(crate) fn mask_around(bounds: Rect, region: Rect) -> Vec<OverlayItem> {
     let (left, top) = (bounds.x, bounds.y);
     let (right, bottom) = (left + bounds.width as i32, top + bounds.height as i32);
     let (r_left, r_top) = (region.x, region.y);

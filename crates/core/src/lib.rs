@@ -25,6 +25,9 @@
 //! 截后动作包含标注时，框好区域后旁边浮现标注工具条，用户在遮罩上画标注，最后选择复制到
 //! 剪贴板、自动存储或另存为结束捕获。标注文档模型 [`AnnotationDocument`] 把标注列表合成为
 //! 最终截图；遮罩上显示的也是它合成的像素（遮罩的画布），屏幕上看到的就是最终产物。
+//!
+//! 窗口捕获同样在遮罩上进行：悬停高亮光标下的顶层窗口（`bps_platform::WindowSource` 给出的
+//! 窗口布局），单击后关闭遮罩，再截取这个窗口的完整内容。
 
 mod action;
 mod annotation;
@@ -50,6 +53,8 @@ mod settings;
 mod status;
 mod stitch;
 mod update;
+mod window;
+mod window_selection;
 
 pub use annotation::{Annotation, AnnotationDocument, Stroke};
 pub use autostart::remove_autostart;
