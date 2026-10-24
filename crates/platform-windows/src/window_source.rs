@@ -253,7 +253,7 @@ fn id_of(hwnd: HWND) -> WindowId {
 }
 
 /// 标识对应的窗口；窗口已经关闭时报错。
-fn hwnd_of(window: WindowId) -> Result<HWND, PlatformError> {
+pub(crate) fn hwnd_of(window: WindowId) -> Result<HWND, PlatformError> {
     let hwnd = HWND(window.0 as usize as *mut _);
     if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
         Ok(hwnd)

@@ -6,6 +6,7 @@
 
 mod capture;
 mod mp4;
+mod window;
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -55,6 +56,13 @@ impl VideoSource for WgcVideoSource {
         match target {
             VideoTarget::Region(region) => Ok(Box::new(capture::RegionStream::open(
                 device, region, options,
+            )?)),
+            VideoTarget::Window {
+                window,
+                width,
+                height,
+            } => Ok(Box::new(window::WindowStream::open(
+                device, window, width, height, options,
             )?)),
         }
     }

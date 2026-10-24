@@ -10,13 +10,22 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::{Image, PlatformError, Rect};
+use crate::{Image, PlatformError, Rect, WindowId};
 
 /// 录屏要持续捕获的目标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoTarget {
     /// 虚拟桌面上的一块矩形（物理像素），可以跨越多块显示器；帧的尺寸等于矩形的尺寸。
     Region(Rect),
+    /// 一个顶层窗口自己的内容（被其他窗口遮挡、超出屏幕的部分也在内，不含阴影和鼠标指针以外的
+    /// 屏幕内容）。帧的尺寸固定为 `width` × `height`（开始录制时窗口的尺寸，由调用方决定）：
+    /// 窗口之后改变大小时不缩放，窗口内容贴在画布左上角，窗口变大时超出的部分被裁掉，
+    /// 变小时画布其余部分是黑色。窗口关闭后流返回 [`StreamFrame::Ended`]。
+    Window {
+        window: WindowId,
+        width: u32,
+        height: u32,
+    },
 }
 
 /// 打开视频流时的选项。

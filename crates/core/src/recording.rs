@@ -19,7 +19,7 @@ use std::time::Duration;
 use bps_platform::{
     Backdrop, ClipboardItem, IncomingRequest, NewFile, Notification, NotificationClick,
     OverlayInput, OverlayScene, Platform, PlatformError, Rect, StreamFrame, StreamOptions,
-    VideoFormat, VideoFrame, VideoSettings, VideoStream, VideoTarget, VideoWriter,
+    TopLevelWindow, VideoFormat, VideoFrame, VideoSettings, VideoStream, VideoTarget, VideoWriter,
 };
 
 use crate::capture::{self, CaptureFailure};
@@ -28,6 +28,7 @@ use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::virtual_desktop_bounds;
+use crate::window_selection::{WindowSelection, WindowStep};
 use crate::{CaptureMode, CaptureRequest, CoreError, RecordingFormat, SaveDir, Texts};
 
 /// MP4 的默认帧率。
@@ -65,10 +66,21 @@ enum Phase {
         /// 遮罩上当前画着的场景；场景没变时不重画。
         drawn: Option<OverlayScene>,
     },
+    /// 在实时画面上选择要录制的窗口。
+    SelectingWindow {
+        selection: Box<WindowSelection>,
+        drawn: Option<OverlayScene>,
+    },
     /// 正在录制。
     Recording(Box<Active>),
     /// 已经结束（停止或放弃之后）。
     Ended,
+}
+
+/// 录制的对象：确定下来的屏幕区域，或一个窗口。
+enum Target {
+    Region(Rect),
+    Window(TopLevelWindow),
 }
 
 /// 录制中的状态。
@@ -158,10 +170,10 @@ impl Recording {
             CaptureMode::VirtualDesktop => {
                 Some(virtual_desktop_bounds(&frames.displays()?).ok_or(CoreError::NoDisplay)?)
             }
-            mode @ CaptureMode::Window => return Err(CoreError::UnsupportedCaptureMode(mode)),
+            CaptureMode::Window => return recording.start_window_selection(platform),
         };
         if let Some(rect) = target {
-            let active = recording.begin(platform, rect)?;
+            let active = recording.begin(platform, Target::Region(rect))?;
             recording.phase = Phase::Recording(Box::new(active));
             return Ok(recording);
         }
@@ -184,6 +196,26 @@ impl Recording {
         Ok(recording)
     }
 
+    /// 窗口模式：在实时画面上高亮并选择要录制的顶层窗口。
+    fn start_window_selection(mut self, platform: &mut Platform) -> Result<Self, CoreError> {
+        let layout = platform.window_source.layout()?;
+        let displays = platform.overlay.open(Backdrop::Live)?;
+        let cursor = platform.frame_source.cursor_position().ok();
+        let Some(selection) = WindowSelection::new(displays, layout, cursor) else {
+            platform.overlay.close();
+            return Err(CoreError::NoDisplay);
+        };
+        self.phase = Phase::SelectingWindow {
+            selection: Box::new(selection),
+            drawn: None,
+        };
+        if let Err(e) = self.redraw(platform) {
+            platform.overlay.close();
+            return Err(e.into());
+        }
+        Ok(self)
+    }
+
     /// 这次录屏的捕获请求（来自热键绑定）。
     pub fn request(&self) -> &CaptureRequest {
         &self.request
@@ -200,6 +232,19 @@ impl Recording {
         platform: &mut Platform,
         input: &OverlayInput,
     ) -> Option<Result<Ending, CaptureFailure>> {
+        if let Phase::SelectingWindow { selection, .. } = &mut self.phase {
+            return match selection.handle(input) {
+                WindowStep::Continue => self.redraw_or_fail(platform),
+                WindowStep::Confirmed(window) => {
+                    platform.overlay.close();
+                    self.begin_recording(platform, Target::Window(window))
+                }
+                WindowStep::Cancelled => {
+                    platform.overlay.close();
+                    Some(Ok(Ending::Cancelled))
+                }
+            };
+        }
         let Phase::Selecting { selection, .. } = &mut self.phase else {
             return None;
         };
@@ -207,27 +252,43 @@ impl Recording {
             .snapping_mut()
             .load_controls(input, platform.window_source.as_ref());
         match selection.handle(input) {
-            Step::Continue => match self.redraw(platform) {
-                Ok(()) => None,
-                Err(e) => {
-                    platform.overlay.close();
-                    Some(Err(CaptureFailure::before_actions(e)))
-                }
-            },
+            Step::Continue => self.redraw_or_fail(platform),
             Step::Confirmed(region) => {
                 platform.overlay.close();
-                match self.begin(platform, region) {
-                    Ok(active) => {
-                        self.phase = Phase::Recording(Box::new(active));
-                        None
-                    }
-                    Err(e) => Some(Err(CaptureFailure::before_actions(e))),
-                }
+                self.begin_recording(platform, Target::Region(region))
             }
             Step::Cancelled => {
                 platform.overlay.close();
                 Some(Ok(Ending::Cancelled))
             }
+        }
+    }
+
+    fn redraw_or_fail(
+        &mut self,
+        platform: &mut Platform,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        match self.redraw(platform) {
+            Ok(()) => None,
+            Err(e) => {
+                platform.overlay.close();
+                Some(Err(CaptureFailure::before_actions(e)))
+            }
+        }
+    }
+
+    /// 选好对象后开始录制；失败时这次录屏结束。
+    fn begin_recording(
+        &mut self,
+        platform: &mut Platform,
+        target: Target,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        match self.begin(platform, target) {
+            Ok(active) => {
+                self.phase = Phase::Recording(Box::new(active));
+                None
+            }
+            Err(e) => Some(Err(CaptureFailure::before_actions(e))),
         }
     }
 
@@ -248,7 +309,7 @@ impl Recording {
     /// 还在框选时关闭遮罩，相当于取消。
     pub fn stop(&mut self, platform: &mut Platform) -> Result<Ending, CaptureFailure> {
         match std::mem::replace(&mut self.phase, Phase::Ended) {
-            Phase::Selecting { .. } => {
+            Phase::Selecting { .. } | Phase::SelectingWindow { .. } => {
                 platform.overlay.close();
                 Ok(Ending::Cancelled)
             }
@@ -265,9 +326,14 @@ impl Recording {
         CaptureFailure::before_actions(error)
     }
 
-    /// 开始录制 `region`：建好临时文件，打开视频流和编码器，开始节拍。
-    fn begin(&self, platform: &mut Platform, region: Rect) -> Result<Active, CoreError> {
+    /// 开始录制 `target`：建好临时文件，打开视频流和编码器，开始节拍。
+    /// 窗口的画布尺寸在这一刻按窗口外框定下，之后不变。
+    fn begin(&self, platform: &mut Platform, target: Target) -> Result<Active, CoreError> {
         let settings = Settings::of(&self.request)?;
+        let (region, window) = match &target {
+            Target::Region(region) => (*region, None),
+            Target::Window(window) => (window.bounds, Some(window)),
+        };
         let rect = settings.video_rect(region)?;
         let dir = save_dir(platform, &self.request)?;
         platform.file_system.create_dir_all(&dir)?;
@@ -278,13 +344,21 @@ impl Recording {
             .render(&FilenameFields {
                 captured_at: platform.clock.now(),
                 mode: self.request.mode,
-                window_title: None,
+                window_title: window.map(|w| w.title.as_str()),
             });
         let extension = settings.extension();
         let temp = reserve_temp_file(platform, &dir, &stem, extension)?;
         let opened = (|| {
+            let video_target = match window {
+                Some(window) => VideoTarget::Window {
+                    window: window.id,
+                    width: rect.width,
+                    height: rect.height,
+                },
+                None => VideoTarget::Region(rect),
+            };
             let stream = platform.video_source.open(
-                VideoTarget::Region(rect),
+                video_target,
                 StreamOptions {
                     show_cursor: settings.show_cursor,
                 },
@@ -325,10 +399,11 @@ impl Recording {
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {
-        let Phase::Selecting { selection, drawn } = &mut self.phase else {
-            return Ok(());
+        let (scene, drawn) = match &mut self.phase {
+            Phase::Selecting { selection, drawn } => (selection.scene(), drawn),
+            Phase::SelectingWindow { selection, drawn } => (selection.scene(), drawn),
+            _ => return Ok(()),
         };
-        let scene = selection.scene();
         if drawn.as_ref() != Some(&scene) {
             platform.overlay.render(&scene)?;
             *drawn = Some(scene);
