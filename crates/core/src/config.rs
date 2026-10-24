@@ -256,7 +256,9 @@ impl ConfigError {
 impl ConfigProblem {
     fn localized(&self, texts: &Texts) -> String {
         match self {
-            ConfigProblem::Toml(message) => message.clone(),
+            ConfigProblem::Toml(message) => {
+                texts.format("config-toml-error", &[("message", message)])
+            }
             ConfigProblem::InvalidHotkey(error) => hotkey_error(error, texts),
             ConfigProblem::TypingKeyWithoutModifier(hotkey) => {
                 texts.format("config-hotkey-typing-key", &[("hotkey", hotkey)])

@@ -229,3 +229,27 @@ long-screenshot-size = 已拼接 { $width } × { $height }
 long-screenshot-lost = 滚动太快，请往回滚一点
 notification-long-screenshot-full-title = 长截屏已到达高度上限
 notification-long-screenshot-full-body = 长截屏最高 { $limit } 像素，已自动停止拼接。
+
+# bps 命令行
+config-toml-error = 配置文件格式错误：{ $message }
+cli-usage =
+    用法：bps capture <捕获模式>
+
+    把捕获命令转交给 BetterPrtSc 常驻实例执行，行为与按下对应热键一致：
+    采用第一条该捕获模式的热键绑定的截后动作，没有这样的绑定时复制到剪贴板。
+    常驻实例没在运行时会先启动它。
+cli-usage-modes = 捕获模式：
+cli-exit-codes = 退出码：
+cli-exit-success = 成功
+cli-exit-failed = 常驻实例执行命令失败
+cli-exit-usage = 参数有误
+cli-exit-unreachable = 无法连接或启动常驻实例
+cli-exit-cancelled = 用户取消了这次捕获（例如在选区遮罩上按了 Esc）
+cli-cancelled = 已取消
+cli-failed = 执行失败：{ $message }
+cli-unreachable = 无法把命令转交给常驻实例：{ $error }
+cli-unknown-mode = 未知的捕获模式：{ $mode }
+cli-missing-mode = 缺少捕获模式
+cli-extra-argument = 多余的参数：{ $argument }
+cli-missing-command = 缺少命令
+cli-unknown-command = 未知的命令：{ $command }

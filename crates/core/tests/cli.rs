@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use bps_core::{
-    CaptureMode, CaptureRequest, CliStatus, Command, HotkeyBinding, PostCaptureAction,
+    CaptureMode, CaptureRequest, CliStatus, Command, HotkeyBinding, Locale, PostCaptureAction,
     ResidentInstance, default_bindings, run_cli,
 };
 use bps_platform::{Hotkey, Key, Modifiers, OverlayKey, PlatformEvent, Point, PointerButton, Rect};
@@ -44,7 +44,7 @@ fn bps_capture_display_copies_display_under_cursor_like_the_hotkey() {
     let fake = two_displays_cursor_on_second();
     let mut channel = FakeResidentChannel::running(resident_instance(&fake));
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(channel.launches(), 0, "常驻实例已在运行时不应再拉起");
@@ -60,7 +60,7 @@ fn bps_capture_virtual_desktop_copies_all_displays_stitched_together() {
     let fake = two_displays_cursor_on_second();
     let mut channel = FakeResidentChannel::running(resident_instance(&fake));
 
-    let outcome = run_cli(["capture", "virtual-desktop"], &mut channel);
+    let outcome = run_cli(["capture", "virtual-desktop"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     let png = fake.clipboard().png_image().unwrap();
@@ -76,7 +76,7 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
     let fake = two_displays_cursor_on_second();
     let mut channel = FakeResidentChannel::not_running(resident_instance(&fake));
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(channel.launches(), 1);
@@ -138,7 +138,7 @@ fn bps_capture_region_replies_after_user_selects_region_on_overlay() {
             fake.select_region(region)
         }));
 
-    let outcome = run_cli(["capture", "region"], &mut channel);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
@@ -153,7 +153,7 @@ fn bps_capture_region_reports_cancelled_when_user_presses_escape() {
         vec![fake.press_key(OverlayKey::Escape)]
     }));
 
-    let outcome = run_cli(["capture", "region"], &mut channel);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Cancelled, "{outcome:?}");
     assert_eq!(outcome.status.exit_code(), 5);
@@ -183,7 +183,7 @@ fn bps_capture_region_with_default_bindings_replies_after_user_finishes_annotati
         },
     ));
 
-    let outcome = run_cli(["capture", "region"], &mut channel);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
@@ -207,7 +207,7 @@ fn bps_capture_fails_while_previous_capture_is_still_selecting() {
         let _ = resident.borrow_mut().handle(event);
     });
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Failed, "{outcome:?}");
     assert!(
@@ -226,7 +226,7 @@ fn bps_capture_window_replies_after_user_clicks_window_like_ctrl_print_screen() 
         fake.click(PointerButton::Left, Point::new(100, 20))
     }));
 
-    let outcome = run_cli(["capture", "window"], &mut channel);
+    let outcome = run_cli(["capture", "window"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
@@ -244,7 +244,7 @@ fn bps_capture_window_reports_cancelled_when_user_presses_escape() {
         vec![fake.press_key(OverlayKey::Escape)]
     }));
 
-    let outcome = run_cli(["capture", "window"], &mut channel);
+    let outcome = run_cli(["capture", "window"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Cancelled, "{outcome:?}");
     assert!(!fake.overlay_visible());
@@ -268,7 +268,7 @@ fn bps_capture_uses_post_capture_actions_of_first_hotkey_binding_with_that_mode(
         let _ = instance.handle(event);
     });
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(fake.clipboard().is_empty());
@@ -282,7 +282,7 @@ fn bps_capture_copies_to_clipboard_when_no_hotkey_binding_uses_that_mode() {
         let _ = instance.handle(event);
     });
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(fake.clipboard().formats(), ["PNG", "DIB"]);
@@ -296,7 +296,7 @@ fn bps_capture_without_matching_binding_uses_global_output_settings() {
         let _ = instance.handle(event);
     });
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(fake.clipboard().formats(), ["JPEG", "DIB"]);
@@ -307,7 +307,7 @@ fn bps_reports_failure_when_resident_instance_cannot_complete_capture() {
     let no_displays = FakePlatform::new();
     let mut channel = FakeResidentChannel::running(resident_instance(&no_displays));
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Failed);
     assert_eq!(outcome.status.exit_code(), 1);
@@ -327,7 +327,7 @@ fn bps_rejects_invalid_arguments_with_usage_without_contacting_resident_instance
         let counter = requests.clone();
         let mut channel = FakeResidentChannel::not_running(move |_| counter.set(counter.get() + 1));
 
-        let outcome = run_cli(args, &mut channel);
+        let outcome = run_cli(args, &mut channel, Locale::ZhCn);
 
         assert_eq!(outcome.status, CliStatus::Usage, "{args:?}: {outcome:?}");
         assert_eq!(outcome.status.exit_code(), 2);
@@ -345,7 +345,7 @@ fn bps_help_lists_every_capture_mode() {
     for flag in ["--help", "-h", "help"] {
         let mut channel = FakeResidentChannel::not_running(|_| {});
 
-        let outcome = run_cli([flag], &mut channel);
+        let outcome = run_cli([flag], &mut channel, Locale::ZhCn);
 
         assert_eq!(outcome.status, CliStatus::Success, "{flag}");
         for mode in ["display", "virtual-desktop", "region", "window"] {
@@ -360,10 +360,31 @@ fn bps_reports_unreachable_when_resident_instance_cannot_be_launched() {
     let fake = two_displays_cursor_on_second();
     let mut channel = FakeResidentChannel::not_running(resident_instance(&fake)).launch_fails();
 
-    let outcome = run_cli(["capture", "display"], &mut channel);
+    let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Unreachable);
     assert_eq!(outcome.status.exit_code(), 4);
     assert!(!outcome.stderr.is_empty());
     assert!(fake.clipboard().is_empty());
+}
+
+#[test]
+fn bps_texts_follow_the_interface_language() {
+    let mut channel = FakeResidentChannel::not_running(|_| {});
+
+    let usage = run_cli(["capture"], &mut channel, Locale::En);
+    let chinese = run_cli(["capture"], &mut channel, Locale::ZhCn);
+
+    assert_eq!(usage.status, CliStatus::Usage);
+    assert!(usage.stderr.contains("Missing capture mode"), "{usage:?}");
+    assert!(usage.stderr.contains("Exit codes"), "{usage:?}");
+    assert!(chinese.stderr.contains("缺少捕获模式"), "{chinese:?}");
+    assert!(chinese.stderr.contains("退出码"), "{chinese:?}");
+    assert!(
+        !usage
+            .stderr
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+        "英文界面不应出现中文：{usage:?}"
+    );
 }

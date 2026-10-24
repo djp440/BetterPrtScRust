@@ -229,3 +229,27 @@ long-screenshot-size = Stitched { $width } × { $height }
 long-screenshot-lost = Scrolled too fast, scroll back a little
 notification-long-screenshot-full-title = Long screenshot reached the height limit
 notification-long-screenshot-full-body = Long screenshots are at most { $limit } pixels tall; stitching stopped automatically.
+
+# bps command line
+config-toml-error = Malformed config file: { $message }
+cli-usage =
+    Usage: bps capture <capture mode>
+
+    Forwards the capture command to the running BetterPrtSc instance and behaves like pressing the matching hotkey:
+    it uses the post-capture actions of the first hotkey binding for that capture mode, or copies to the clipboard if there is none.
+    The resident instance is started first if it is not running.
+cli-usage-modes = Capture modes:
+cli-exit-codes = Exit codes:
+cli-exit-success = Success
+cli-exit-failed = The resident instance failed to run the command
+cli-exit-usage = Invalid arguments
+cli-exit-unreachable = Could not reach or start the resident instance
+cli-exit-cancelled = The user cancelled the capture (for example pressed Esc on the overlay)
+cli-cancelled = Cancelled
+cli-failed = Failed: { $message }
+cli-unreachable = Could not forward the command to the resident instance: { $error }
+cli-unknown-mode = Unknown capture mode: { $mode }
+cli-missing-mode = Missing capture mode
+cli-extra-argument = Unexpected argument: { $argument }
+cli-missing-command = Missing command
+cli-unknown-command = Unknown command: { $command }
