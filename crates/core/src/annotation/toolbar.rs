@@ -8,6 +8,8 @@
 //! 按钮宽度由 `core` 按文字估算（平台只负责把文字居中画在按钮里），这样命中测试不依赖平台
 //! 的文字排版。扩展点：在 [`TOP_ROW`] / [`style_row`] 里加按钮，在 [`Button`] 加变体，
 //! 按钮文字放进两份 FTL。
+//!
+//! 布局和绘制对按钮的种类是通用的（[`ToolbarButton`]）：长截屏的“开始 / 完成”条也用它。
 
 use bps_platform::{Color, Display, OverlayItem, Point, Rect};
 
@@ -41,8 +43,23 @@ pub(crate) enum Button {
     Copy,
 }
 
-impl Button {
+/// 工具条上的一种按钮。
+pub(crate) trait ToolbarButton: Copy + PartialEq {
     /// 按钮文字在文本资源里的消息；色块和线宽按钮没有文字。
+    fn message(self) -> Option<&'static str>;
+
+    /// 色块按钮的颜色。
+    fn swatch(self) -> Option<Color> {
+        None
+    }
+
+    /// 线宽按钮的档位。
+    fn thickness(self) -> Option<Thickness> {
+        None
+    }
+}
+
+impl ToolbarButton for Button {
     fn message(self) -> Option<&'static str> {
         Some(match self {
             Button::Tool(Tool::Rectangle) => "annotation-rectangle",
@@ -56,16 +73,31 @@ impl Button {
             Button::Color(_) | Button::Thickness(_) => return None,
         })
     }
+
+    fn swatch(self) -> Option<Color> {
+        match self {
+            Button::Color(color) => Some(color),
+            _ => None,
+        }
+    }
+
+    fn thickness(self) -> Option<Thickness> {
+        match self {
+            Button::Thickness(thickness) => Some(thickness),
+            _ => None,
+        }
+    }
 }
 
+/// 工具条上从左到右的一项。
 #[derive(Clone, Copy)]
-enum Entry {
-    Button(Button),
+pub(crate) enum Entry<B> {
+    Button(B),
     Separator,
 }
 
 /// 上一行从左到右：工具 | 取消、结束方式（最常用的“复制”在最右边）。
-const TOP_ROW: [Entry; 9] = [
+const TOP_ROW: [Entry<Button>; 9] = [
     Entry::Button(Button::Tool(Tool::Rectangle)),
     Entry::Button(Button::Tool(Tool::Arrow)),
     Entry::Button(Button::Tool(Tool::Mosaic)),
@@ -78,7 +110,7 @@ const TOP_ROW: [Entry; 9] = [
 ];
 
 /// 下一行从左到右：预设颜色 | 三档线宽（从细到粗）。
-fn style_row() -> Vec<Entry> {
+fn style_row() -> Vec<Entry<Button>> {
     PALETTE
         .iter()
         .map(|&color| Entry::Button(Button::Color(color)))
@@ -118,8 +150,8 @@ const SWATCH_BORDER: Color = Color::rgba(255, 255, 255, 96);
 const SWATCH_SELECTED: Color = Color::rgba(255, 255, 255, 255);
 
 /// 工具条上一个按钮的位置和内容。
-struct Placed {
-    button: Button,
+struct Placed<B> {
+    button: B,
     rect: Rect,
     /// 按钮上的文字（工具、结束方式）。
     label: Option<String>,
@@ -134,9 +166,9 @@ pub(crate) struct ToolbarState {
 }
 
 /// 一次布局好的工具条。
-pub(crate) struct Toolbar {
+pub(crate) struct Toolbar<B = Button> {
     bounds: Rect,
-    buttons: Vec<Placed>,
+    buttons: Vec<Placed<B>>,
     separators: Vec<Rect>,
     font_size: f32,
     /// 所在显示器的缩放比例，用于色块、线条样本等的尺寸。
@@ -144,9 +176,53 @@ pub(crate) struct Toolbar {
     border: u32,
 }
 
-impl Toolbar {
-    /// 贴着 `region`（外侧有宽 `frame` 的边框）的工具条，按钮文字用 `texts` 的语言。
+impl Toolbar<Button> {
+    /// 贴着 `region`（外侧有宽 `frame` 的边框）的标注工具条，按钮文字用 `texts` 的语言。
     pub fn beside(region: Rect, frame: u32, displays: &[Display], texts: &Texts) -> Self {
+        Self::with_rows(
+            &[TOP_ROW.to_vec(), style_row()],
+            region,
+            frame,
+            displays,
+            texts,
+        )
+    }
+
+    /// 画工具条的遮罩元素，从下往上。
+    pub fn items(&self, state: &ToolbarState) -> Vec<OverlayItem> {
+        self.items_with(
+            |button| match button {
+                Button::Tool(tool) => state.tool == Some(tool),
+                Button::Thickness(thickness) => state.thickness == thickness,
+                _ => false,
+            },
+            Some(state.color),
+            state.hovered,
+        )
+    }
+}
+
+impl<B: ToolbarButton> Toolbar<B> {
+    /// 由 `entries` 组成、贴着 `region`（外侧有宽 `frame` 的边框）的工具条，按钮文字用
+    /// `texts` 的语言。
+    pub fn with_entries(
+        entries: &[Entry<B>],
+        region: Rect,
+        frame: u32,
+        displays: &[Display],
+        texts: &Texts,
+    ) -> Self {
+        Self::with_rows(&[entries.to_vec()], region, frame, displays, texts)
+    }
+
+    /// 由若干行 `rows` 组成（每行从左到右）、贴着 `region` 的工具条。
+    pub fn with_rows(
+        rows: &[Vec<Entry<B>>],
+        region: Rect,
+        frame: u32,
+        displays: &[Display],
+        texts: &Texts,
+    ) -> Self {
         let corner = Point::new(
             region.x + region.width as i32 - 1,
             region.y + region.height as i32 - 1,
@@ -170,7 +246,7 @@ impl Toolbar {
         let mut buttons = Vec::new();
         let mut separators = Vec::new();
         let mut width = 0;
-        for (row, entries) in [TOP_ROW.to_vec(), style_row()].iter().enumerate() {
+        for (row, entries) in rows.iter().enumerate() {
             let top = padding + row as i32 * (height + px(BUTTON_GAP));
             let mut x = padding;
             for (index, entry) in entries.iter().enumerate() {
@@ -185,7 +261,7 @@ impl Toolbar {
                                 let text = text_width(label, f64::from(font_size));
                                 (text.ceil() as i32 + 2 * px(BUTTON_PADDING)).max(height)
                             }
-                            (None, Button::Thickness(_)) => px(THICKNESS_BUTTON_WIDTH),
+                            (None, _) if button.thickness().is_some() => px(THICKNESS_BUTTON_WIDTH),
                             (None, _) => height,
                         };
                         buttons.push(Placed {
@@ -210,7 +286,11 @@ impl Toolbar {
             }
             width = width.max(x + padding);
         }
-        let size = (width, 2 * height + px(BUTTON_GAP) + 2 * padding);
+        let row_count = rows.len().max(1) as i32;
+        let size = (
+            width,
+            row_count * height + (row_count - 1) * px(BUTTON_GAP) + 2 * padding,
+        );
 
         let gap = px(GAP) + frame as i32;
         let (left, top) = place(region, size, gap, screen);
@@ -231,21 +311,32 @@ impl Toolbar {
         }
     }
 
+    /// 工具条占据的范围。
+    pub fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
     /// `point` 是否在工具条上（包括按钮之间的空隙）。
     pub fn contains(&self, point: Point) -> bool {
         self.bounds.contains(point)
     }
 
     /// `point` 处的按钮。
-    pub fn button_at(&self, point: Point) -> Option<Button> {
+    pub fn button_at(&self, point: Point) -> Option<B> {
         self.buttons
             .iter()
             .find(|placed| placed.rect.contains(point))
             .map(|placed| placed.button)
     }
 
-    /// 画工具条的遮罩元素，从下往上。
-    pub fn items(&self, state: &ToolbarState) -> Vec<OverlayItem> {
+    /// 画工具条的遮罩元素，从下往上；`is_active` 的按钮按选中状态高亮，`selected_color`
+    /// 是当前选中的色块，`hovered` 按悬停高亮。
+    pub fn items_with(
+        &self,
+        is_active: impl Fn(B) -> bool,
+        selected_color: Option<Color>,
+        hovered: Option<B>,
+    ) -> Vec<OverlayItem> {
         let px = |v: f64| ((v * self.scale).round() as i32).max(1);
         let mut items = vec![
             OverlayItem::Fill {
@@ -264,14 +355,9 @@ impl Toolbar {
         }));
         for placed in &self.buttons {
             let (button, rect) = (placed.button, placed.rect);
-            let active = match button {
-                Button::Tool(tool) => state.tool == Some(tool),
-                Button::Thickness(thickness) => state.thickness == thickness,
-                _ => false,
-            };
-            let highlight = if active {
+            let highlight = if is_active(button) {
                 Some(ACTIVE)
-            } else if state.hovered == Some(button) {
+            } else if hovered == Some(button) {
                 Some(HOVER)
             } else {
                 None
@@ -279,14 +365,14 @@ impl Toolbar {
             if let Some(color) = highlight {
                 items.push(OverlayItem::Fill { rect, color });
             }
-            match (&placed.label, button) {
-                (Some(label), _) => items.push(OverlayItem::Text {
+            match (&placed.label, button.swatch(), button.thickness()) {
+                (Some(label), _, _) => items.push(OverlayItem::Text {
                     rect,
                     text: label.clone(),
                     font_size: self.font_size,
                     color: TEXT,
                 }),
-                (None, Button::Color(color)) => {
+                (None, Some(color), _) => {
                     let inset = px(SWATCH_INSET);
                     let side = (rect.height as i32 - 2 * inset).max(1);
                     let swatch = Rect::new(
@@ -299,7 +385,7 @@ impl Toolbar {
                         rect: swatch,
                         color,
                     });
-                    let (width, border) = if state.color == color {
+                    let (width, border) = if selected_color == Some(color) {
                         (px(2.0) as u32, SWATCH_SELECTED)
                     } else {
                         (self.border, SWATCH_BORDER)
@@ -310,7 +396,7 @@ impl Toolbar {
                         color: border,
                     });
                 }
-                (None, Button::Thickness(thickness)) => {
+                (None, None, Some(thickness)) => {
                     let length = px(THICKNESS_SAMPLE_LENGTH);
                     let thick = px(thickness.sample_height());
                     items.push(OverlayItem::Fill {
@@ -323,7 +409,7 @@ impl Toolbar {
                         color: TEXT,
                     });
                 }
-                (None, _) => {}
+                (None, None, None) => {}
             }
         }
         items

@@ -68,7 +68,6 @@ error-unsupported-capture-mode = The “{ $mode }” capture mode is not support
 error-unsupported-action = The “{ $action }” post-capture action is not supported yet
 error-invalid-request = The resident instance did not understand the request “{ $request }”; make sure bps and BetterPrtSc are the same version
 error-capture-in-progress = The previous capture has not finished yet
-error-unsupported-recording-format = The “{ $format }” recording format is not supported yet
 error-recording-region-too-small = The { $width } × { $height } region is too small to record (width and height must be at least { $minimum } pixels)
 error-nothing-recorded = Nothing was recorded
 error-recording-in-progress-hotkey = Recording in progress; press { $hotkey } to stop it before capturing
@@ -221,3 +220,12 @@ result-panel-translating = Translating…
 result-panel-translation = Translation
 result-panel-translation-failed = Translation failed: { $error }
 result-panel-copy-translation = Copy translation
+## Long screenshot
+
+long-screenshot-start = Start
+long-screenshot-finish = Done
+long-screenshot-cancel = Cancel
+long-screenshot-size = Stitched { $width } × { $height }
+long-screenshot-lost = Scrolled too fast, scroll back a little
+notification-long-screenshot-full-title = Long screenshot reached the height limit
+notification-long-screenshot-full-body = Long screenshots are at most { $limit } pixels tall; stitching stopped automatically.

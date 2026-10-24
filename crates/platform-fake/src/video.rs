@@ -15,10 +15,12 @@ use std::time::Duration;
 use bps_platform::{
     Image, PlatformError, Point, Rect, StreamFrame, StreamOptions, Ticker, VideoEncoder,
     VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoStream, VideoTarget, VideoWriter,
+    WindowId,
 };
 
 use crate::file_system::FsState;
 use crate::frame_source::FrameState;
+use crate::window_source::WindowSourceState;
 
 /// 假视频源画鼠标指针用的颜色：指针所在的那一个像素。
 pub const FAKE_CURSOR_COLOR: [u8; 4] = [255, 0, 255, 255];
@@ -55,6 +57,7 @@ pub(crate) struct VideoState {
 }
 
 pub(crate) struct FakeVideoSource {
+    pub windows: Arc<Mutex<WindowSourceState>>,
     pub frames: Arc<Mutex<FrameState>>,
     pub state: Arc<Mutex<VideoState>>,
 }
@@ -65,24 +68,47 @@ impl VideoSource for FakeVideoSource {
         target: VideoTarget,
         options: StreamOptions,
     ) -> Result<Box<dyn VideoStream>, PlatformError> {
-        let VideoTarget::Region(rect) = target;
-        if rect.width == 0 || rect.height == 0 {
+        let (source, width, height) = match target {
+            VideoTarget::Region(rect) => (Source::Region(rect), rect.width, rect.height),
+            VideoTarget::Window {
+                window,
+                width,
+                height,
+            } => {
+                if self.windows.lock().unwrap().image_of(window).is_none() {
+                    return Err(PlatformError::new("假视频源：窗口已关闭"));
+                }
+                (Source::Window(window), width, height)
+            }
+        };
+        if width == 0 || height == 0 {
             return Err(PlatformError::new("假视频源：区域为空"));
         }
         self.state.lock().unwrap().open_streams += 1;
         Ok(Box::new(FakeVideoStream {
             frames: self.frames.clone(),
+            windows: self.windows.clone(),
             state: self.state.clone(),
-            rect,
+            source,
+            width,
+            height,
             show_cursor: options.show_cursor,
         }))
     }
 }
 
+enum Source {
+    Region(Rect),
+    Window(WindowId),
+}
+
 struct FakeVideoStream {
     frames: Arc<Mutex<FrameState>>,
+    windows: Arc<Mutex<WindowSourceState>>,
     state: Arc<Mutex<VideoState>>,
-    rect: Rect,
+    source: Source,
+    width: u32,
+    height: u32,
     show_cursor: bool,
 }
 
@@ -97,13 +123,37 @@ impl VideoStream for FakeVideoStream {
                 return Ok(StreamFrame::Pending);
             }
         }
-        let frames = self.frames.lock().unwrap();
-        let mut image = frames.crop(self.rect);
-        if self.show_cursor {
-            image = draw_fake_cursor(&image, Point::new(self.rect.x, self.rect.y), frames.cursor);
-        }
+        let image = match self.source {
+            Source::Region(rect) => {
+                let frames = self.frames.lock().unwrap();
+                let mut image = frames.crop(rect);
+                if self.show_cursor {
+                    image = draw_fake_cursor(&image, Point::new(rect.x, rect.y), frames.cursor);
+                }
+                image
+            }
+            Source::Window(window) => {
+                let content = self.windows.lock().unwrap().image_of(window);
+                match content {
+                    Some(content) => fit_to_canvas(&content, self.width, self.height),
+                    None => return Ok(StreamFrame::Ended),
+                }
+            }
+        };
         Ok(StreamFrame::Frame(Rc::new(FakeFrame(image))))
     }
+}
+
+/// 窗口内容贴在 `width` × `height` 画布的左上角：超出的部分裁掉，不足的部分是不透明黑色。
+fn fit_to_canvas(content: &Image, width: u32, height: u32) -> Image {
+    let mut rgba = [0, 0, 0, 255].repeat(width as usize * height as usize);
+    let columns = content.width().min(width) as usize * 4;
+    for y in 0..content.height().min(height) as usize {
+        let from = y * content.width() as usize * 4;
+        let to = y * width as usize * 4;
+        rgba[to..to + columns].copy_from_slice(&content.rgba()[from..from + columns]);
+    }
+    Image::from_rgba(width, height, rgba)
 }
 
 impl Drop for FakeVideoStream {
@@ -196,6 +246,7 @@ impl VideoWriter for FakeVideoWriter {
         let mut bytes = FAKE_VIDEO_MAGIC.to_vec();
         bytes.extend_from_slice(match self.settings.format {
             VideoFormat::Mp4 => b"mp4\0",
+            VideoFormat::Gif => b"gif\0",
         });
         for value in [
             self.settings.width,

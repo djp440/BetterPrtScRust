@@ -68,7 +68,6 @@ error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
 error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
 error-capture-in-progress = 上一次捕获还没有结束
-error-unsupported-recording-format = 暂不支持“{ $format }”录屏格式
 error-recording-region-too-small = 区域 { $width } × { $height } 太小，无法录屏（宽和高至少 { $minimum } 像素）
 error-nothing-recorded = 没有录到任何画面
 error-recording-in-progress-hotkey = 正在录屏，按 { $hotkey } 停止录制后再捕获
@@ -221,3 +220,12 @@ result-panel-translating = 正在翻译…
 result-panel-translation = 译文
 result-panel-translation-failed = 翻译失败：{ $error }
 result-panel-copy-translation = 复制译文
+## 长截屏
+
+long-screenshot-start = 开始
+long-screenshot-finish = 完成
+long-screenshot-cancel = 取消
+long-screenshot-size = 已拼接 { $width } × { $height }
+long-screenshot-lost = 滚动太快，请往回滚一点
+notification-long-screenshot-full-title = 长截屏已到达高度上限
+notification-long-screenshot-full-body = 长截屏最高 { $limit } 像素，已自动停止拼接。
