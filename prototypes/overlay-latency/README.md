@@ -73,8 +73,8 @@ prototypes/overlay-latency/target/release/overlay-native.exe --strategy prewarm
 | `results/2026-10-24 16-14-39/` | 原生 × `lazy` |
 | `results/2026-10-24 16-16-55/` | egui × `lazy`（4 次冷启动 × (1 + 3) 次，第二次起都没上屏） |
 
-每个目录里有 `summary.md`（汇总表）、`triggers.csv`（每次触发的端到端延迟与阶段耗时）、`memory.csv`、
-`harness.log`（原型 stdout 与观察到的帧轨迹）。
+每个目录里入库的只有 `summary.md`（汇总表）。测量时还会生成 `triggers.csv`（每次触发的端到端延迟与阶段耗时）、
+`memory.csv`、`harness.log`（原型 stdout 与观察到的帧轨迹），这些运行产物不入库（见同目录 `.gitignore`），需要时重新运行 `run-measure.ps1`。
 
 | 方案 · 策略 | 首次 中位数 / P95 (ms) | 后续 中位数 / P95 (ms) | 空闲私有工作集 (MB) | exe |
 |---|---|---|---|---|
