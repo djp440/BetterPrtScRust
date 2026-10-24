@@ -25,6 +25,7 @@ mod notifier;
 mod ocr;
 mod overlay;
 mod recording_toolbar;
+mod region_sampler;
 mod request;
 mod resident_channel;
 mod screenshot_tool;
@@ -57,6 +58,7 @@ pub use overlay::{
     OverlayScene, PointerButton, SelectionOverlay,
 };
 pub use recording_toolbar::{RecordingToolbar, RecordingToolbarView, RegionBorder};
+pub use region_sampler::RegionSampler;
 pub use request::IncomingRequest;
 pub use resident_channel::{ChannelError, ResidentChannel};
 pub use screenshot_tool::SystemScreenshotTool;
@@ -116,4 +118,6 @@ pub struct Platform {
     pub file_dialog: Box<dyn FileDialog>,
     /// 窗口枚举与命中测试，以及截取单个窗口的完整内容。
     pub window_source: Box<dyn WindowSource>,
+    /// 长截屏期间持续采样区域的实时画面；有新画面时经平台事件循环以 [`PlatformEvent`] 递交。
+    pub region_sampler: Box<dyn RegionSampler>,
 }

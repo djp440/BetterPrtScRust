@@ -48,6 +48,7 @@ mod notifier;
 mod ocr;
 mod overlay;
 mod recording_toolbar;
+mod region_sampler;
 mod resident_channel;
 mod text;
 mod tray;
@@ -87,6 +88,7 @@ use notifier::FakeNotifier;
 use ocr::{FakeTextRecognizer, OcrState};
 use overlay::{FakeOverlay, OverlayState};
 use recording_toolbar::FakeRecordingToolbar;
+use region_sampler::{FakeRegionSampler, SamplerState};
 use tray::FakeTrayMenu;
 use update::{FakeUpdateService, UpdateState};
 use video::{FakeTicker, FakeVideoEncoder, FakeVideoSource, VideoState};
@@ -121,6 +123,7 @@ pub struct FakePlatform {
     /// 正显示着的录屏控制条。
     recording_toolbar: Arc<Mutex<Option<RecordingToolbarView>>>,
     dialogs: Arc<Mutex<DialogState>>,
+    sampler: Arc<Mutex<SamplerState>>,
     window_source: Arc<Mutex<WindowSourceState>>,
     ocr: Arc<Mutex<OcrState>>,
 }
@@ -145,6 +148,7 @@ impl Default for FakePlatform {
             video: Default::default(),
             recording_toolbar: Default::default(),
             dialogs: Default::default(),
+            sampler: Default::default(),
             window_source: Default::default(),
             ocr: Default::default(),
         }
@@ -424,6 +428,7 @@ impl FakePlatform {
             recording_toolbar: Box::new(FakeRecordingToolbar(self.recording_toolbar.clone())),
             file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),
             window_source: Box::new(FakeWindowSource(self.window_source.clone())),
+            region_sampler: Box::new(FakeRegionSampler(self.sampler.clone())),
         }
     }
 
@@ -652,7 +657,57 @@ impl FakePlatform {
             self.overlay_visible(),
             "选区遮罩没有显示，用户无法在上面操作"
         );
+        let position = match input {
+            OverlayInput::PointerMoved { position, .. }
+            | OverlayInput::PointerPressed { position, .. }
+            | OverlayInput::PointerReleased { position, .. } => Some(position),
+            OverlayInput::KeyPressed { .. }
+            | OverlayInput::Character(_)
+            | OverlayInput::Interrupted => None,
+        };
+        if let (Some(position), Some(area)) = (position, self.overlay_pass_through()) {
+            assert!(
+                !area.contains(position),
+                "{position:?} 在透过遮罩的范围 {area:?} 里，鼠标操作会交给底下的窗口"
+            );
+        }
         PlatformEvent::OverlayInput(input)
+    }
+
+    /// 遮罩上透过遮罩的范围（用户在这里看到实时桌面、鼠标操作交给底下的窗口）；
+    /// 遮罩没有打开或没有透过的范围时返回 `None`。
+    pub fn overlay_pass_through(&self) -> Option<Rect> {
+        self.overlay.lock().unwrap().visible_pass_through()
+    }
+
+    /// 正在采样的区域；没有在采样时返回 `None`。
+    pub fn sampling_region(&self) -> Option<Rect> {
+        self.sampler.lock().unwrap().region
+    }
+
+    /// 至今开始采样过的区域，按开始顺序排列。
+    pub fn sampled_regions(&self) -> Vec<Rect> {
+        self.sampler.lock().unwrap().started.clone()
+    }
+
+    /// 模拟区域里的画面有了变化、平台采到一帧：正在采样时截下此刻桌面上的那块区域（各显示器
+    /// 当前的画面，用 [`change_display_image`](Self::change_display_image) 改变），返回平台
+    /// 事件循环会递交的事件；没有在采样时返回 `None`。
+    pub fn sample_region(&self) -> Option<PlatformEvent> {
+        let frames = self.frames.lock().unwrap();
+        self.sampler
+            .lock()
+            .unwrap()
+            .sample(&frames)
+            .then_some(PlatformEvent::RegionSampled)
+    }
+
+    /// 模拟采样出错（例如显示器被拔掉）：正在采样时返回平台事件循环会递交的事件。
+    pub fn fail_sampling(&self, message: &str) -> Option<PlatformEvent> {
+        let mut sampler = self.sampler.lock().unwrap();
+        sampler.region?;
+        sampler.pending = Some(Err(PlatformError::new(message)));
+        Some(PlatformEvent::RegionSampled)
     }
 
     /// 在遮罩上按住左键从 `from` 拖到 `to` 再松开（不按修饰键）。

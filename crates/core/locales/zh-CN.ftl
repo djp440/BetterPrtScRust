@@ -207,3 +207,12 @@ result-panel-copied = 已复制到剪贴板
 result-panel-copy-failed = 复制失败：{ $error }
 result-panel-open-settings-failed = 无法打开系统设置：{ $error }
 result-panel-close = 关闭
+## 长截屏
+
+long-screenshot-start = 开始
+long-screenshot-finish = 完成
+long-screenshot-cancel = 取消
+long-screenshot-size = 已拼接 { $width } × { $height }
+long-screenshot-lost = 滚动太快，请往回滚一点
+notification-long-screenshot-full-title = 长截屏已到达高度上限
+notification-long-screenshot-full-body = 长截屏最高 { $limit } 像素，已自动停止拼接。

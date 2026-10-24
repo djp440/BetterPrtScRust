@@ -14,7 +14,7 @@ pub(crate) mod finish;
 mod raster;
 pub(crate) mod session;
 mod style;
-mod toolbar;
+pub(crate) mod toolbar;
 
 use std::sync::Arc;
 
@@ -109,6 +109,78 @@ impl Annotation {
             Annotation::Text {
                 origin, ref mask, ..
             } => vec![text_ink(origin, mask)],
+        }
+    }
+
+    /// 按比例缩放后的标注（横向 `scale_x`、纵向 `scale_y` 倍，线宽按两者的平均值缩放，
+    /// 至少 1 像素）：截图缩小显示时，屏幕上画的就是它。
+    pub(crate) fn scaled(&self, scale_x: f64, scale_y: f64) -> Annotation {
+        let point = |p: Point| {
+            Point::new(
+                (f64::from(p.x) * scale_x).round() as i32,
+                (f64::from(p.y) * scale_y).round() as i32,
+            )
+        };
+        let stroke = |s: Stroke| Stroke {
+            width: ((f64::from(s.width.max(1)) * (scale_x + scale_y) / 2.0).round() as u32).max(1),
+            ..s
+        };
+        match *self {
+            Annotation::Rectangle { rect, stroke: s } => {
+                let from = point(Point::new(rect.x, rect.y));
+                let to = point(Point::new(
+                    rect.x + rect.width as i32,
+                    rect.y + rect.height as i32,
+                ));
+                Annotation::Rectangle {
+                    rect: Rect::new(
+                        from.x,
+                        from.y,
+                        (to.x - from.x).max(1) as u32,
+                        (to.y - from.y).max(1) as u32,
+                    ),
+                    stroke: stroke(s),
+                }
+            }
+            Annotation::Arrow {
+                from,
+                to,
+                stroke: s,
+            } => Annotation::Arrow {
+                from: point(from),
+                to: point(to),
+                stroke: stroke(s),
+            },
+            Annotation::Mosaic { rect, block } => {
+                let from = point(Point::new(rect.x, rect.y));
+                let to = point(Point::new(
+                    rect.x + rect.width as i32,
+                    rect.y + rect.height as i32,
+                ));
+                Annotation::Mosaic {
+                    rect: Rect::new(
+                        from.x,
+                        from.y,
+                        (to.x - from.x).max(1) as u32,
+                        (to.y - from.y).max(1) as u32,
+                    ),
+                    block: ((f64::from(block.max(1)) * (scale_x + scale_y) / 2.0).round() as u32)
+                        .max(1),
+                }
+            }
+            Annotation::Text {
+                origin,
+                ref text,
+                size,
+                color,
+                ref mask,
+            } => Annotation::Text {
+                origin: point(origin),
+                text: text.clone(),
+                size: ((f64::from(size) * (scale_x + scale_y) / 2.0).round() as u32).max(1),
+                color,
+                mask: Arc::new(scale_mask(mask, scale_x, scale_y)),
+            },
         }
     }
 
@@ -220,6 +292,59 @@ fn compose_exactly(annotations: &[Annotation], base: &Image, area: Rect) -> Vec<
         }
     }
     pixels
+}
+
+/// 把文字蒙版按比例缩小（每个输出像素取它覆盖的源像素覆盖率的平均值），屏幕上缩小显示的
+/// 截图用。放大（比例大于 1）时按最近邻取样。
+fn scale_mask(mask: &TextMask, scale_x: f64, scale_y: f64) -> TextMask {
+    let scale_rect = |r: Rect| {
+        let x0 = (f64::from(r.x) * scale_x).floor() as i32;
+        let y0 = (f64::from(r.y) * scale_y).floor() as i32;
+        let x1 = (f64::from(r.x + r.width as i32) * scale_x).ceil() as i32;
+        let y1 = (f64::from(r.y + r.height as i32) * scale_y).ceil() as i32;
+        Rect::new(x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+    };
+    let source = mask.area();
+    let area = scale_rect(source);
+    if source.width == 0 || source.height == 0 || area.width == 0 || area.height == 0 {
+        return TextMask::new(
+            Rect::new(area.x, area.y, 0, 0),
+            Vec::new(),
+            scale_rect(mask.layout()),
+            scale_rect(mask.caret()),
+        );
+    }
+    let mut coverage = Vec::with_capacity(area.width as usize * area.height as usize);
+    for oy in 0..area.height as i32 {
+        // 输出像素 (ox, oy) 覆盖的源像素范围。
+        let y0 = (f64::from(area.y + oy) / scale_y).floor() as i32 - source.y;
+        let y1 = ((f64::from(area.y + oy + 1) / scale_y).ceil() as i32 - source.y).max(y0 + 1);
+        for ox in 0..area.width as i32 {
+            let x0 = (f64::from(area.x + ox) / scale_x).floor() as i32 - source.x;
+            let x1 = ((f64::from(area.x + ox + 1) / scale_x).ceil() as i32 - source.x).max(x0 + 1);
+            let mut sum = 0u32;
+            let mut count = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    count += 1;
+                    if (0..source.width as i32).contains(&x)
+                        && (0..source.height as i32).contains(&y)
+                    {
+                        sum += u32::from(
+                            mask.coverage()[y as usize * source.width as usize + x as usize],
+                        );
+                    }
+                }
+            }
+            coverage.push(((sum + count / 2) / count.max(1)) as u8);
+        }
+    }
+    TextMask::new(
+        area,
+        coverage,
+        scale_rect(mask.layout()),
+        scale_rect(mask.caret()),
+    )
 }
 
 /// 文字的蒙版在截图上的范围。

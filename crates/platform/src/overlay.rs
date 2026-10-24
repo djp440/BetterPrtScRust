@@ -72,6 +72,14 @@ pub trait SelectionOverlay {
     /// 文字都来自同一个蒙版（ADR 0006）。遮罩打开期间可用。
     fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError>;
 
+    /// 让 `area`（虚拟桌面物理像素）“透过”遮罩：遮罩不再盖住这块范围，用户看到的是底下
+    /// 实时变化的桌面，鼠标的点击、滚轮也交给底下的窗口；`None` 恢复整块遮罩。
+    /// 长截屏期间用户就在这块范围里滚动内容。
+    ///
+    /// 透过期间遮罩本身不出现在屏幕捕获里（包括 [`crate::RegionSampler`] 采到的画面）。
+    /// 立即生效；[`close`](Self::close) 时一并恢复。
+    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError>;
+
     /// 隐藏遮罩并释放冻结帧和画布；没有打开时什么也不做。
     fn close(&mut self);
 }

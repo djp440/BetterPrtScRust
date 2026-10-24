@@ -26,11 +26,12 @@ pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
             | PostCaptureAction::Record
             | PostCaptureAction::Annotate
             | PostCaptureAction::Ocr
+            | PostCaptureAction::LongScreenshot
     )
 }
 
 /// 对截图执行截后动作：先复制到剪贴板、自动存储，再打开结果面板做 OCR
-/// （标注在此之前已由区域捕获处理，这里忽略它）。
+/// （标注、长截屏在此之前已由区域捕获、长截屏会话处理，这里忽略它们）。
 ///
 /// 某个动作失败不影响其他动作，返回第一个失败。通知文字用 `texts` 的语言。
 pub(crate) fn run(

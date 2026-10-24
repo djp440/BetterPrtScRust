@@ -207,3 +207,12 @@ result-panel-copied = Copied to the clipboard
 result-panel-copy-failed = Copy failed: { $error }
 result-panel-open-settings-failed = Cannot open Windows Settings: { $error }
 result-panel-close = Close
+## Long screenshot
+
+long-screenshot-start = Start
+long-screenshot-finish = Done
+long-screenshot-cancel = Cancel
+long-screenshot-size = Stitched { $width } × { $height }
+long-screenshot-lost = Scrolled too fast, scroll back a little
+notification-long-screenshot-full-title = Long screenshot reached the height limit
+notification-long-screenshot-full-body = Long screenshots are at most { $limit } pixels tall; stitching stopped automatically.

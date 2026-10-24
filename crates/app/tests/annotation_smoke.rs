@@ -65,6 +65,10 @@ impl SelectionOverlay for RecordingOverlay {
     fn rasterize_text(&self, text: &str, font_size: u32) -> Result<TextMask, PlatformError> {
         self.inner.rasterize_text(text, font_size)
     }
+
+    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError> {
+        self.inner.set_pass_through(area)
+    }
     fn close(&mut self) {
         *self.scene.borrow_mut() = None;
         self.inner.close();
@@ -457,6 +461,9 @@ impl SelectionOverlay for NoOverlay {
         unreachable!()
     }
     fn rasterize_text(&self, _: &str, _: u32) -> Result<TextMask, PlatformError> {
+        unreachable!()
+    }
+    fn set_pass_through(&mut self, _: Option<Rect>) -> Result<(), PlatformError> {
         unreachable!()
     }
     fn close(&mut self) {}

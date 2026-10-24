@@ -22,43 +22,43 @@ fn unimplemented_action_rejects_whole_capture_before_earlier_actions_run() {
         CaptureMode::Display,
         vec![
             PostCaptureAction::CopyToClipboard,
-            PostCaptureAction::LongScreenshot,
+            PostCaptureAction::Translate,
         ],
     )));
 
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedAction(
-            PostCaptureAction::LongScreenshot
-        ))
+        Err(CoreError::UnsupportedAction(PostCaptureAction::Translate))
     );
     assert!(fake.clipboard().is_empty(), "不应只执行了一半的截后动作");
 }
 
 #[test]
-fn pressing_unimplemented_default_binding_notifies_unsupported_and_keeps_running() {
-    let fake = desktop();
+fn pressing_unimplemented_binding_notifies_unsupported_and_keeps_running() {
+    let fake = desktop().with_config_file(
+        r#"
+[[bindings]]
+hotkey = "Ctrl+F9"
+mode = "region"
+actions = ["translate"]
+"#,
+    );
     let mut instance = ResidentInstance::start(fake.platform());
 
-    let long_screenshot = fake
-        .press(Hotkey::new(
-            Modifiers::CTRL.with(Modifiers::SHIFT),
-            Key::PrintScreen,
-        ))
-        .expect("默认绑定应注册 Ctrl+Shift+PrtSc");
-    let result = instance.handle(long_screenshot);
+    let translate = fake
+        .press(Hotkey::new(Modifiers::CTRL, Key::F(9)))
+        .expect("配置的绑定应注册 Ctrl+F9");
+    let result = instance.handle(translate);
 
-    // 默认的 Ctrl+Shift+PrtSc 是“区域 + 长截屏”：长截屏还没实现，在打开选区遮罩之前就整体拒绝。
+    // “区域 + 翻译”：翻译还没实现，在打开选区遮罩之前就整体拒绝。
     assert_eq!(
         result,
-        Err(CoreError::UnsupportedAction(
-            PostCaptureAction::LongScreenshot
-        ))
+        Err(CoreError::UnsupportedAction(PostCaptureAction::Translate))
     );
     let notifications = fake.notifications();
     assert_eq!(notifications.len(), 1, "{notifications:?}");
     assert_eq!(notifications[0].title, "暂不支持");
-    assert_eq!(notifications[0].body, "暂不支持“长截屏”截后动作");
+    assert_eq!(notifications[0].body, "暂不支持“翻译”截后动作");
     assert!(!fake.overlay_visible(), "不应打开选区遮罩");
     assert!(fake.clipboard().is_empty());
     assert_eq!(
