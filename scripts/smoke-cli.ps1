@@ -8,7 +8,9 @@
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
     2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
        `bps capture bogus` 是用法错误（退出码 2）
-    3. `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
+    3. 默认配置下 `bps capture region` 用 PrtSc 的“区域 + 标注”，标注未实现 → 退出码 3；
+       在配置文件最前面加一条“区域 + 复制”绑定（Ctrl+Alt+Shift+F8）、等它重新加载后，
+       `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
        再次打开后投递拖拽 (100,100)→(299,199) 与 Enter → 退出码 0、剪贴板 PNG 为 200x100
        （遮罩会闪现两次，各不到 1 秒；期间请勿移动鼠标）
     4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
@@ -16,6 +18,8 @@
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
   默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存截图：结束时删除本次存下的文件
   （以剪贴板附带的文件为准），目录是本次新建且已空时一并删除。
+  本脚本启动的进程的 APPDATA 指向 -OutDir 下的临时目录，常驻实例首次运行生成的
+  config.toml 写在那里，不碰真实的 %APPDATA%。
   需要 STA 线程访问剪贴板，请用 Windows PowerShell 运行：
     powershell -NoProfile -STA -File scripts\smoke-cli.ps1 [-BinDir target\release]
 #>
@@ -172,6 +176,12 @@ $saveDir = Join-Path ([Environment]::GetFolderPath('MyPictures')) 'BetterPrtSc'
 $saveDirExisted = Test-Path -LiteralPath $saveDir
 $startedAt = Get-Date
 $savedFiles = @()
+# 子进程（bps 及它拉起的常驻实例）继承环境变量。
+$realAppData = $env:APPDATA
+$fakeAppData = Join-Path $OutDir 'appdata'
+if (Test-Path -LiteralPath $fakeAppData) { Remove-Item -Recurse -Force -LiteralPath $fakeAppData }
+New-Item -ItemType Directory -Force $fakeAppData | Out-Null
+$env:APPDATA = $fakeAppData
 try {
     $clip::Clear()
     $r = Invoke-Bps @('capture', 'display')
@@ -193,6 +203,16 @@ try {
 
     $r = Invoke-Bps @('capture', 'bogus')
     Assert-That ($r.Code -eq 2) "bps capture bogus 退出码 2（实际 $($r.Code)）"
+
+    $r = Invoke-Bps @('capture', 'region')
+    Assert-That ($r.Code -eq 3 -and $r.Stderr -match '标注') "默认配置下 bps capture region 退出码 3 且提示标注暂不支持：$($r.Stderr.Trim())"
+
+    # 在常驻实例生成的配置文件最前面加一条“区域 + 复制”绑定，等它自动重新加载。
+    $configPath = Join-Path $fakeAppData 'BetterPrtSc\config.toml'
+    $regionBinding = "[[bindings]]`r`nhotkey = `"Ctrl+Alt+Shift+F8`"`r`nmode = `"region`"`r`nactions = [`"copy_to_clipboard`"]`r`n`r`n"
+    $config = [IO.File]::ReadAllText($configPath)
+    [IO.File]::WriteAllText($configPath, $regionBinding + $config, (New-Object Text.UTF8Encoding $false))
+    Start-Sleep -Seconds 2
 
     $overlay = Find-Overlay (Get-Residents)[0].Id
     $clip::Clear()
@@ -240,8 +260,13 @@ finally {
         }
     }
     "结束后常驻实例数：$((Get-Residents).Count)"
-    if ($backupImage) { $clip::SetImage($backupImage) }
-    elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    $env:APPDATA = $realAppData
+    # 剪贴板可能正被其他程序占用：恢复失败只警告，不影响后面的清理。
+    try {
+        if ($backupImage) { $clip::SetImage($backupImage) }
+        elseif ($null -ne $backupText) { $clip::SetText($backupText) }
+    }
+    catch { "警告：恢复剪贴板失败：$($_.Exception.Message)" }
     # 只删除本次运行存下的文件，以及本次新建且已空的存储目录。
     foreach ($f in $savedFiles) {
         if ($f -and (Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).CreationTime -ge $startedAt) {

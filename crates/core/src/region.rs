@@ -9,7 +9,7 @@ use bps_platform::{
     PlatformError,
 };
 
-use crate::capture::Screenshot;
+use crate::capture::{CaptureFailure, Screenshot};
 use crate::selection::{RegionSelection, Step};
 use crate::stitch::{DesktopImage, stitch};
 use crate::{CaptureMode, CaptureRequest, CoreError, action};
@@ -66,13 +66,13 @@ impl RegionCapture {
         &mut self,
         platform: &mut Platform,
         input: &OverlayInput,
-    ) -> Option<Result<Ending, CoreError>> {
+    ) -> Option<Result<Ending, CaptureFailure>> {
         match self.selection.handle(input) {
             Step::Continue => match self.redraw(platform) {
                 Ok(()) => None,
                 Err(e) => {
                     platform.overlay.close();
-                    Some(Err(e.into()))
+                    Some(Err(CaptureFailure::before_actions(e)))
                 }
             },
             Step::Confirmed(region) => {
@@ -90,7 +90,7 @@ impl RegionCapture {
         &mut self,
         platform: &mut Platform,
         region: bps_platform::Rect,
-    ) -> Result<(), CoreError> {
+    ) -> Result<(), CaptureFailure> {
         let parts: Result<Vec<DesktopImage>, PlatformError> = self
             .displays
             .iter()
@@ -104,12 +104,13 @@ impl RegionCapture {
             .collect();
         platform.overlay.close();
         let screenshot = Screenshot {
-            image: stitch(region, &parts?),
+            image: stitch(region, &parts.map_err(CaptureFailure::before_actions)?),
             mode: CaptureMode::Region,
             captured_at: self.captured_at,
             window_title: None,
         };
         action::run(platform, &screenshot, &self.request)
+            .map_err(|error| CaptureFailure::in_actions(error, &self.request))
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {

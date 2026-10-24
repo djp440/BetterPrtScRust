@@ -5,7 +5,7 @@
 use bps_core::{
     ForwardError, Reply, Request, ResidentInstance, WhenNotRunning, default_bindings, forward,
 };
-use bps_platform::{Hotkey, Key, Modifiers, Rect};
+use bps_platform::Rect;
 use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel};
 
 #[test]
@@ -13,6 +13,8 @@ fn second_launch_activates_running_resident_instance_without_starting_another() 
     let fake = FakePlatform::new().with_display(FakeDisplay::new(Rect::new(0, 0, 8, 8)).primary());
     let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
     assert!(instance.register_hotkeys().is_empty());
+    let registered = fake.registered_hotkeys();
+    assert!(!registered.is_empty());
     let mut channel = FakeResidentChannel::running(move |event| {
         let _ = instance.handle(event);
     });
@@ -22,13 +24,7 @@ fn second_launch_activates_running_resident_instance_without_starting_another() 
     assert_eq!(reply, Ok(Reply::Done));
     assert_eq!(channel.launches(), 0);
     // 常驻实例照常运行：热键仍然注册着，也没有因为激活而捕获。
-    assert_eq!(
-        fake.registered_hotkeys(),
-        [
-            Hotkey::new(Modifiers::SHIFT, Key::PrintScreen),
-            Hotkey::new(Modifiers::NONE, Key::PrintScreen),
-        ]
-    );
+    assert_eq!(fake.registered_hotkeys(), registered);
     assert!(fake.clipboard().is_empty());
 }
 

@@ -4,9 +4,17 @@
 //! 再交给 [`ResidentInstance::execute`] 执行。平台能力通过 `bps_platform::Platform`
 //! 注入，测试时换成 `bps-platform-fake`。
 //!
+//! 热键绑定来自配置文件 [`Config`]：[`ResidentInstance::start`] 读取（首次运行时写入
+//! [`DEFAULT_CONFIG`]）并注册热键，配置文件被外部修改后自动重新加载。
+//!
 //! 其他进程（`bps` CLI、再次启动的程序）用 [`forward`] / [`run_cli`] 把 [`Request`]
 //! 经 `bps_platform::ResidentChannel` 转交给常驻实例；常驻实例收到的请求事件由
 //! [`ResidentInstance::handle`] 转换成命令执行，并回复 [`Reply`]。
+//!
+//! 开机自启与以管理员身份运行由配置文件的 `autostart` / `run_as_admin` 决定，常驻实例启动时和
+//! 配置变化后按它们登记或移除开机自启（`bps_platform::Autostart`）；卸载前用
+//! [`remove_autostart`] 清理。PrtSc 被系统截图工具占用时常驻实例发出引导通知，用户在系统设置里
+//! 关闭后自动接管 PrtSc。
 //!
 //! 跨显示器拼接以公共函数提供，供虚拟桌面与区域捕获共用：[`capture_rect`] 按虚拟桌面坐标矩形
 //! 截图，[`stitch`] 把已截下的各显示器画面（[`DesktopImage`]）按位置拼接并裁剪。
@@ -15,30 +23,39 @@
 //! 之后平台递交的 `PlatformEvent::OverlayInput` 推进框选状态机，确定后从冻结帧裁剪拼接。
 
 mod action;
+mod autostart;
 mod binding;
 mod capture;
 mod cli;
 mod command;
+mod config;
 mod encode;
 mod error;
 mod filename;
 mod forward;
 mod instance;
+mod location;
 mod output;
 mod region;
 mod request;
 mod selection;
 mod stitch;
 
-pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, default_bindings};
+pub use autostart::remove_autostart;
+pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
 pub use cli::{CliOutcome, CliStatus, run_cli};
-pub use command::{CaptureMode, CaptureRequest, Command, Flow, PostCaptureAction};
+pub use command::{
+    CaptureMode, CaptureRequest, Command, Flow, PostCaptureAction, RecordingFormat,
+    RecordingOptions,
+};
+pub use config::{Config, ConfigError, DEFAULT_CONFIG};
 pub use error::CoreError;
 pub use filename::{
     DEFAULT_FILENAME_TEMPLATE, FilenameFields, FilenameTemplate, FilenameTemplateError,
 };
 pub use forward::{ForwardError, WhenNotRunning, forward};
-pub use instance::ResidentInstance;
+pub use instance::{ResidentInstance, StartOptions};
+pub use location::{DataLocation, PORTABLE_MARKER};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{Reply, Request};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};

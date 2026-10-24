@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use bps_platform::PlatformError;
 
-use crate::CaptureMode;
+use crate::{CaptureMode, PostCaptureAction};
 
 /// 执行命令失败的原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,8 +16,10 @@ pub enum CoreError {
     Encode(String),
     /// 存储目录里以 `-1`…`-N` 结尾的同名文件都已存在，找不到可用的文件名。
     TooManySameNameFiles(PathBuf),
-    /// 这个捕获模式尚未实现。
+    /// 这个捕获模式尚未实现；捕获没有开始，不产生任何产物。
     UnsupportedCaptureMode(CaptureMode),
+    /// 这个截后动作尚未实现；捕获没有开始，不产生任何产物。
+    UnsupportedAction(PostCaptureAction),
     /// 转交来的请求无法识别（例如 `bps` 与常驻实例的版本不一致），附带原始请求文本。
     InvalidRequest(String),
     /// 上一次捕获还没有结束（例如选区遮罩还开着），这次捕获被拒绝。
@@ -35,6 +37,9 @@ impl fmt::Display for CoreError {
             }
             CoreError::UnsupportedCaptureMode(mode) => {
                 write!(f, "暂不支持“{}”捕获模式", mode.label())
+            }
+            CoreError::UnsupportedAction(action) => {
+                write!(f, "暂不支持“{}”截后动作", action.label())
             }
             CoreError::InvalidRequest(message) => write!(
                 f,

@@ -86,13 +86,25 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
     );
 }
 
-/// 用默认热键绑定启动的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
+/// 默认绑定前面加一条“区域 + 复制”：默认的 PrtSc 是“区域 + 标注”，标注实现前会被整体拒绝。
+fn bindings_with_region_copy() -> Vec<HotkeyBinding> {
+    let region_copy = HotkeyBinding {
+        hotkey: Hotkey::new(Modifiers::CTRL, Key::F(8)),
+        capture: CaptureRequest::new(
+            CaptureMode::Region,
+            vec![PostCaptureAction::CopyToClipboard],
+        ),
+    };
+    [vec![region_copy], default_bindings()].concat()
+}
+
+/// 带一条“区域 + 复制”绑定的常驻实例，外加坐在屏幕前的用户：每处理完一个事件，
 /// 只要选区遮罩显示着，用户就在上面做 `gesture`。
 fn resident_instance_with_user(
     fake: &FakePlatform,
     gesture: impl Fn(&FakePlatform) -> Vec<PlatformEvent> + 'static,
 ) -> impl FnMut(PlatformEvent) + 'static {
-    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    let mut instance = ResidentInstance::new(fake.platform(), bindings_with_region_copy());
     assert!(instance.register_hotkeys().is_empty());
     let fake = fake.clone();
     move |event| {
@@ -137,6 +149,19 @@ fn bps_capture_region_reports_cancelled_when_user_presses_escape() {
     assert!(!fake.overlay_visible());
     assert!(fake.clipboard().is_empty());
     assert!(fake.files().is_empty());
+}
+
+#[test]
+fn bps_capture_region_with_default_bindings_reports_annotate_unsupported_without_overlay() {
+    let fake = two_displays_cursor_on_second();
+    let mut channel = FakeResidentChannel::running(resident_instance(&fake));
+
+    let outcome = run_cli(["capture", "region"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Unsupported, "{outcome:?}");
+    assert!(outcome.stderr.contains("标注"), "{outcome:?}");
+    assert!(!fake.overlay_visible());
+    assert!(fake.clipboard().is_empty());
 }
 
 #[test]
@@ -213,6 +238,20 @@ fn bps_capture_copies_to_clipboard_when_no_hotkey_binding_uses_that_mode() {
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert_eq!(fake.clipboard().formats(), ["PNG", "DIB"]);
+}
+
+#[test]
+fn bps_capture_without_matching_binding_uses_global_output_settings() {
+    let fake = two_displays_cursor_on_second().with_config_file("output_format = \"jpg\"\n");
+    let mut instance = ResidentInstance::start(fake.platform());
+    let mut channel = FakeResidentChannel::running(move |event| {
+        let _ = instance.handle(event);
+    });
+
+    let outcome = run_cli(["capture", "display"], &mut channel);
+
+    assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
+    assert_eq!(fake.clipboard().formats(), ["JPEG", "DIB"]);
 }
 
 #[test]

@@ -22,11 +22,11 @@ fn scaled_display() -> FakeDisplay {
     FakeDisplay::new(Rect::new(64, -10, 96, 54)).scale_factor(1.5)
 }
 
-fn copy_display_capture() -> Command {
-    Command::Capture(CaptureRequest::new(
+fn copy_display_capture() -> CaptureRequest {
+    CaptureRequest::new(
         CaptureMode::Display,
         vec![PostCaptureAction::CopyToClipboard],
-    ))
+    )
 }
 
 #[test]
@@ -38,7 +38,9 @@ fn display_capture_copies_display_under_cursor_to_clipboard_as_png_and_dib() {
         .with_cursor_at(Point::new(100, 20));
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
-    instance.execute(copy_display_capture()).unwrap();
+    instance
+        .execute(Command::Capture(copy_display_capture()))
+        .unwrap();
 
     let clipboard = fake.clipboard();
     assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
@@ -57,12 +59,11 @@ fn shift_print_screen_copies_and_auto_saves_display_under_cursor_with_default_bi
         .with_display(scaled_display())
         .with_cursor_at(Point::new(10, 10))
         .with_time(LocalDateTime::new(2026, 10, 24, 21, 30, 0));
+    let shift_print_screen = Hotkey::new(Modifiers::SHIFT, Key::PrintScreen);
     let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
     assert!(instance.register_hotkeys().is_empty());
 
-    let event = fake
-        .press(Hotkey::new(Modifiers::SHIFT, Key::PrintScreen))
-        .expect("默认绑定应注册 Shift+PrtSc");
+    let event = fake.press(shift_print_screen).expect("绑定的热键应已注册");
     instance.handle(event).unwrap();
 
     let saved = Path::new(DEFAULT_PICTURES_DIR)

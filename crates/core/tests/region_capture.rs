@@ -4,12 +4,11 @@
 //! 生成平台事件），期望图像来自假平台的 `desktop_pattern`（每个虚拟桌面像素的颜色由坐标决定）。
 
 use bps_core::{
-    CaptureMode, CaptureRequest, Command, CoreError, Flow, PostCaptureAction, ResidentInstance,
-    default_bindings,
+    CaptureMode, CaptureRequest, Command, CoreError, Flow, HotkeyBinding, PostCaptureAction,
+    ResidentInstance,
 };
 use bps_platform::{
-    Hotkey, Key, LocalDateTime, Modifiers, OverlayInput, OverlayKey, PlatformEvent, Point,
-    PointerButton, Rect,
+    Hotkey, LocalDateTime, OverlayInput, OverlayKey, PlatformEvent, Point, PointerButton, Rect,
 };
 use bps_platform_fake::{FakeDisplay, FakePlatform, desktop_pattern};
 
@@ -342,15 +341,20 @@ fn exit_during_region_capture_closes_overlay_without_any_product() {
 }
 
 #[test]
-fn print_screen_default_binding_copies_selected_region() {
+fn hotkey_bound_to_region_capture_opens_overlay_and_copies_selected_region() {
     let fake = single_display();
-    let mut instance = ResidentInstance::new(fake.platform(), default_bindings());
+    let hotkey: Hotkey = "Ctrl+Alt+A".parse().unwrap();
+    let binding = HotkeyBinding {
+        hotkey,
+        capture: CaptureRequest::new(
+            CaptureMode::Region,
+            vec![PostCaptureAction::CopyToClipboard],
+        ),
+    };
+    let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     assert!(instance.register_hotkeys().is_empty());
 
-    let print_screen = fake
-        .press(Hotkey::new(Modifiers::NONE, Key::PrintScreen))
-        .expect("默认绑定应注册 PrtSc");
-    instance.handle(print_screen).unwrap();
+    instance.handle(fake.press(hotkey).unwrap()).unwrap();
     assert!(fake.overlay_visible());
     let region = Rect::new(10, 5, 20, 12);
     feed(&mut instance, fake.select_region(region));

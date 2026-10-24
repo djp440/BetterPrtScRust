@@ -5,9 +5,11 @@
 //! 可用环境变量 `BPS_LATENCY_COLD_RUNS`（默认 5）、`BPS_LATENCY_TRIGGERS`（每次冷启动后的
 //! 后续触发次数，默认 10）调整次数。
 //!
-//! 过程：冷启动 release 版 `BetterPrtSc.exe`（常驻实例），空闲 2 s 后记录私有工作集；
+//! 过程：冷启动 release 版 `BetterPrtSc.exe`（常驻实例），空闲 2 s 后记录私有工作集。
+//! 常驻实例的 `APPDATA` 指向临时目录，那里预先写好只有一条“区域 + 复制”绑定的配置文件
+//! （默认的 PrtSc 是“区域 + 标注”，标注实现前会被拒绝），不碰真实的 %APPDATA%。
 //! 在主显示器左上角放一个置顶小色块窗口，每次触发前换一种颜色；
-//! 向常驻实例投递 PrtSc 绑定的 `WM_HOTKEY`（`t0` = 投递前的 QPC），
+//! 向常驻实例投递这条绑定的 `WM_HOTKEY`（`t0` = 投递前的 QPC），
 //! 另开一路 Desktop Duplication 盯着色块：第一次看到“被遮罩压暗的本次色块”的桌面帧，
 //! 其 `LastPresentTime` 就是遮罩真正上屏的时刻，延迟 = `LastPresentTime − t0`。
 //! 遮罩显示 250 ms 后向遮罩窗口投递 Esc 关闭，间隔 250–450 ms 再触发下一次。
@@ -62,8 +64,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, w};
 
-/// 默认绑定里 PrtSc（区域截图）是第 2 条，热键标识为 2。
-const REGION_HOTKEY_ID: usize = 2;
+/// 测量用的配置：唯一一条绑定是“区域 + 复制”，热键标识为 1。
+const CONFIG: &str = "[[bindings]]
+hotkey = \"Ctrl+Alt+Shift+F8\"
+mode = \"region\"
+actions = [\"copy_to_clipboard\"]
+";
+const REGION_HOTKEY_ID: usize = 1;
 const VK_ESCAPE: usize = 0x1B;
 /// 色块边长（物理像素）。
 const PATCH: i32 = 32;
@@ -468,7 +475,12 @@ struct Resident {
 
 impl Resident {
     fn start() -> Self {
+        let app_data = std::env::temp_dir().join("bps-overlay-latency");
+        let config_dir = app_data.join("BetterPrtSc");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config.toml"), CONFIG).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_BetterPrtSc"))
+            .env("APPDATA", &app_data)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -686,6 +698,7 @@ fn hotkey_to_overlay_latency() {
     }
     drop(patch);
     drop(watcher);
+    let _ = fs::remove_dir_all(std::env::temp_dir().join("bps-overlay-latency"));
 
     say("## 汇总".to_owned());
     say(summary("冷启动后首次（热键 → 遮罩上屏）", &first));

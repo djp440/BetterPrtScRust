@@ -14,6 +14,14 @@ use crate::{
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 
+/// 这个截后动作是否已经实现。实现新的截后动作时在这里登记，并在 [`run`] 里处理它。
+pub(crate) fn is_implemented(action: PostCaptureAction) -> bool {
+    matches!(
+        action,
+        PostCaptureAction::CopyToClipboard | PostCaptureAction::AutoSave
+    )
+}
+
 /// 对截图执行截后动作。
 ///
 /// 复制到剪贴板和自动存储共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次）。
