@@ -40,9 +40,13 @@ use toolbar::{Button, Controls, Toolbar};
 
 /// MP4 的默认帧率。
 const DEFAULT_MP4_FRAME_RATE: u32 = 30;
+/// GIF 的默认帧率：每帧最多 256 色，文件比 MP4 大得多，所以默认取低一些。
+const DEFAULT_GIF_FRAME_RATE: u32 = 15;
 /// MP4 的最小宽高（像素）。Windows 上的 H.264 编码器（硬件和系统自带的软件编码器）都不接受
 /// 宽或高不超过 32 像素的画面。
 const MP4_MIN_SIZE: u32 = 34;
+/// GIF 没有编码器的尺寸限制，只要求画面不是空的。
+const GIF_MIN_SIZE: u32 = 1;
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -114,15 +118,13 @@ struct Settings {
 impl Settings {
     fn of(request: &CaptureRequest) -> Result<Self, CoreError> {
         let options = &request.recording;
-        let format = match options.format.unwrap_or(RecordingFormat::Mp4) {
-            RecordingFormat::Mp4 => VideoFormat::Mp4,
-            unsupported @ RecordingFormat::Gif => {
-                return Err(CoreError::UnsupportedRecordingFormat(unsupported));
-            }
+        let (format, default_frame_rate) = match options.format.unwrap_or(RecordingFormat::Mp4) {
+            RecordingFormat::Mp4 => (VideoFormat::Mp4, DEFAULT_MP4_FRAME_RATE),
+            RecordingFormat::Gif => (VideoFormat::Gif, DEFAULT_GIF_FRAME_RATE),
         };
         Ok(Self {
             format,
-            frame_rate: options.frame_rate.unwrap_or(DEFAULT_MP4_FRAME_RATE),
+            frame_rate: options.frame_rate.unwrap_or(default_frame_rate),
             show_cursor: options.show_cursor.unwrap_or(true),
         })
     }
@@ -130,10 +132,11 @@ impl Settings {
     fn extension(&self) -> &'static str {
         match self.format {
             VideoFormat::Mp4 => "mp4",
+            VideoFormat::Gif => "gif",
         }
     }
 
-    /// 实际录制的范围。H.264 按 2×2 像素块采样色度，MP4 的宽高必须是偶数：
+    /// 实际录制的范围。GIF 原样录制。H.264 按 2×2 像素块采样色度，MP4 的宽高必须是偶数：
     /// 奇数时去掉最右一列 / 最下一行；去掉之后仍要不小于 [`MP4_MIN_SIZE`]。
     fn video_rect(&self, region: Rect) -> Result<Rect, CoreError> {
         let (rect, minimum) = match self.format {
@@ -141,6 +144,7 @@ impl Settings {
                 Rect::new(region.x, region.y, region.width & !1, region.height & !1),
                 MP4_MIN_SIZE,
             ),
+            VideoFormat::Gif => (region, GIF_MIN_SIZE),
         };
         if rect.width < minimum || rect.height < minimum {
             return Err(CoreError::RecordingRegionTooSmall { region, minimum });

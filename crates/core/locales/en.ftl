@@ -68,7 +68,6 @@ error-unsupported-capture-mode = The “{ $mode }” capture mode is not support
 error-unsupported-action = The “{ $action }” post-capture action is not supported yet
 error-invalid-request = The resident instance did not understand the request “{ $request }”; make sure bps and BetterPrtSc are the same version
 error-capture-in-progress = The previous capture has not finished yet
-error-unsupported-recording-format = The “{ $format }” recording format is not supported yet
 error-recording-region-too-small = The { $width } × { $height } region is too small to record (width and height must be at least { $minimum } pixels)
 error-nothing-recorded = Nothing was recorded
 error-recording-in-progress-hotkey = Recording in progress; press { $hotkey } to stop it before capturing

@@ -68,7 +68,6 @@ error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
 error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
 error-capture-in-progress = 上一次捕获还没有结束
-error-unsupported-recording-format = 暂不支持“{ $format }”录屏格式
 error-recording-region-too-small = 区域 { $width } × { $height } 太小，无法录屏（宽和高至少 { $minimum } 像素）
 error-nothing-recorded = 没有录到任何画面
 error-recording-in-progress-hotkey = 正在录屏，按 { $hotkey } 停止录制后再捕获

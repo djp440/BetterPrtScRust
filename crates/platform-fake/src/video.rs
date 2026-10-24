@@ -196,6 +196,7 @@ impl VideoWriter for FakeVideoWriter {
         let mut bytes = FAKE_VIDEO_MAGIC.to_vec();
         bytes.extend_from_slice(match self.settings.format {
             VideoFormat::Mp4 => b"mp4\0",
+            VideoFormat::Gif => b"gif\0",
         });
         for value in [
             self.settings.width,

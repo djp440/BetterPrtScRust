@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 bps-platform.workspace = true
+# 录屏 GIF 编码器（纯 Rust）。
+gif.workspace = true
 serde.workspace = true
 # 只用来读 GitHub Releases 回复里的版本号和发布页面（检查更新）。
 serde_json.workspace = true
