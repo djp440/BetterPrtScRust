@@ -4,9 +4,10 @@ use bps_platform::{
     RegisterHotkeyError, StandaloneWindow, TrayMenuItem, TrayMenuItemId,
 };
 
+use crate::active::ActiveCapture;
 use crate::capture::CaptureFailure;
 use crate::long_screenshot::LongScreenshotCapture;
-use crate::recording::{self, Recording};
+use crate::recording::Recording;
 use crate::region::{Ending, RegionCapture};
 use crate::window::WindowCapture;
 use crate::{
@@ -57,14 +58,8 @@ pub struct ResidentInstance {
     update: UpdateStatus,
     /// 本次运行中已经提示过的新版本，同一个版本只提示一次。
     announced_version: Option<String>,
-    /// 进行中的区域捕获（以及其他要在选区遮罩上标注的捕获）。
-    region_capture: Option<RegionCapture>,
-    /// 进行中的录屏（框选区域或正在录制）。
-    recording: Option<Recording>,
-    /// 进行中的窗口捕获。
-    window_capture: Option<WindowCapture>,
-    /// 进行中的长截屏。
-    long_screenshot: Option<LongScreenshotCapture>,
+    /// 进行中的捕获（区域、窗口、长截屏、录屏）；同一时刻最多一个。
+    active: Option<ActiveCapture>,
 }
 
 /// 命令执行到哪一步了。
@@ -72,7 +67,7 @@ enum Progress {
     /// 命令已执行完。
     Done(Flow),
     /// 已开始一次需要用户操作的捕获，结束时才有结果。
-    Pending,
+    AwaitingUser,
 }
 
 impl ResidentInstance {
@@ -93,10 +88,7 @@ impl ResidentInstance {
             restarting_as_administrator: false,
             update: UpdateStatus::Disabled,
             announced_version: None,
-            region_capture: None,
-            recording: None,
-            window_capture: None,
-            long_screenshot: None,
+            active: None,
         }
     }
 
@@ -322,6 +314,7 @@ impl ResidentInstance {
             PlatformEvent::ConfigFileChanged
             | PlatformEvent::PrintScreenKeySettingChanged
             | PlatformEvent::LatestReleaseFetched(_)
+            | PlatformEvent::BackgroundJobDone
             | PlatformEvent::OverlayInput(_)
             | PlatformEvent::Tick
             | PlatformEvent::RegionSampled => None,
@@ -344,14 +337,10 @@ impl ResidentInstance {
             }
             PlatformEvent::RequestReceived(request) => return self.serve(request),
             PlatformEvent::OverlayInput(input) => return self.on_overlay_input(&input),
-            PlatformEvent::Tick => {
-                // 节拍同时驱动录屏和长截屏的采样（两者不会同时进行）。
-                if self.long_screenshot.is_some() {
-                    return self.on_region_sampled();
-                }
-                return self.advance_recording(Recording::on_tick);
-            }
-            PlatformEvent::RegionSampled => return self.on_region_sampled(),
+            // 节拍同时驱动录屏和长截屏的采样（两者不会同时进行）。
+            PlatformEvent::Tick => return self.advance(ActiveCapture::on_tick),
+            PlatformEvent::RegionSampled => return self.advance(ActiveCapture::on_region_sampled),
+            PlatformEvent::BackgroundJobDone => return self.on_background_done(),
             PlatformEvent::LatestReleaseFetched(result) => {
                 self.latest_release_fetched(result);
                 return Ok(Flow::Continue);
@@ -376,21 +365,24 @@ impl ResidentInstance {
         }
     }
 
+    /// 后台编码完成：在事件循环线程上继续后续步骤；失败的用通知告诉用户。
+    fn on_background_done(&mut self) -> Result<Flow, CoreError> {
+        let mut first = None;
+        for failure in action::run_continuations(&mut self.platform) {
+            self.notify_capture_failure(&failure);
+            first.get_or_insert(failure.error);
+        }
+        first.map_or(Ok(Flow::Continue), Err)
+    }
+
     /// 热键触发的捕获失败时通知用户；截后动作已经就这次失败通知过的不再重复。
     fn notify_capture_failure(&self, failure: &CaptureFailure) {
         if failure.notified {
             return;
         }
         let texts = self.texts();
-        let title = match failure.error {
-            CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-                "notification-unsupported-title"
-            }
-            CoreError::RecordingInProgress { .. } => "notification-recording-in-progress-title",
-            _ => "notification-capture-failed-title",
-        };
         self.platform.notifier.notify(Notification {
-            title: texts.get(title),
+            title: texts.get(failure.error.notification_title()),
             body: failure.error.localized(texts),
             on_click: None,
         });
@@ -413,15 +405,9 @@ impl ResidentInstance {
                 incoming.reply(Reply::Done.encode());
                 Ok(flow)
             }
-            Ok(Progress::Pending) => {
-                if let Some(capture) = self.region_capture.as_mut() {
-                    capture.requester = Some(incoming);
-                } else if let Some(recording) = self.recording.as_mut() {
-                    recording.requester = Some(incoming);
-                } else if let Some(capture) = self.window_capture.as_mut() {
-                    capture.requester = Some(incoming);
-                } else if let Some(capture) = self.long_screenshot.as_mut() {
-                    capture.requester = Some(incoming);
+            Ok(Progress::AwaitingUser) => {
+                if let Some(active) = self.active.as_mut() {
+                    active.set_requester(incoming);
                 }
                 Ok(Flow::Continue)
             }
@@ -452,19 +438,16 @@ impl ResidentInstance {
         })
     }
 
-    /// 执行一次捕获：先确认捕获模式和截后动作都已实现，再捕获、执行截后动作。
+    /// 执行一次捕获：捕获、执行截后动作。
     ///
-    /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::Pending`]），之后由遮罩上的输入推进。
+    /// 区域捕获只拍下冻结帧、显示选区遮罩（[`Progress::AwaitingUser`]），之后由遮罩上的输入推进。
     fn capture(&mut self, request: &CaptureRequest) -> Result<Progress, CaptureFailure> {
-        if let Some(recording) = &self.recording {
+        if let Some(ActiveCapture::Recording(recording)) = &self.active {
             if recording.is_recording() && recording.request() == request {
                 // 再按一次开始录屏的热键：停止录制。录屏的结果已经回复给发起录屏的请求或通知过用户。
                 return match self.stop_recording() {
                     Ok(flow) => Ok(Progress::Done(flow)),
-                    Err(error) => Err(CaptureFailure {
-                        error,
-                        notified: true,
-                    }),
+                    Err(error) => Err(CaptureFailure::already_notified(error)),
                 };
             }
             if recording.is_recording() {
@@ -479,50 +462,41 @@ impl ResidentInstance {
                     CoreError::RecordingInProgress { stop_hotkey },
                 ));
             }
-            // 还在框选，遮罩正显示着，热键触发时不再通知。
-            return Err(CaptureFailure {
-                error: CoreError::CaptureInProgress,
-                notified: true,
-            });
         }
-        if self.region_capture.is_some()
-            || self.window_capture.is_some()
-            || self.long_screenshot.is_some()
-        {
-            // 遮罩正显示着，用户看得到这次捕获还没结束，热键触发时不再通知。
-            return Err(CaptureFailure {
-                error: CoreError::CaptureInProgress,
-                notified: true,
-            });
+        if self.active.is_some() {
+            // 遮罩正显示着（录屏还在框选时也是），用户看得到这次捕获还没结束，热键触发时不再通知。
+            return Err(CaptureFailure::already_notified(
+                CoreError::CaptureInProgress,
+            ));
         }
-        ensure_implemented(request).map_err(CaptureFailure::before_actions)?;
         let texts = self.texts();
         if request.actions.contains(&PostCaptureAction::Record) {
             let recording = Recording::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
-            self.recording = Some(recording);
-            return Ok(Progress::Pending);
+            self.active = Some(ActiveCapture::Recording(recording));
+            return Ok(Progress::AwaitingUser);
         }
         // 长截屏不论什么模式都先在选区遮罩上框选区域，之后的截后动作（含标注）由它负责。
         if request.actions.contains(&PostCaptureAction::LongScreenshot) {
             let capture = LongScreenshotCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
-            self.long_screenshot = Some(capture);
-            return Ok(Progress::Pending);
+            self.active = Some(ActiveCapture::LongScreenshot(capture));
+            return Ok(Progress::AwaitingUser);
+        }
+        // 窗口模式先悬停高亮、单击选窗，标注（如果有）在窗口截图上进行。
+        if request.mode == CaptureMode::Window {
+            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
+                .map_err(CaptureFailure::before_actions)?;
+            self.active = Some(ActiveCapture::Window(capture));
+            return Ok(Progress::AwaitingUser);
         }
         if request.mode == CaptureMode::Region
             || request.actions.contains(&PostCaptureAction::Annotate)
         {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
-            self.region_capture = Some(capture);
-            return Ok(Progress::Pending);
-        }
-        if request.mode == CaptureMode::Window {
-            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
-                .map_err(CaptureFailure::before_actions)?;
-            self.window_capture = Some(capture);
-            return Ok(Progress::Pending);
+            self.active = Some(ActiveCapture::Region(Box::new(capture)));
+            return Ok(Progress::AwaitingUser);
         }
         let screenshot = capture::capture(&self.platform, request.mode)
             .map_err(CaptureFailure::before_actions)?;
@@ -536,7 +510,7 @@ impl ResidentInstance {
     pub fn execute(&mut self, command: Command) -> Result<Flow, CoreError> {
         match self.run(command)? {
             Progress::Done(flow) => Ok(flow),
-            Progress::Pending => Ok(Flow::Continue),
+            Progress::AwaitingUser => Ok(Flow::Continue),
         }
     }
 
@@ -550,69 +524,31 @@ impl ResidentInstance {
             Command::Exit => {
                 // 正在录制的内容先存好再退出；还在框选时相当于取消。
                 let _ = self.stop_recording();
-                self.abandon_region_capture();
+                self.abandon_active();
                 self.unregister_hotkeys();
                 Ok(Progress::Done(Flow::Exit))
             }
         }
     }
 
-    /// 把遮罩上的输入交给进行中的区域或窗口捕获。捕获结束时回复等待中的请求；
+    /// 把遮罩上的输入交给进行中的捕获。捕获结束时回复等待中的请求；
     /// 热键触发的捕获失败时通知用户。
     fn on_overlay_input(&mut self, input: &OverlayInput) -> Result<Flow, CoreError> {
-        if self.recording.is_some() {
-            return self.advance_recording(|recording, platform| {
-                recording.on_overlay_input(platform, input)
-            });
-        }
-        if let Some(capture) = self.long_screenshot.as_mut() {
-            let Some(ending) = capture.handle(&mut self.platform, input) else {
-                return Ok(Flow::Continue);
-            };
-            return self.end_long_screenshot(ending);
-        }
-        if let Some(capture) = self.window_capture.as_mut() {
-            let Some(ending) = capture.handle(&mut self.platform, input) else {
-                return Ok(Flow::Continue);
-            };
-            let requester = self
-                .window_capture
-                .take()
-                .and_then(|capture| capture.requester);
-            return self.end_overlay_capture(requester, ending);
-        }
-        let Some(capture) = self.region_capture.as_mut() else {
-            return Ok(Flow::Continue);
-        };
-        let Some(ending) = capture.handle(&mut self.platform, input) else {
-            return Ok(Flow::Continue);
-        };
-        let requester = self
-            .region_capture
-            .take()
-            .and_then(|capture| capture.requester);
-        self.end_overlay_capture(requester, ending)
+        self.advance(|active, platform| active.on_overlay_input(platform, input))
     }
 
-    /// 长截屏期间平台采到了新画面：交给进行中的长截屏（高度到达上限时它会自动结束）。
-    fn on_region_sampled(&mut self) -> Result<Flow, CoreError> {
-        let Some(capture) = self.long_screenshot.as_mut() else {
-            return Ok(Flow::Continue);
-        };
-        let Some(ending) = capture.on_sample(&mut self.platform) else {
-            return Ok(Flow::Continue);
-        };
-        self.end_long_screenshot(ending)
-    }
-
-    fn end_long_screenshot(
+    /// 用 `step` 推进进行中的捕获（遮罩上的输入、节拍、采样、停止）；捕获因此结束时收尾。
+    fn advance(
         &mut self,
-        ending: Result<Ending, CaptureFailure>,
+        step: impl FnOnce(&mut ActiveCapture, &mut Platform) -> Option<Result<Ending, CaptureFailure>>,
     ) -> Result<Flow, CoreError> {
-        let requester = self
-            .long_screenshot
-            .take()
-            .and_then(|capture| capture.requester);
+        let Some(active) = self.active.as_mut() else {
+            return Ok(Flow::Continue);
+        };
+        let Some(ending) = step(active, &mut self.platform) else {
+            return Ok(Flow::Continue);
+        };
+        let requester = self.active.take().and_then(ActiveCapture::into_requester);
         self.end_overlay_capture(requester, ending)
     }
 
@@ -625,7 +561,7 @@ impl ResidentInstance {
         match (requester, ending) {
             (Some(requester), ending) => {
                 let reply = match &ending {
-                    Ok(Ending::Captured) => Reply::Done,
+                    Ok(Ending::Delivered) => Reply::Done,
                     Ok(Ending::Cancelled) => Reply::Cancelled,
                     Err(failure) => reply_for_error(&failure.error, self.texts()),
                 };
@@ -640,56 +576,19 @@ impl ResidentInstance {
         }
     }
 
-    /// 用 `step` 推进进行中的录屏（遮罩上的输入、节拍、停止）；录屏因此结束时收尾。
-    fn advance_recording(
-        &mut self,
-        step: impl FnOnce(
-            &mut Recording,
-            &mut Platform,
-        ) -> Option<Result<recording::Ending, CaptureFailure>>,
-    ) -> Result<Flow, CoreError> {
-        let Some(recording) = self.recording.as_mut() else {
-            return Ok(Flow::Continue);
-        };
-        let Some(ending) = step(recording, &mut self.platform) else {
-            return Ok(Flow::Continue);
-        };
-        let requester = self
-            .recording
-            .take()
-            .and_then(|recording| recording.requester);
-        let ending = ending.map(|ending| match ending {
-            recording::Ending::Saved => Ending::Captured,
-            recording::Ending::Cancelled => Ending::Cancelled,
-        });
-        self.end_overlay_capture(requester, ending)
-    }
-
-    /// 停止进行中的录屏：正在录制时存储已录下的内容，还在框选时取消。
+    /// 停止进行中的录屏：正在录制时存储已录下的内容，还在框选时取消。没有录屏时什么也不做。
     fn stop_recording(&mut self) -> Result<Flow, CoreError> {
-        self.advance_recording(|recording, platform| Some(recording.stop(platform)))
+        self.advance(ActiveCapture::stop_recording)
     }
 
-    /// 放弃进行中的区域、窗口捕获或长截屏：停止采样、关闭遮罩，等待中的请求收到“已取消”。
-    fn abandon_region_capture(&mut self) {
-        let requester = match (
-            self.region_capture.take(),
-            self.window_capture.take(),
-            self.long_screenshot.take(),
-        ) {
-            (Some(capture), ..) => Some(capture.requester),
-            (None, Some(capture), _) => Some(capture.requester),
-            (None, None, Some(mut capture)) => {
-                capture.abandon(&mut self.platform);
-                Some(capture.requester)
-            }
-            (None, None, None) => None,
+    /// 放弃进行中的捕获：停止采样、关闭遮罩，等待中的请求收到“已取消”。
+    fn abandon_active(&mut self) {
+        let Some(mut active) = self.active.take() else {
+            return;
         };
-        if let Some(requester) = requester {
-            self.platform.overlay.close();
-            if let Some(requester) = requester {
-                requester.reply(Reply::Cancelled.encode());
-            }
+        active.abandon(&mut self.platform);
+        if let Some(requester) = active.into_requester() {
+            requester.reply(Reply::Cancelled.encode());
         }
     }
 
@@ -991,27 +890,7 @@ impl ResidentInstance {
 
 /// 命令执行失败时给请求发起方的回复，说明文字用 `texts` 的语言。
 fn reply_for_error(error: &CoreError, texts: &Texts) -> Reply {
-    match error {
-        CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_) => {
-            Reply::Unsupported(error.localized(texts))
-        }
-        _ => Reply::Failed(error.localized(texts)),
-    }
-}
-
-/// 尚未实现的捕获模式或截后动作在捕获开始之前就拒绝整个请求，不产生任何产物。
-fn ensure_implemented(request: &CaptureRequest) -> Result<(), CoreError> {
-    if !capture::is_implemented(request.mode) {
-        return Err(CoreError::UnsupportedCaptureMode(request.mode));
-    }
-    match request
-        .actions
-        .iter()
-        .find(|a| !action::is_implemented(**a))
-    {
-        Some(action) => Err(CoreError::UnsupportedAction(*action)),
-        None => Ok(()),
-    }
+    Reply::Failed(error.localized(texts))
 }
 
 /// 不带修饰键的 PrtSc：系统截图工具占用的只有它。

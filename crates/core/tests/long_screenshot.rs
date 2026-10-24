@@ -7,7 +7,7 @@
 //! 画面变化后采到一帧。期望的长截屏直接从文档裁剪得到。
 
 use bps_core::{
-    CaptureMode, CaptureRequest, CliStatus, Command, CoreError, Flow, HotkeyBinding,
+    CaptureMode, CaptureRequest, CliStatus, Command, CoreError, Flow, HotkeyBinding, Locale,
     LongScreenshot, PostCaptureAction, ResidentInstance, run_cli,
 };
 use bps_platform::{
@@ -575,7 +575,7 @@ fn bps_capture_region_with_long_screenshot_binding_replies_after_user_finishes()
         }
     });
 
-    let outcome = run_cli(["capture", "region"], &mut channel);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     let copied = fake.clipboard().png_image().unwrap();

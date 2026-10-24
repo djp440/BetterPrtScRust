@@ -10,7 +10,6 @@ tray-exit = 退出
 
 notification-hotkey-failed-title = 热键注册失败
 notification-hotkey-failed-line = { $hotkey }：{ $reason }
-notification-unsupported-title = 暂不支持
 notification-capture-failed-title = 捕获失败
 notification-saved-title = 截图已保存
 notification-save-failed-title = 自动存储失败
@@ -64,8 +63,6 @@ error-platform = 平台调用失败：{ $error }
 error-no-display = 没有可用的显示器
 error-encode = 截图编码失败：{ $error }
 error-too-many-same-name-files = 同名文件过多，找不到可用的文件名：{ $path }
-error-unsupported-capture-mode = 暂不支持“{ $mode }”捕获模式
-error-unsupported-action = 暂不支持“{ $action }”截后动作
 error-invalid-request = 常驻实例无法识别请求“{ $request }”，请确认 bps 与 BetterPrtSc 的版本一致
 error-capture-in-progress = 上一次捕获还没有结束
 error-recording-region-too-small = 区域 { $width } × { $height } 太小，无法录屏（宽和高至少 { $minimum } 像素）
@@ -232,3 +229,27 @@ long-screenshot-size = 已拼接 { $width } × { $height }
 long-screenshot-lost = 滚动太快，请往回滚一点
 notification-long-screenshot-full-title = 长截屏已到达高度上限
 notification-long-screenshot-full-body = 长截屏最高 { $limit } 像素，已自动停止拼接。
+
+# bps 命令行
+config-toml-error = 配置文件格式错误：{ $message }
+cli-usage =
+    用法：bps capture <捕获模式>
+
+    把捕获命令转交给 BetterPrtSc 常驻实例执行，行为与按下对应热键一致：
+    采用第一条该捕获模式的热键绑定的截后动作，没有这样的绑定时复制到剪贴板。
+    常驻实例没在运行时会先启动它。
+cli-usage-modes = 捕获模式：
+cli-exit-codes = 退出码：
+cli-exit-success = 成功
+cli-exit-failed = 常驻实例执行命令失败
+cli-exit-usage = 参数有误
+cli-exit-unreachable = 无法连接或启动常驻实例
+cli-exit-cancelled = 用户取消了这次捕获（例如在选区遮罩上按了 Esc）
+cli-cancelled = 已取消
+cli-failed = 执行失败：{ $message }
+cli-unreachable = 无法把命令转交给常驻实例：{ $error }
+cli-unknown-mode = 未知的捕获模式：{ $mode }
+cli-missing-mode = 缺少捕获模式
+cli-extra-argument = 多余的参数：{ $argument }
+cli-missing-command = 缺少命令
+cli-unknown-command = 未知的命令：{ $command }

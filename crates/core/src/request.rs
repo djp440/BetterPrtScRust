@@ -2,7 +2,7 @@
 //!
 //! 文本形式是 `bps` / 再次启动的程序 / 设置界面与常驻实例之间的约定：一条请求、一条回复，UTF-8。
 //! - 请求：`capture <捕获模式名>`、`activate`、`status`
-//! - 回复：`ok`、`cancelled`、`unsupported <说明>`、`failed <说明>`，以及对 `status` 的状态回复
+//! - 回复：`ok`、`cancelled`、`failed <说明>`，以及对 `status` 的状态回复
 //!   （格式见 [`ResidentStatus`]）
 
 use crate::{CaptureMode, ResidentStatus};
@@ -25,8 +25,6 @@ pub enum Reply {
     Done,
     /// 用户取消了这次捕获（例如在选区遮罩上按了 Esc），没有任何产物。
     Cancelled,
-    /// 常驻实例暂不支持这条命令（例如尚未实现的捕获模式），附带给人看的说明。
-    Unsupported(String),
     /// 命令执行失败，附带给人看的说明。
     Failed(String),
     /// 对 [`Request::Status`] 的回复。
@@ -60,7 +58,6 @@ impl Reply {
         match self {
             Reply::Done => "ok".to_owned(),
             Reply::Cancelled => "cancelled".to_owned(),
-            Reply::Unsupported(message) => format!("unsupported {message}"),
             Reply::Failed(message) => format!("failed {message}"),
             Reply::Status(status) => status.encode(),
         }
@@ -74,7 +71,6 @@ impl Reply {
         match message.split_once(' ') {
             None if message == "ok" => Reply::Done,
             None if message == "cancelled" => Reply::Cancelled,
-            Some(("unsupported", text)) => Reply::Unsupported(text.to_owned()),
             Some(("failed", text)) => Reply::Failed(text.to_owned()),
             _ => Reply::Failed(format!("无法识别常驻实例的回复：{message}")),
         }

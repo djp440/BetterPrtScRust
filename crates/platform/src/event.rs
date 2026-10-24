@@ -31,4 +31,7 @@ pub enum PlatformEvent {
     /// [`crate::UpdateService::request_latest_release`] 的查询结果；
     /// `Ok(None)` 表示仓库还没有发布过正式版本。
     LatestReleaseFetched(Result<Option<LatestRelease>, PlatformError>),
+    /// [`crate::BackgroundWorker::spawn`] 提交的一个任务完成了，用
+    /// [`crate::BackgroundWorker::take_finished`] 取出结果。
+    BackgroundJobDone,
 }

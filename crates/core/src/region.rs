@@ -16,7 +16,7 @@ use bps_platform::{
     PlatformError, Point, Rect,
 };
 
-use crate::annotation::finish;
+use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Finish, Response};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
 use crate::magnifier::Magnifier;
@@ -29,7 +29,7 @@ use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, ac
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ending {
     /// 截图已交给截后动作处理。
-    Captured,
+    Delivered,
     /// 用户取消了，没有任何产物。
     Cancelled,
 }
@@ -150,7 +150,7 @@ impl RegionCapture {
                 self.finish_annotation(platform, Finish::CopyToClipboard)
             }
             Step::Confirmed(region) => {
-                Some(self.finish(platform, region).map(|()| Ending::Captured))
+                Some(self.finish(platform, region).map(|()| Ending::Delivered))
             }
             Step::Cancelled => {
                 platform.overlay.close();
@@ -193,12 +193,15 @@ impl RegionCapture {
             annotator,
             region,
             &self.request,
-            self.captured_at,
+            &Origin {
+                captured_at: self.captured_at,
+                window_title: None,
+            },
             finish,
             self.texts,
         ) {
             None => self.keep_going(platform),
-            Some(result) => Some(result.map(|()| Ending::Captured)),
+            Some(result) => Some(result.map(|()| Ending::Delivered)),
         }
     }
 

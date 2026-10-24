@@ -60,7 +60,7 @@ $programFiles = foreach ($name in 'BetterPrtSc.exe', 'bps.exe') {
     $path
 }
 $license = Get-ChildItem -LiteralPath $repoRoot -File | Where-Object Name -in 'LICENSE', 'LICENSE.txt', 'COPYING' | Select-Object -First 1
-if (-not $license) { Write-CiMessage warning '仓库根目录没有 LICENSE 文件，产物中不含许可证文本' }
+if (-not $license) { throw "仓库根目录没有 LICENSE 文件（GPL-3.0 要求随产物分发许可证文本）：$repoRoot" }
 
 $OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 New-Item -ItemType Directory -Force $OutDir | Out-Null

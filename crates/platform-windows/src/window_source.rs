@@ -19,8 +19,9 @@ use windows::core::BOOL;
 
 use crate::window_capture::{BgraFrame, WindowCaptureSession};
 
-/// 等待第一帧窗口画面的最长时间。
-const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(2);
+/// 等待第一帧窗口画面的最长时间。这是在事件循环线程上同步等待的，所以要短：正常情况下第一帧
+/// 几十毫秒内就到，等到超时说明窗口不可捕获（最小化、正在关闭、不允许捕获），此时捕获失败并通知用户。
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(400);
 /// 圆角最多可能占的范围（物理像素）：Win11 的圆角半径是 8 DIP，800% 缩放下 64 像素。
 const CORNER_ZONE: u32 = 64;
 /// 圆角以外残留的阴影最多这么不透明（实测 Win11 在 7–36 之间，窗口描边约 110）。

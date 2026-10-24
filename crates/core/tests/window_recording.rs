@@ -275,3 +275,65 @@ fn window_recording_supports_gif_output() {
     assert_eq!((video.width, video.height), (80, 60));
     assert_eq!(video.frames.len(), 15);
 }
+
+#[test]
+fn toolbar_appears_while_recording_a_window_and_disappears_when_it_stops() {
+    let fake = desktop();
+    let mut instance = recording(&fake);
+    record_for(&fake, &mut instance, Duration::from_secs(1));
+
+    let toolbar = fake.recording_toolbar().expect("录制窗口时应显示控制条");
+    let texts = toolbar.texts();
+    assert!(
+        texts.contains(&"00:01") && texts.contains(&"暂停") && texts.contains(&"停止"),
+        "{texts:?}"
+    );
+
+    feed(&mut instance, fake.click_recording_toolbar("停止"));
+
+    assert_eq!(fake.recording_toolbar(), None);
+    assert!(!fake.capturing_video());
+    assert_eq!(read_saved_video(&fake).frames.len(), 30);
+}
+
+#[test]
+fn pausing_window_recording_stops_timer_and_leaves_paused_time_out_of_video() {
+    let fake = desktop();
+    let mut instance = recording(&fake);
+    record_for(&fake, &mut instance, Duration::from_secs(1));
+
+    feed(&mut instance, fake.click_recording_toolbar("暂停"));
+    record_for(&fake, &mut instance, Duration::from_secs(3));
+    let texts = fake.recording_toolbar().unwrap().texts().join(" ");
+    assert!(texts.contains("继续") && texts.contains("00:01"), "{texts}");
+
+    feed(&mut instance, fake.click_recording_toolbar("继续"));
+    record_for(&fake, &mut instance, Duration::from_secs(1));
+    let video = stop_and_read_video(&fake, &mut instance);
+
+    assert_eq!(video.frames.len(), 60, "只有录制的 2 秒，30 fps");
+    let expected = window_pattern(80, 60);
+    assert!(video.frames.iter().all(|f| f.image == expected));
+    assert_eq!(
+        video.frames[30].timestamp,
+        Duration::from_secs(1),
+        "时间轴连续"
+    );
+}
+
+#[test]
+fn window_closing_while_paused_saves_only_recorded_time() {
+    let fake = desktop();
+    let mut instance = recording(&fake);
+    record_for(&fake, &mut instance, Duration::from_millis(500));
+    feed(&mut instance, fake.click_recording_toolbar("暂停"));
+    record_for(&fake, &mut instance, Duration::from_secs(2));
+
+    fake.close_window(0);
+    fake.advance_clock(Duration::from_millis(100));
+    instance.handle(fake.tick().unwrap()).unwrap();
+
+    assert!(!fake.capturing_video());
+    assert_eq!(fake.recording_toolbar(), None);
+    assert_eq!(read_saved_video(&fake).frames.len(), 15, "暂停的时间不算");
+}

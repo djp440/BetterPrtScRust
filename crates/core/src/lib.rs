@@ -35,6 +35,7 @@
 //! 窗口布局），单击后关闭遮罩，再截取这个窗口的完整内容。
 
 mod action;
+mod active;
 mod annotation;
 mod autostart;
 mod binding;
@@ -70,7 +71,7 @@ mod window_selection;
 pub use annotation::{Annotation, AnnotationDocument, Stroke};
 pub use autostart::remove_autostart;
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
-pub use cli::{CliOutcome, CliStatus, run_cli};
+pub use cli::{CliOutcome, CliStatus, cli_locale, run_cli};
 pub use command::{
     CaptureMode, CaptureRequest, Command, Flow, PostCaptureAction, RecordingFormat,
     RecordingOptions,

@@ -41,6 +41,7 @@
 //! ```
 
 mod autostart;
+mod background;
 mod clipboard;
 mod config_file;
 pub mod decode;
@@ -84,6 +85,7 @@ pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
 pub use window_source::{FakeWindow, window_pattern};
 
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
+use background::{BackgroundState, FakeBackground};
 use clipboard::FakeClipboard;
 use config_file::{ConfigFileState, FakeConfigFile};
 use file_dialog::{DialogState, FakeFileDialog};
@@ -133,6 +135,7 @@ pub struct FakePlatform {
     sampler: Arc<Mutex<SamplerState>>,
     window_source: Arc<Mutex<WindowSourceState>>,
     ocr: Arc<Mutex<OcrState>>,
+    background: Arc<Mutex<BackgroundState>>,
     http: Arc<Mutex<HttpState>>,
 }
 
@@ -159,6 +162,7 @@ impl Default for FakePlatform {
             sampler: Default::default(),
             window_source: Default::default(),
             ocr: Default::default(),
+            background: Default::default(),
             http: Default::default(),
         }
     }
@@ -427,6 +431,7 @@ impl FakePlatform {
             windows: Box::new(FakeWindowLauncher(self.windows.clone())),
             system_language: Box::new(FakeSystemLanguage(self.system_languages.clone())),
             updates: Box::new(FakeUpdateService(self.updates.clone())),
+            background: Box::new(FakeBackground(self.background.clone())),
             autostart: Box::new(FakeAutostart(self.system.clone())),
             elevation: Box::new(FakeElevation(self.system.clone())),
             system_screenshot_tool: Box::new(FakeScreenshotTool(self.system.clone())),
@@ -636,6 +641,26 @@ impl FakePlatform {
     /// 翻译用的 HTTP 传输能力。
     pub fn http_transport(&self) -> Box<dyn HttpTransport + Send + Sync> {
         Box::new(FakeHttpTransport(self.http.clone()))
+    }
+
+    /// 已提交、还没有运行的后台任务数。
+    pub fn pending_background_jobs(&self) -> usize {
+        self.background.lock().unwrap().pending.len()
+    }
+
+    /// 让后台线程把已提交的任务按提交顺序全部运行完：返回平台事件循环会递交的完成事件
+    /// （每个任务一个，要交给常驻实例）。
+    pub fn run_background_jobs(&self) -> Vec<PlatformEvent> {
+        let mut events = Vec::new();
+        loop {
+            // 任务运行时不持有锁。
+            let Some(job) = self.background.lock().unwrap().pending.pop_front() else {
+                return events;
+            };
+            let result = job();
+            self.background.lock().unwrap().finished.push_back(result);
+            events.push(PlatformEvent::BackgroundJobDone);
+        }
     }
 
     /// 至今发出的每个 HTTP 请求，按先后排列。

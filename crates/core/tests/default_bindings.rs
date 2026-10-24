@@ -1,6 +1,6 @@
-//! 所有截后动作都已实现后，只剩“默认绑定要么能跑、要么明确报告暂不支持”这一条兜底。
+//! 默认绑定的冒烟：每个默认热键都能触发一次捕获而不出错。
 
-use bps_core::{CoreError, Flow, ResidentInstance};
+use bps_core::{Flow, ResidentInstance};
 use bps_platform::{Point, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
 
@@ -11,7 +11,7 @@ fn desktop() -> FakePlatform {
 }
 
 #[test]
-fn every_default_binding_either_runs_or_reports_unsupported() {
+fn every_default_binding_starts_its_capture() {
     let fake = desktop();
     let mut instance = ResidentInstance::start(fake.platform());
 
@@ -23,14 +23,7 @@ fn every_default_binding_either_runs_or_reports_unsupported() {
                 .handle(fake.press_key(bps_platform::OverlayKey::Escape))
                 .unwrap();
         }
-        assert!(
-            matches!(
-                result,
-                Ok(Flow::Continue)
-                    | Err(CoreError::UnsupportedCaptureMode(_) | CoreError::UnsupportedAction(_))
-            ),
-            "{hotkey}: {result:?}"
-        );
+        assert_eq!(result, Ok(Flow::Continue), "{hotkey}");
         // 需要在选区遮罩上操作的捕获（如 Ctrl+PrtSc 的窗口）已经开始：取消它，再试下一个热键。
         if fake.overlay_visible() {
             let escape = fake.press_key(bps_platform::OverlayKey::Escape);

@@ -7,7 +7,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bps_core::{CliStatus, Config, CoreError, Flow, ResidentInstance, default_bindings, run_cli};
+use bps_core::{
+    CliStatus, Config, CoreError, Flow, Locale, ResidentInstance, default_bindings, run_cli,
+};
 use bps_platform::{
     Backdrop, Hotkey, Image, Key, LocalDateTime, Modifiers, NotificationClick, OverlayKey,
     PlatformEvent, Point, Rect, VideoFormat,
@@ -612,7 +614,7 @@ fn bps_capture_region_with_record_binding_replies_after_recording_is_saved() {
             .unwrap();
     });
 
-    let outcome = run_cli(["capture", "region"], &mut channel);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     let path = saved_recording(&fake, "2000-01-01 00-00-00.mp4");

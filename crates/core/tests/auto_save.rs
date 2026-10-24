@@ -99,6 +99,10 @@ fn auto_save_encodes_file_in_each_output_format() {
         request.output.output_format = format;
 
         instance.execute(Command::Capture(request)).unwrap();
+        // AVIF 在后台编码，完成后以事件回到常驻实例。
+        for event in fake.run_background_jobs() {
+            instance.handle(event).unwrap();
+        }
 
         let expected = display().image().clone();
         let (path, bytes) = only_file(&fake);

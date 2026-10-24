@@ -3,7 +3,7 @@
 use bps_platform::ResidentChannel;
 
 use crate::request::{MODE_NAMES, mode_from_name};
-use crate::{Reply, Request, WhenNotRunning, forward};
+use crate::{Config, Locale, Reply, Request, Texts, WhenNotRunning, forward};
 
 /// `bps` 的退出状态。退出码是对脚本公开的接口，见 [`exit_code`](Self::exit_code)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,8 +14,6 @@ pub enum CliStatus {
     Failed,
     /// 参数有误。
     Usage,
-    /// 常驻实例暂不支持这条命令（例如尚未实现的捕获模式）。
-    Unsupported,
     /// 无法连接或拉起常驻实例。
     Unreachable,
     /// 用户取消了这次捕获（例如在选区遮罩上按了 Esc），没有任何产物。
@@ -28,7 +26,6 @@ impl CliStatus {
             CliStatus::Success => 0,
             CliStatus::Failed => 1,
             CliStatus::Usage => 2,
-            CliStatus::Unsupported => 3,
             CliStatus::Unreachable => 4,
             CliStatus::Cancelled => 5,
         }
@@ -60,40 +57,55 @@ impl CliOutcome {
     }
 }
 
-/// 执行一次 `bps` 调用。`args` 不含程序名。
+/// `bps` 用的界面语言：与常驻实例一致，由配置文件里的 `language` 和系统语言决定。
+/// 配置文件不存在或有错误时（常驻实例此时用默认配置）按系统语言。
+pub fn cli_locale(config_text: Option<&str>, system_languages: &[String]) -> Locale {
+    let language = config_text
+        .and_then(|text| Config::parse(text).ok())
+        .map(|config| config.language)
+        .unwrap_or_default();
+    language.resolve(system_languages)
+}
+
+/// 执行一次 `bps` 调用，输出文本用 `locale` 的语言。`args` 不含程序名。
 ///
 /// 命令转交给常驻实例执行；常驻实例没在运行时先拉起它。
-pub fn run_cli<I, S>(args: I, channel: &mut dyn ResidentChannel) -> CliOutcome
+pub fn run_cli<I, S>(args: I, channel: &mut dyn ResidentChannel, locale: Locale) -> CliOutcome
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    let texts = Texts::of(locale);
     let args: Vec<S> = args.into_iter().collect();
     let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
-    let request = match parse(&args) {
+    let request = match parse(&args, texts) {
         Parsed::Request(request) => request,
         Parsed::Help => {
             return CliOutcome {
-                stdout: usage(),
+                stdout: usage(texts),
                 ..CliOutcome::new(CliStatus::Success)
             };
         }
         Parsed::Invalid(problem) => {
-            return CliOutcome::with_stderr(CliStatus::Usage, format!("{problem}\n\n{}", usage()));
+            return CliOutcome::with_stderr(
+                CliStatus::Usage,
+                format!("{problem}\n\n{}", usage(texts)),
+            );
         }
     };
     match forward(&request, channel, WhenNotRunning::Launch) {
         Ok(Reply::Done | Reply::Status(_)) => CliOutcome::new(CliStatus::Success),
-        Ok(Reply::Cancelled) => CliOutcome::with_stderr(CliStatus::Cancelled, "已取消\n"),
-        Ok(Reply::Unsupported(message)) => {
-            CliOutcome::with_stderr(CliStatus::Unsupported, format!("{message}\n"))
-        }
-        Ok(Reply::Failed(message)) => {
-            CliOutcome::with_stderr(CliStatus::Failed, format!("执行失败：{message}\n"))
-        }
+        Ok(Reply::Cancelled) => CliOutcome::with_stderr(
+            CliStatus::Cancelled,
+            format!("{}\n", texts.get("cli-cancelled")),
+        ),
+        Ok(Reply::Failed(message)) => CliOutcome::with_stderr(
+            CliStatus::Failed,
+            format!("{}\n", texts.format("cli-failed", &[("message", &message)])),
+        ),
         Err(e) => CliOutcome::with_stderr(
             CliStatus::Unreachable,
-            format!("无法把命令转交给常驻实例：{e}\n"),
+            format!("{}\n", texts.format("cli-unreachable", &[("error", &e)])),
         ),
     }
 }
@@ -105,42 +117,47 @@ enum Parsed {
     Invalid(String),
 }
 
-fn parse(args: &[&str]) -> Parsed {
+fn parse(args: &[&str], texts: &Texts) -> Parsed {
     match args {
         ["capture", mode] => match mode_from_name(mode) {
             Some(mode) => Parsed::Request(Request::Capture(mode)),
-            None => Parsed::Invalid(format!("未知的捕获模式：{mode}")),
+            None => Parsed::Invalid(texts.format("cli-unknown-mode", &[("mode", mode)])),
         },
-        ["capture"] => Parsed::Invalid("缺少捕获模式".to_owned()),
-        ["capture", _, extra, ..] => Parsed::Invalid(format!("多余的参数：{extra}")),
+        ["capture"] => Parsed::Invalid(texts.get("cli-missing-mode")),
+        ["capture", _, extra, ..] => {
+            Parsed::Invalid(texts.format("cli-extra-argument", &[("argument", extra)]))
+        }
         ["help" | "--help" | "-h" | "/?"] => Parsed::Help,
-        [] => Parsed::Invalid("缺少命令".to_owned()),
-        [command, ..] => Parsed::Invalid(format!("未知的命令：{command}")),
+        [] => Parsed::Invalid(texts.get("cli-missing-command")),
+        [command, ..] => {
+            Parsed::Invalid(texts.format("cli-unknown-command", &[("command", command)]))
+        }
     }
 }
 
-fn usage() -> String {
-    let mut text = String::from(
-        "用法：bps capture <捕获模式>\n\
-         \n\
-         把捕获命令转交给 BetterPrtSc 常驻实例执行，行为与按下对应热键一致：\n\
-         采用第一条该捕获模式的热键绑定的截后动作，没有这样的绑定时复制到剪贴板。\n\
-         常驻实例没在运行时会先启动它。\n\
-         \n\
-         捕获模式：\n",
-    );
+fn usage(texts: &Texts) -> String {
+    let mut text = texts.get("cli-usage");
+    text.push_str("\n\n");
+    text.push_str(&texts.get("cli-usage-modes"));
+    text.push('\n');
     for (mode, name) in MODE_NAMES {
-        text.push_str(&format!("  {name:<16}{}\n", mode.label()));
+        text.push_str(&format!("  {name:<16}{}\n", mode.localized_label(texts)));
     }
-    text.push_str(
-        "\n\
-         退出码：\n\
-         \x20 0  成功\n\
-         \x20 1  常驻实例执行命令失败\n\
-         \x20 2  参数有误\n\
-         \x20 3  常驻实例暂不支持该捕获模式\n\
-         \x20 4  无法连接或启动常驻实例\n\
-         \x20 5  用户取消了这次捕获（例如在选区遮罩上按了 Esc）\n",
-    );
+    text.push('\n');
+    text.push_str(&texts.get("cli-exit-codes"));
+    text.push('\n');
+    for (status, message) in [
+        (CliStatus::Success, "cli-exit-success"),
+        (CliStatus::Failed, "cli-exit-failed"),
+        (CliStatus::Usage, "cli-exit-usage"),
+        (CliStatus::Unreachable, "cli-exit-unreachable"),
+        (CliStatus::Cancelled, "cli-exit-cancelled"),
+    ] {
+        text.push_str(&format!(
+            "  {}  {}\n",
+            status.exit_code(),
+            texts.get(message)
+        ));
+    }
     text
 }

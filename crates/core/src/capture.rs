@@ -3,6 +3,7 @@ use bps_platform::{Display, FrameSource, Image, LocalDateTime, Platform, Point};
 use crate::{CaptureMode, CoreError, stitch};
 
 /// 一次捕获的产物（截图）及其来源信息。
+#[derive(Clone)]
 pub(crate) struct Screenshot {
     pub image: Image,
     pub mode: CaptureMode,
@@ -19,6 +20,14 @@ pub(crate) struct CaptureFailure {
 }
 
 impl CaptureFailure {
+    /// 已经就这次失败通知过用户（或用户看得到原因）：热键触发时不再重复通知。
+    pub fn already_notified(error: impl Into<CoreError>) -> Self {
+        Self {
+            error: error.into(),
+            notified: true,
+        }
+    }
+
     /// 截后动作之前（捕获本身）的失败：还没有通知过用户。
     pub fn before_actions(error: impl Into<CoreError>) -> Self {
         Self {
@@ -26,17 +35,6 @@ impl CaptureFailure {
             notified: false,
         }
     }
-}
-
-/// 这个捕获模式是否已经实现。实现新的捕获模式时在这里登记。
-pub(crate) fn is_implemented(mode: CaptureMode) -> bool {
-    matches!(
-        mode,
-        CaptureMode::Display
-            | CaptureMode::VirtualDesktop
-            | CaptureMode::Region
-            | CaptureMode::Window
-    )
 }
 
 /// 按捕获模式从帧源取得截图。
@@ -67,7 +65,9 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
         }
         // 区域、窗口需要用户在选区遮罩上框选或选择，由 `region::RegionCapture`、
         // `window::WindowCapture` 跨多个事件完成，不走这里。
-        CaptureMode::Region | CaptureMode::Window => Err(CoreError::UnsupportedCaptureMode(mode)),
+        CaptureMode::Region | CaptureMode::Window => {
+            unreachable!("区域、窗口捕获由会话完成，常驻实例不会走到这里")
+        }
     }
 }
 

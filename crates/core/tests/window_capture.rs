@@ -449,3 +449,74 @@ fn exit_while_choosing_window_closes_overlay() {
     assert!(!fake.overlay_visible());
     assert!(fake.clipboard().is_empty());
 }
+
+/// 绑定“窗口 + 标注 + 复制”：先单击选窗，再在这个窗口的截图上标注。
+#[test]
+fn window_mode_with_annotate_picks_window_first_then_annotates_its_image() {
+    let window = FakeWindow::new("记事本", Rect::new(200, 100, 80, 60));
+    let fake = FakePlatform::new()
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 800, 600)).primary())
+        .with_cursor_at(Point::new(700, 500))
+        .with_window(window.clone());
+    let mut instance = picking(
+        &fake,
+        window_capture(vec![
+            PostCaptureAction::Annotate,
+            PostCaptureAction::CopyToClipboard,
+        ]),
+    );
+    assert!(
+        fake.overlay_canvas().is_none(),
+        "窗口 + 标注也应先悬停高亮选窗，而不是框选区域"
+    );
+
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(230, 120)),
+    );
+    assert!(fake.overlay_visible(), "选中窗口后进入标注，遮罩不关");
+    assert!(fake.clipboard().is_empty());
+    let (view, shown) = fake.overlay_canvas().expect("应显示窗口截图供标注");
+    assert!(shown == *window.image(), "标注的底图是窗口截图");
+
+    feed(&mut instance, fake.click_text("矩形"));
+    feed(
+        &mut instance,
+        fake.drag(
+            Point::new(view.x + 10, view.y + 10),
+            Point::new(view.x + 40, view.y + 40),
+        ),
+    );
+    feed(&mut instance, fake.click_text("复制"));
+
+    assert!(!fake.overlay_visible());
+    let copied = fake.clipboard().png_image().unwrap();
+    assert_eq!((copied.width(), copied.height()), (80, 60));
+    let red = |p: [u8; 4]| p[0] > 200 && p[1] < 80 && p[2] < 80;
+    assert!(red(copied.pixel(10, 25)), "矩形左边应画在窗口截图上");
+    assert_eq!(copied.pixel(70, 55), window.image().pixel(70, 55));
+}
+
+#[test]
+fn cancelling_annotation_of_a_picked_window_leaves_no_product() {
+    let fake = FakePlatform::new()
+        .with_display(FakeDisplay::new(Rect::new(0, 0, 800, 600)).primary())
+        .with_cursor_at(Point::new(700, 500))
+        .with_window(FakeWindow::new("记事本", Rect::new(200, 100, 80, 60)));
+    let mut instance = picking(
+        &fake,
+        window_capture(vec![
+            PostCaptureAction::Annotate,
+            PostCaptureAction::AutoSave,
+        ]),
+    );
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(230, 120)),
+    );
+
+    feed(&mut instance, fake.click_text("取消"));
+
+    assert!(!fake.overlay_visible());
+    assert_no_product(&fake);
+}

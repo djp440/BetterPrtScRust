@@ -237,3 +237,21 @@ fn annotation_toolbar_follows_the_interface_language() {
     let image = fake.clipboard().png_image().expect("应复制了截图");
     assert_eq!((image.width(), image.height()), (100, 50));
 }
+
+#[test]
+fn toml_syntax_error_in_config_is_explained_in_the_interface_language() {
+    for (system_language, prefix) in [
+        ("zh-CN", "配置文件格式错误："),
+        ("en-US", "Malformed config file: "),
+    ] {
+        let fake = FakePlatform::new()
+            .with_system_languages(&[system_language])
+            .with_config_file("hotkey = = 3\n");
+
+        let _instance = ResidentInstance::start(fake.platform());
+
+        let notifications = fake.notifications();
+        let body = &notifications[0].body;
+        assert!(body.contains(prefix), "{system_language}: {body}");
+    }
+}

@@ -14,6 +14,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
+license = "GPL-3.0-only"
 
 # 依赖版本统一在此声明；成员 crate 用 `xxx.workspace = true` 引用。
 # 轻量指标是硬约束：新增依赖尽量 default-features = false，只开需要的 feature。

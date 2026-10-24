@@ -2,3 +2,6 @@ target/
 # 拖拽验证截图含本机桌面内容，只留在本地。
 results/**/*.png
 results/**/*.stderr.log
+# 运行产物（每次测量都会生成）只留在本地；入库的只有各次的 summary.md 汇总。
+results/**/*.csv
+results/**/*.log

@@ -10,7 +10,6 @@ tray-exit = Exit
 
 notification-hotkey-failed-title = Hotkey registration failed
 notification-hotkey-failed-line = { $hotkey }: { $reason }
-notification-unsupported-title = Not supported yet
 notification-capture-failed-title = Capture failed
 notification-saved-title = Screenshot saved
 notification-save-failed-title = Auto-save failed
@@ -64,8 +63,6 @@ error-platform = System call failed: { $error }
 error-no-display = No display is available
 error-encode = Failed to encode the screenshot: { $error }
 error-too-many-same-name-files = Too many files with the same name; no free file name for { $path }
-error-unsupported-capture-mode = The “{ $mode }” capture mode is not supported yet
-error-unsupported-action = The “{ $action }” post-capture action is not supported yet
 error-invalid-request = The resident instance did not understand the request “{ $request }”; make sure bps and BetterPrtSc are the same version
 error-capture-in-progress = The previous capture has not finished yet
 error-recording-region-too-small = The { $width } × { $height } region is too small to record (width and height must be at least { $minimum } pixels)
@@ -232,3 +229,27 @@ long-screenshot-size = Stitched { $width } × { $height }
 long-screenshot-lost = Scrolled too fast, scroll back a little
 notification-long-screenshot-full-title = Long screenshot reached the height limit
 notification-long-screenshot-full-body = Long screenshots are at most { $limit } pixels tall; stitching stopped automatically.
+
+# bps command line
+config-toml-error = Malformed config file: { $message }
+cli-usage =
+    Usage: bps capture <capture mode>
+
+    Forwards the capture command to the running BetterPrtSc instance and behaves like pressing the matching hotkey:
+    it uses the post-capture actions of the first hotkey binding for that capture mode, or copies to the clipboard if there is none.
+    The resident instance is started first if it is not running.
+cli-usage-modes = Capture modes:
+cli-exit-codes = Exit codes:
+cli-exit-success = Success
+cli-exit-failed = The resident instance failed to run the command
+cli-exit-usage = Invalid arguments
+cli-exit-unreachable = Could not reach or start the resident instance
+cli-exit-cancelled = The user cancelled the capture (for example pressed Esc on the overlay)
+cli-cancelled = Cancelled
+cli-failed = Failed: { $message }
+cli-unreachable = Could not forward the command to the resident instance: { $error }
+cli-unknown-mode = Unknown capture mode: { $mode }
+cli-missing-mode = Missing capture mode
+cli-extra-argument = Unexpected argument: { $argument }
+cli-missing-command = Missing command
+cli-unknown-command = Unknown command: { $command }

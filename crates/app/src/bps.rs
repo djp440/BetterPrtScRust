@@ -6,6 +6,9 @@
 use std::process::ExitCode;
 
 #[cfg(windows)]
+mod location;
+
+#[cfg(windows)]
 fn main() -> ExitCode {
     use bps_platform_windows::{PipeChannel, resident_pipe_name};
 
@@ -18,7 +21,15 @@ fn main() -> ExitCode {
         .unwrap_or_else(|_| "BetterPrtSc.exe".into());
     let mut channel = PipeChannel::new(&resident_pipe_name(), resident_exe);
 
-    let outcome = bps_core::run_cli(&args, &mut channel);
+    // 输出语言与常驻实例一致：读不到配置文件时按系统语言。
+    let config_text = location::data_location()
+        .ok()
+        .and_then(|location| std::fs::read_to_string(location.config_file()).ok());
+    let locale = bps_core::cli_locale(
+        config_text.as_deref(),
+        &bps_platform_windows::user_ui_languages(),
+    );
+    let outcome = bps_core::run_cli(&args, &mut channel, locale);
     print!("{}", outcome.stdout);
     eprint!("{}", outcome.stderr);
     ExitCode::from(outcome.status.exit_code())

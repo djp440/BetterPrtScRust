@@ -16,7 +16,7 @@ use bps_platform::{
 };
 
 use super::{LongScreenshot, Stitched, preview};
-use crate::annotation::finish;
+use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Response};
 use crate::annotation::toolbar::{Entry, Toolbar, ToolbarButton};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
@@ -291,14 +291,17 @@ impl LongScreenshotCapture {
                     annotator,
                     view,
                     &self.request,
-                    self.captured_at,
+                    &Origin {
+                        captured_at: self.captured_at,
+                        window_title: None,
+                    },
                     how,
                     self.texts,
                 ) {
                     None => self.keep_going(platform),
                     Some(result) => {
                         self.phase = Phase::Over;
-                        Some(result.map(|()| Ending::Captured))
+                        Some(result.map(|()| Ending::Delivered))
                     }
                 }
             }
@@ -447,7 +450,7 @@ impl LongScreenshotCapture {
         }) {
             request.actions.push(PostCaptureAction::CopyToClipboard);
         }
-        Some(action::run(platform, &screenshot, &request, self.texts).map(|()| Ending::Captured))
+        Some(action::run(platform, &screenshot, &request, self.texts).map(|()| Ending::Delivered))
     }
 
     /// 用户取消：停止采样、关闭遮罩，没有任何产物。

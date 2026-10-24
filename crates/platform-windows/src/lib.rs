@@ -38,6 +38,7 @@
 #![cfg(windows)]
 
 mod autostart;
+mod background;
 mod child_windows;
 mod clipboard;
 mod clock;
@@ -70,6 +71,7 @@ mod window_capture;
 mod window_source;
 
 pub use autostart::WindowsAutostart;
+pub use background::ThreadBackground;
 pub use child_windows::{
     ChildProcessWindows, RESULT_PANEL_ARGUMENT, SETTINGS_ARGUMENT, read_screenshot, window_argument,
 };
@@ -122,6 +124,7 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         windows: Box::new(ChildProcessWindows::new(ui_exe)),
         system_language: Box::new(WindowsSystemLanguage),
         updates: Box::new(GitHubReleases::new(event_loop.sender())),
+        background: Box::new(ThreadBackground::new(event_loop.sender())),
         autostart: Box::new(WindowsAutostart::new()),
         elevation: Box::new(WindowsElevation::new()),
         system_screenshot_tool: Box::new(event_loop.system_screenshot_tool()),
