@@ -36,6 +36,7 @@ use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, DETACHED_PROCESS, GetCurrentProcessId,
 };
+use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 use windows::core::{HRESULT, PCWSTR};
 
 use crate::EventSender;
@@ -238,6 +239,9 @@ impl PipeChannel {
 
 impl ResidentChannel for PipeChannel {
     fn send(&mut self, message: &str) -> Result<String, ChannelError> {
+        // 常驻实例不是前台进程，打开选区遮罩时抢前台（拿键盘焦点收 Esc / Enter）会被系统拒绝。
+        // 调用 bps 的终端在前台时，本进程可以把这个权利让出去；不在前台时调用失败，忽略即可。
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
         let mut reply = vec![0u8; MAX_REPLY_BYTES];
         let mut read = 0u32;
         let ok = unsafe {

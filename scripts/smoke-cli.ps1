@@ -7,9 +7,12 @@
   依次验证：
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
     2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
-       `bps capture region` 返回“暂不支持”（退出码 3），`bps capture bogus` 是用法错误（退出码 2）
-    3. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
-    4. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
+       `bps capture bogus` 是用法错误（退出码 2）
+    3. `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
+       再次打开后投递拖拽 (100,100)→(299,199) 与 Enter → 退出码 0、剪贴板 PNG 为 200x100
+       （遮罩会闪现两次，各不到 1 秒；期间请勿移动鼠标）
+    4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，进程数仍为 1
+    5. 常驻实例已在运行时 `bps capture display` 直接转交（退出码 0）
   最后向隐藏窗口投递 WM_CLOSE 结束常驻实例，并恢复剪贴板原有的文本或图像。
   默认绑定（复制 + 自动存储）会在“图片\BetterPrtSc”里存截图：结束时删除本次存下的文件
   （以剪贴板附带的文件为准），目录是本次新建且已空时一并删除。
@@ -37,9 +40,18 @@ public static class BpsCliSmokeUser32 {
     public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")]
     public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
 }
 '@
 $WM_CLOSE = 0x0010
+$WM_KEYDOWN = 0x0100
+$WM_MOUSEMOVE = 0x0200
+$WM_LBUTTONDOWN = 0x0201
+$WM_LBUTTONUP = 0x0202
+$MK_LBUTTON = 0x0001
+$VK_RETURN = 0x0D
+$VK_ESCAPE = 0x1B
 $bps = (Resolve-Path (Join-Path $BinDir 'bps.exe')).Path
 $resident = (Resolve-Path (Join-Path $BinDir 'BetterPrtSc.exe')).Path
 New-Item -ItemType Directory -Force $OutDir | Out-Null
@@ -64,19 +76,61 @@ function Close-Resident([int]$processId) {
     }
 }
 
-# 运行 bps，返回退出码、标准错误和耗时。
-function Invoke-Bps([string[]]$arguments) {
-    $stderr = Join-Path $OutDir 'bps-stderr.log'
-    $watch = [Diagnostics.Stopwatch]::StartNew()
+# 在后台启动 bps，返回进程对象；用 Wait-Bps 取结果。
+function Start-Bps([string[]]$arguments) {
     $p = Start-Process -FilePath $bps -ArgumentList $arguments -PassThru -NoNewWindow `
-        -RedirectStandardError $stderr -RedirectStandardOutput (Join-Path $OutDir 'bps-stdout.log')
+        -RedirectStandardError (Join-Path $OutDir 'bps-stderr.log') `
+        -RedirectStandardOutput (Join-Path $OutDir 'bps-stdout.log')
     $null = $p.Handle
-    if (-not $p.WaitForExit(20000)) { $p.Kill(); throw "bps $arguments 20 秒内没有结束" }
+    $p | Add-Member -NotePropertyName Watch -NotePropertyValue ([Diagnostics.Stopwatch]::StartNew())
+    $p | Add-Member -NotePropertyName Arguments -NotePropertyValue $arguments
+    $p
+}
+
+# 等 bps 结束，返回退出码、标准错误和耗时。
+function Wait-Bps($p) {
+    if (-not $p.WaitForExit(20000)) { $p.Kill(); throw "bps $($p.Arguments) 20 秒内没有结束" }
     [pscustomobject]@{
         Code   = $p.ExitCode
-        Stderr = [string](Get-Content $stderr -Raw -Encoding UTF8)
-        Ms     = $watch.ElapsedMilliseconds
+        Stderr = [string](Get-Content (Join-Path $OutDir 'bps-stderr.log') -Raw -Encoding UTF8)
+        Ms     = $p.Watch.ElapsedMilliseconds
     }
+}
+
+# 运行 bps，返回退出码、标准错误和耗时。
+function Invoke-Bps([string[]]$arguments) {
+    Wait-Bps (Start-Bps $arguments)
+}
+
+# 常驻实例 $processId 的选区遮罩窗口（启动时就已建好并隐藏）。
+function Find-Overlay([int]$processId) {
+    $hwnd = [IntPtr]::Zero
+    while ($true) {
+        $hwnd = [BpsCliSmokeUser32]::FindWindowExW([IntPtr]::Zero, $hwnd, 'BetterPrtSc.SelectionOverlay', [NullString]::Value)
+        if ($hwnd -eq [IntPtr]::Zero) { throw "找不到常驻实例 $processId 的选区遮罩窗口" }
+        $owner = 0
+        [BpsCliSmokeUser32]::GetWindowThreadProcessId($hwnd, [ref]$owner) | Out-Null
+        if ($owner -eq $processId) { return $hwnd }
+    }
+}
+
+# 等遮罩窗口显示（$visible）或隐藏，5 秒内没等到返回 $false。
+function Wait-OverlayVisible([IntPtr]$hwnd, [bool]$visible) {
+    for ($i = 0; $i -lt 250; $i++) {
+        if ([BpsCliSmokeUser32]::IsWindowVisible($hwnd) -eq $visible) { return $true }
+        Start-Sleep -Milliseconds 20
+    }
+    $false
+}
+
+# 遮罩客户区坐标 → WM_*BUTTON* / WM_MOUSEMOVE 的 lParam。
+function Point([int]$x, [int]$y) { [IntPtr](($y -shl 16) -bor $x) }
+
+# 投递时本线程临时切到 Per-Monitor V2：否则系统会按缩放比例换算鼠标消息里的坐标。
+function Send-Overlay([IntPtr]$hwnd, [int]$message, [int]$wParam, [IntPtr]$lParam) {
+    $previous = [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext([IntPtr]-4)
+    try { [BpsCliSmokeUser32]::PostMessageW($hwnd, $message, [IntPtr]$wParam, $lParam) | Out-Null }
+    finally { [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext($previous) | Out-Null }
 }
 
 # 物理像素的虚拟桌面尺寸：临时把本线程切到 Per-Monitor V2，避免系统按缩放比例虚拟化坐标。
@@ -137,10 +191,30 @@ try {
     Assert-That ($r.Code -eq 0 -and $png -eq $screen) `
         "bps capture virtual-desktop 退出码 $($r.Code)，PNG $png 等于物理像素虚拟桌面 $screen（$($r.Ms) ms）$($r.Stderr)"
 
-    $r = Invoke-Bps @('capture', 'region')
-    Assert-That ($r.Code -eq 3 -and $r.Stderr -match '暂不支持') "bps capture region 退出码 3 且提示暂不支持：$($r.Stderr.Trim())"
     $r = Invoke-Bps @('capture', 'bogus')
     Assert-That ($r.Code -eq 2) "bps capture bogus 退出码 2（实际 $($r.Code)）"
+
+    $overlay = Find-Overlay (Get-Residents)[0].Id
+    $clip::Clear()
+    $p = Start-Bps @('capture', 'region')
+    Assert-That (Wait-OverlayVisible $overlay $true) "bps capture region 打开了选区遮罩（$($p.Watch.ElapsedMilliseconds) ms）"
+    Send-Overlay $overlay $WM_KEYDOWN $VK_ESCAPE ([IntPtr]::Zero)
+    $r = Wait-Bps $p
+    Assert-That ($r.Code -eq 5 -and $r.Stderr -match '已取消') "Esc 取消后 bps 退出码 5 且提示已取消（实际 $($r.Code)）：$($r.Stderr.Trim())"
+    Assert-That (Wait-OverlayVisible $overlay $false) '取消后遮罩已隐藏'
+    Assert-That (-not $clip::GetDataObject().GetDataPresent('PNG')) '取消不产生剪贴板内容'
+
+    $p = Start-Bps @('capture', 'region')
+    Assert-That (Wait-OverlayVisible $overlay $true) "再次打开选区遮罩（$($p.Watch.ElapsedMilliseconds) ms）"
+    Send-Overlay $overlay $WM_LBUTTONDOWN $MK_LBUTTON (Point 100 100)
+    Send-Overlay $overlay $WM_MOUSEMOVE $MK_LBUTTON (Point 299 199)
+    Send-Overlay $overlay $WM_LBUTTONUP 0 (Point 299 199)
+    Send-Overlay $overlay $WM_KEYDOWN $VK_RETURN ([IntPtr]::Zero)
+    $r = Wait-Bps $p
+    $png = Get-ClipboardPngSize
+    Assert-That ($r.Code -eq 0 -and $png -eq '200x100') `
+        "框选 (100,100)→(299,199) 并按 Enter：退出码 $($r.Code)，剪贴板 PNG $png（应为 200x100）$($r.Stderr)"
+    Assert-That (Wait-OverlayVisible $overlay $false) '完成后遮罩已隐藏'
 
     $second = Start-Process -FilePath $resident -PassThru -WindowStyle Hidden `
         -RedirectStandardError (Join-Path $OutDir 'second-stderr.log')

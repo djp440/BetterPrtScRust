@@ -39,7 +39,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, DXGI_OUTPUT_DESC, IDXGIAdapter1, IDXGIDevice,
-    IDXGIFactory1, IDXGIOutput, IDXGISurface,
+    IDXGIDevice3, IDXGIFactory1, IDXGIOutput, IDXGISurface,
 };
 use windows::core::{Interface, w};
 
@@ -308,12 +308,19 @@ impl Gpu {
         }
     }
 
-    /// 让 D3D11 立即回收已释放的冻结帧纹理，而不是等到下一次提交。
+    /// 让 D3D11 立即回收已释放的冻结帧纹理，并请驱动交还为读回分配的内存。
+    ///
+    /// 读回用的暂存纹理释放后，驱动会把那块内存（4K HDR 约 63 MB）留在进程里备用，
+    /// 计入私有工作集；`IDXGIDevice3::Trim` 让它交还（约 8 ms，在遮罩隐藏之后做）。
+    /// 代价是下一次读回要重新分配，实测对热键 → 遮罩延迟没有可见影响。
     pub fn release_frames(&self) {
         for adapter in &self.adapters {
             unsafe {
                 adapter.context.ClearState();
                 adapter.context.Flush();
+                if let Ok(device) = adapter.device.cast::<IDXGIDevice3>() {
+                    device.Trim();
+                }
             }
         }
     }
