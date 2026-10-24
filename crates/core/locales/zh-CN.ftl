@@ -168,6 +168,11 @@ settings-cancel = 取消
 overlay-selected-hint = Enter 或双击选区：完成　Esc：取消
 overlay-record-hint = Enter 或双击选区：开始录屏　Esc：取消
 
+## 录屏控制条
+recording-toolbar-pause = 暂停
+recording-toolbar-resume = 继续
+recording-toolbar-stop = 停止
+
 ## 标注
 
 annotation-rectangle = 矩形

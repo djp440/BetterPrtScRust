@@ -38,7 +38,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DestroyWindow, GWLP_USERDATA, HWND_TOPMOST, RegisterClassExW,
     SWP_NOACTIVATE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowDisplayAffinity,
-    SetWindowLongPtrW, SetWindowPos, WDA_EXCLUDEFROMCAPTURE, WNDCLASSEXW,
+    SetWindowLongPtrW, SetWindowPos, WDA_EXCLUDEFROMCAPTURE, WNDCLASSEXW, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, PCWSTR, w};
@@ -62,13 +62,20 @@ pub(super) struct LiveWindow {
     _composition_target: IDCompositionTarget,
     _visual: IDCompositionVisual,
     bounds: Rect,
+    /// 显示时抢前台、取得键盘焦点（框选遮罩）；否则不激活（录屏控制条）。
+    activate: bool,
     /// 已经显示出来了（第一次 `render` 之后）。
     shown: Cell<bool>,
 }
 
 impl LiveWindow {
     /// 创建覆盖 `bounds`（虚拟桌面物理像素）的透明遮罩窗口，cloak 状态，还不显示。
-    pub fn new(gpu: &Gpu, bounds: Rect, queue: EventQueue) -> Result<Self, PlatformError> {
+    pub fn new(
+        gpu: &Gpu,
+        bounds: Rect,
+        queue: EventQueue,
+        activate: bool,
+    ) -> Result<Self, PlatformError> {
         unsafe {
             let module = GetModuleHandleW(None).map_err(|e| win_error("读取模块句柄失败", e))?;
             let class = WNDCLASSEXW {
@@ -82,8 +89,12 @@ impl LiveWindow {
             if RegisterClassExW(&class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
                 return Err(PlatformError::new("注册实时遮罩窗口类失败"));
             }
+            let mut ex_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+            if !activate {
+                ex_style |= WS_EX_NOACTIVATE;
+            }
             let hwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+                ex_style,
                 CLASS_NAME,
                 w!("BetterPrtSc 录屏选区"),
                 WS_POPUP,
@@ -182,6 +193,7 @@ impl LiveWindow {
                 _composition_target: composition_target,
                 _visual: visual,
                 bounds,
+                activate,
                 shown: Cell::new(false),
             })
         }
@@ -224,8 +236,10 @@ impl LiveWindow {
                 let _ = DwmFlush();
                 self.shared.active.set(true);
                 cloak(self.hwnd, false);
-                let _ = SetForegroundWindow(self.hwnd);
-                let _ = SetFocus(Some(self.hwnd));
+                if self.activate {
+                    let _ = SetForegroundWindow(self.hwnd);
+                    let _ = SetFocus(Some(self.hwnd));
+                }
             }
             apply_cursor(self.shared.cursor.get());
             self.shown.set(true);

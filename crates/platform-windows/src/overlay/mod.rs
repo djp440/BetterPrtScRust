@@ -13,6 +13,7 @@
 mod draw;
 mod gpu;
 mod live;
+mod toolbar;
 mod window;
 
 use bps_platform::{
@@ -27,6 +28,7 @@ use gpu::{FrozenDisplay, Gpu};
 use live::LiveWindow;
 use window::OverlayWindow;
 
+pub use toolbar::D2dRecordingToolbar;
 pub(crate) use window::visible_overlay_window;
 
 /// 选区遮罩。由 [`crate::EventLoop::selection_overlay`] 创建，必须在事件循环的线程上使用。
@@ -136,7 +138,7 @@ impl D2dSelectionOverlay {
             .ok_or_else(|| PlatformError::new("没有可用的显示器"))?;
         let queue = self.queue.clone();
         let resources = self.ensure_resources()?;
-        let live = LiveWindow::new(&resources.gpu, bounds, queue)?;
+        let live = LiveWindow::new(&resources.gpu, bounds, queue, true)?;
         self.session = Some(Session {
             frozen: Vec::new(),
             live: Some(live),
