@@ -17,12 +17,12 @@ fn region_capture(after: PostCaptureAction) -> Command {
 }
 
 fn copy_region_capture() -> Command {
-    region_capture(PostCaptureAction::CopyToClipboard)
+    region_capture(PostCaptureAction::AwaitConfirmation)
 }
 
 fn copy_and_save_region_capture() -> Command {
     Command::Capture(
-        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation)
             .with_auto_save(),
     )
 }
@@ -229,47 +229,6 @@ fn click_without_dragging_does_not_select_anything() {
 }
 
 #[test]
-fn double_click_inside_selection_completes_it() {
-    let fake = single_display();
-    let mut instance = selecting(&fake, copy_region_capture());
-    feed(
-        &mut instance,
-        fake.drag(Point::new(10, 5), Point::new(29, 16)),
-    );
-    assert!(
-        fake.clipboard().is_empty(),
-        "松开鼠标只是确定选区，还没有完成"
-    );
-
-    feed(&mut instance, fake.double_click(Point::new(15, 10)));
-
-    assert!(!fake.overlay_visible());
-    assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(Rect::new(10, 5, 20, 12)));
-}
-
-#[test]
-fn dragging_again_outside_selection_replaces_it_and_click_outside_keeps_it() {
-    let fake = single_display();
-    let mut instance = selecting(&fake, copy_region_capture());
-    feed(
-        &mut instance,
-        fake.drag(Point::new(10, 5), Point::new(29, 16)),
-    );
-
-    feed(
-        &mut instance,
-        fake.drag(Point::new(40, 30), Point::new(49, 39)),
-    );
-    feed(
-        &mut instance,
-        fake.click(PointerButton::Left, Point::new(2, 2)),
-    );
-    feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
-
-    assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(Rect::new(40, 30, 10, 10)));
-}
-
-#[test]
 fn selection_is_limited_to_virtual_desktop() {
     let fake = single_display();
     let mut instance = selecting(&fake, copy_region_capture());
@@ -307,7 +266,7 @@ fn another_capture_is_rejected_while_overlay_is_open() {
 
     let display_capture = Command::Capture(CaptureRequest::new(
         CaptureMode::Display,
-        PostCaptureAction::CopyToClipboard,
+        PostCaptureAction::AwaitConfirmation,
     ));
     assert_eq!(
         instance.execute(display_capture),
@@ -346,7 +305,7 @@ fn hotkey_bound_to_region_capture_opens_overlay_and_copies_selected_region() {
     let hotkey: Hotkey = "Ctrl+Alt+A".parse().unwrap();
     let binding = HotkeyBinding {
         hotkey,
-        capture: CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard),
+        capture: CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation),
     };
     let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     assert!(instance.register_hotkeys().is_empty());

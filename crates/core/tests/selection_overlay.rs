@@ -25,7 +25,7 @@ fn selecting(fake: &FakePlatform) -> ResidentInstance {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            PostCaptureAction::CopyToClipboard,
+            PostCaptureAction::AwaitConfirmation,
         )))
         .unwrap();
     instance
@@ -124,7 +124,8 @@ fn selection_is_left_undimmed_and_framed_from_outside() {
         area(VIRTUAL_DESKTOP) - area(region),
         "选区外应全部变暗且不重叠：{dimmed:?}"
     );
-    assert_eq!(frames(&scene), [(region, 1)]);
+    // 等待确认的工具条自带边框，选区边框是最底下那个。
+    assert_eq!(frames(&scene).first(), Some(&(region, 1)));
 }
 
 #[test]
@@ -170,25 +171,6 @@ fn labels_and_frame_scale_with_display_under_selection() {
     assert_eq!(font(&on_secondary), 26.0);
     assert_eq!(frames(&on_primary)[0].1, 1);
     assert_eq!(frames(&on_secondary)[0].1, 2);
-}
-
-#[test]
-fn hint_tells_how_to_finish_once_region_is_selected() {
-    let fake = mixed_scale_desktop();
-    let mut instance = selecting(&fake);
-
-    feed(
-        &mut instance,
-        fake.drag(Point::new(20, 40), Point::new(119, 89)),
-    );
-
-    let texts = label_texts(&fake.overlay_scene().unwrap());
-    assert_eq!(texts.len(), 2, "{texts:?}");
-    assert_eq!(texts[0], "100 × 50");
-    assert!(
-        texts[1].contains("Enter") && texts[1].contains("Esc"),
-        "{texts:?}"
-    );
 }
 
 #[test]

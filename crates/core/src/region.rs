@@ -25,7 +25,9 @@ use crate::recording::Target as RecordTarget;
 use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::{DesktopImage, stitch, virtual_desktop_bounds};
-use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
+use crate::{
+    CaptureKind, CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action,
+};
 
 /// 一次捕获是怎么结束的。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +101,10 @@ impl RegionCapture {
         let mut annotator = request
             .awaits_confirmation()
             .then(|| Annotator::new(displays.clone(), texts).with_handoffs());
+        // 复制到剪贴板的截图：框选松开即完成，不等 Enter（直达功能的框选不变）。
+        if request.kind == CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard) {
+            selection = selection.confirm_on_release();
+        }
         if let Some(annotator) = annotator.as_mut() {
             selection = selection.without_selected_hint();
             // 显示器、虚拟桌面模式不用框选：区域就是整块显示器或整个虚拟桌面，直接开始标注。

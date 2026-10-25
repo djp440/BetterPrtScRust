@@ -27,7 +27,7 @@ fn selecting(fake: &FakePlatform) -> ResidentInstance {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            PostCaptureAction::CopyToClipboard,
+            PostCaptureAction::AwaitConfirmation,
         )))
         .unwrap();
     instance

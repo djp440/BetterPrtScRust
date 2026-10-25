@@ -91,11 +91,44 @@ fn copy_to_clipboard_exits_right_after_region_is_selected() {
     let mut instance = start(&fake, copy(CaptureMode::Region));
     assert!(fake.clipboard().is_empty());
 
-    feed(&mut instance, fake.select_region(REGION));
+    // 只拖拽松开，不按 Enter、不双击：松开左键的那一刻就应完成。
+    feed(
+        &mut instance,
+        fake.drag(top_left(REGION), bottom_right(REGION)),
+    );
 
     assert!(!fake.overlay_visible(), "复制后应直接退出截图界面");
     assert!(pattern_png(&fake) == desktop_pattern(REGION));
     assert!(saved_files(&fake).is_empty(), "没开自动保存不应存盘");
+}
+
+#[test]
+fn copy_to_clipboard_does_not_finish_on_press_and_release_without_moving() {
+    let fake = desk();
+    let mut instance = start(&fake, copy(CaptureMode::Region));
+
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(100, 100)),
+    );
+
+    assert!(fake.overlay_visible(), "没移动就松开不算框选");
+    assert!(fake.clipboard().is_empty());
+}
+
+#[test]
+fn copy_to_clipboard_escape_during_drag_still_cancels() {
+    let fake = desk();
+    let mut instance = start(&fake, copy(CaptureMode::Region));
+    let mut events = fake.drag(top_left(REGION), bottom_right(REGION));
+    events.truncate(3); // 按下、移动、移动：还没松开
+    feed(&mut instance, events);
+    assert!(fake.overlay_visible());
+
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Escape)]);
+
+    assert!(!fake.overlay_visible());
+    assert!(fake.clipboard().is_empty());
 }
 
 #[test]

@@ -168,39 +168,6 @@ fn print_screen_and_administrator_notices_follow_the_interface_language() {
 }
 
 #[test]
-fn selection_overlay_hint_follows_the_interface_language() {
-    let fake = FakePlatform::new()
-        .with_display(FakeDisplay::new(Rect::new(0, 0, 200, 150)).primary())
-        .with_system_languages(&["zh-CN"])
-        .with_config_file(&with_language("en"));
-    let mut instance = ResidentInstance::start(fake.platform());
-
-    instance
-        .execute(Command::Capture(CaptureRequest::new(
-            CaptureMode::Region,
-            PostCaptureAction::CopyToClipboard,
-        )))
-        .unwrap();
-    for event in fake.drag(Point::new(20, 40), Point::new(119, 89)) {
-        instance.handle(event).unwrap();
-    }
-
-    let labels: Vec<String> = fake
-        .overlay_scene()
-        .unwrap()
-        .labels()
-        .map(|label| label.text.clone())
-        .collect();
-    assert_eq!(
-        labels,
-        [
-            "100 × 50",
-            "Enter or double-click the selection: done   Esc: cancel"
-        ]
-    );
-}
-
-#[test]
 fn annotation_toolbar_follows_the_interface_language() {
     let fake = FakePlatform::new()
         .with_display(FakeDisplay::new(Rect::new(0, 0, 400, 300)).primary())
