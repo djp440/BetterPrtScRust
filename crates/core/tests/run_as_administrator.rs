@@ -9,7 +9,7 @@ const BINDING: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn config(globals: &str) -> String {

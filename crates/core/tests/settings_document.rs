@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 
 use bps_core::{
-    BindingSettings, CaptureMode, Config, DEFAULT_CONFIG, DEFAULT_FILENAME_TEMPLATE, Language,
-    Locale, OutputFormat, PostCaptureAction, RecordingFormat, ResidentInstance, SaveDir,
-    SettingsDocument, SettingsProblem, Texts,
+    BindingSettings, CaptureKind, CaptureMode, Config, DEFAULT_CONFIG, DEFAULT_FILENAME_TEMPLATE,
+    DirectFunction, Language, Locale, OutputFormat, PostCaptureAction, RecordingFormat,
+    ResidentInstance, SaveDir, SettingsDocument, SettingsProblem, Texts,
 };
 use bps_platform::{Hotkey, Key, Modifiers};
 use bps_platform_fake::FakePlatform;
@@ -53,12 +53,15 @@ fn default_config_exposes_every_setting_with_its_default() {
     );
     assert_eq!(settings.bindings[1].mode, CaptureMode::Display);
     assert_eq!(
-        settings.bindings[1].actions,
-        [
-            PostCaptureAction::CopyToClipboard,
-            PostCaptureAction::AutoSave
-        ]
+        settings.bindings[1].kind,
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard)
     );
+    assert!(settings.bindings[1].auto_save);
+    assert_eq!(
+        settings.bindings[0].kind,
+        CaptureKind::Screenshot(PostCaptureAction::AwaitConfirmation)
+    );
+    assert!(!settings.bindings[0].auto_save);
 }
 
 #[test]
@@ -136,12 +139,14 @@ fn bindings_can_be_added_modified_and_removed() {
     let shift_prtsc = &mut settings.bindings[0];
     shift_prtsc.hotkey = hotkey("Ctrl+Alt+S");
     shift_prtsc.mode = CaptureMode::VirtualDesktop;
-    shift_prtsc.actions = vec![PostCaptureAction::CopyToClipboard];
-    settings.bindings.push(BindingSettings::new(
+    shift_prtsc.auto_save = false;
+    let mut with_auto_save = BindingSettings::new(
         hotkey("Ctrl+F7"),
         CaptureMode::Display,
-        vec![PostCaptureAction::AutoSave],
-    ));
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
+    );
+    with_auto_save.auto_save = true;
+    settings.bindings.push(with_auto_save);
 
     let text = document.render(&settings).unwrap();
 
@@ -159,9 +164,10 @@ fn bindings_can_be_added_modified_and_removed() {
     );
     assert_eq!(config.bindings[0].capture.mode, CaptureMode::VirtualDesktop);
     assert_eq!(
-        config.bindings[0].capture.actions,
-        [PostCaptureAction::CopyToClipboard]
+        config.bindings[0].capture.kind,
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard)
     );
+    assert!(!config.bindings[0].capture.auto_save);
     // 界面上没有的覆盖项（录屏绑定的 mp4）保留下来。
     assert_eq!(
         config.bindings[2].capture.recording.format,
@@ -169,9 +175,10 @@ fn bindings_can_be_added_modified_and_removed() {
     );
     assert_eq!(config.bindings[5].capture.mode, CaptureMode::Display);
     assert_eq!(
-        config.bindings[5].capture.actions,
-        [PostCaptureAction::AutoSave]
+        config.bindings[5].capture.kind,
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard)
     );
+    assert!(config.bindings[5].capture.auto_save);
     assert!(text.starts_with("# BetterPrtSc 配置文件\n"), "{text}");
     assert!(
         text.contains("\n\n[[bindings]]\nhotkey = \"Ctrl+F7\""),
@@ -184,21 +191,20 @@ fn comments_and_overrides_of_untouched_bindings_survive_edits() {
     let text = r#"[[bindings]]
 hotkey = "Ctrl+F8"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 
 # 存到 D 盘的那条
 [[bindings]]
 hotkey = "Ctrl+F9"  # 别改
 mode = "region"
-actions = ["auto_save"]
+after = "copy_to_clipboard"
+auto_save = true
 save_dir = 'D:\Shots'
 frame_rate = 30
 "#;
     let document = SettingsDocument::parse(text).unwrap();
     let mut settings = document.settings().clone();
-    settings.bindings[0]
-        .actions
-        .push(PostCaptureAction::AutoSave);
+    settings.bindings[0].auto_save = true;
 
     let written = document.render(&settings).unwrap();
 
@@ -209,7 +215,8 @@ frame_rate = 30
 [[bindings]]
 hotkey = "Ctrl+F9"  # 别改
 mode = "region"
-actions = ["auto_save"]
+after = "copy_to_clipboard"
+auto_save = true
 save_dir = 'D:\Shots'
 frame_rate = 30
 "#
@@ -217,7 +224,10 @@ frame_rate = 30
         "{written}"
     );
     assert!(
-        written.contains(r#"actions = ["copy_to_clipboard", "auto_save"]"#),
+        written.contains(
+            r#"after = "copy_to_clipboard"
+auto_save = true"#
+        ),
         "{written}"
     );
 }
@@ -236,11 +246,11 @@ fn removing_the_first_binding_keeps_the_file_header() {
 }
 
 #[test]
-fn changing_actions_drops_an_output_format_that_no_longer_fits() {
+fn changing_the_kind_drops_an_output_format_that_no_longer_fits() {
     let document = SettingsDocument::parse(DEFAULT_CONFIG).unwrap();
     let mut settings = document.settings().clone();
     // Alt+PrtSc 原来是录屏（output_format = "mp4"），改成截图。
-    settings.bindings[3].actions = vec![PostCaptureAction::CopyToClipboard];
+    settings.bindings[3].kind = CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard);
     settings.output_format = OutputFormat::WebP;
 
     let config = Config::parse(&document.render(&settings).unwrap()).unwrap();
@@ -259,11 +269,10 @@ fn invalid_settings_are_rejected_with_reasons_in_the_interface_language() {
     settings.filename_template = "{title}".to_owned();
     settings.save_dir = Some(PathBuf::from("  "));
     settings.bindings[1].hotkey = Hotkey::new(Modifiers::SHIFT, Key::Letter('A'));
-    settings.bindings[2].actions.clear();
 
     let problems = document.render(&settings).unwrap_err();
 
-    assert_eq!(problems.len(), 4, "{problems:?}");
+    assert_eq!(problems.len(), 3, "{problems:?}");
     assert!(problems.contains(&SettingsProblem::EmptySaveDir));
     assert!(
         problems.contains(&SettingsProblem::TypingKeyWithoutModifier {
@@ -271,7 +280,6 @@ fn invalid_settings_are_rejected_with_reasons_in_the_interface_language() {
             hotkey: Hotkey::new(Modifiers::SHIFT, Key::Letter('A')),
         })
     );
-    assert!(problems.contains(&SettingsProblem::NoActions { binding: 2 }));
     let en = Texts::of(Locale::En);
     let zh = Texts::of(Locale::ZhCn);
     let english: Vec<String> = problems.iter().map(|p| p.localized(en)).collect();
@@ -284,7 +292,7 @@ fn invalid_settings_are_rejected_with_reasons_in_the_interface_language() {
         "{english:?}"
     );
     assert!(
-        chinese.iter().any(|m| m.contains("第 3 条热键绑定")),
+        chinese.iter().any(|m| m.contains("第 2 条热键绑定")),
         "{chinese:?}"
     );
 }
@@ -296,22 +304,58 @@ fn problems_are_known_while_editing_before_saving() {
     assert_eq!(settings.problems(), []);
 
     settings.bindings.push(BindingSettings::new(
-        hotkey("Ctrl+F9"),
+        hotkey("Shift+A"),
         CaptureMode::Region,
-        Vec::new(),
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
     ));
 
+    let problems = settings.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems[0].binding(), Some(6));
+}
+
+#[test]
+fn changing_the_kind_swaps_the_after_and_function_keys_and_auto_save_follows_it() {
+    let document = SettingsDocument::parse(DEFAULT_CONFIG).unwrap();
+    let mut settings = document.settings().clone();
+    // PrintScreen：等待确认 -> 长截屏（直达功能）；Shift+PrintScreen（复制 + 自动保存）-> 录屏，
+    // 录屏总是保存，不再写 auto_save。
+    settings.bindings[0].kind = CaptureKind::Function(DirectFunction::LongScreenshot);
+    settings.bindings[1].kind = CaptureKind::Function(DirectFunction::Record);
+    // Win+Shift+O：OCR -> 等待确认并开自动保存。
+    settings.bindings[5].kind = CaptureKind::Screenshot(PostCaptureAction::AwaitConfirmation);
+    settings.bindings[5].auto_save = true;
+
+    let text = document.render(&settings).unwrap();
+
+    let config = Config::parse(&text).unwrap();
+    let kinds: Vec<_> = config
+        .bindings
+        .iter()
+        .map(|b| (b.capture.kind, b.capture.auto_save))
+        .collect();
     assert_eq!(
-        settings.problems(),
-        [SettingsProblem::NoActions { binding: 6 }]
+        kinds[0],
+        (CaptureKind::Function(DirectFunction::LongScreenshot), false)
     );
-    assert_eq!(settings.problems()[0].binding(), Some(6));
+    assert_eq!(
+        kinds[1],
+        (CaptureKind::Function(DirectFunction::Record), false)
+    );
+    assert_eq!(
+        kinds[5],
+        (
+            CaptureKind::Screenshot(PostCaptureAction::AwaitConfirmation),
+            true
+        )
+    );
+    assert!(!text.contains("actions"), "{text}");
 }
 
 #[test]
 fn broken_config_cannot_be_edited_and_says_where_it_is_broken() {
     let error = SettingsDocument::parse(
-        "[[bindings]]\nhotkey = \"Ctrl+F9\"\nmode = \"nope\"\nactions = [\"ocr\"]\n",
+        "[[bindings]]\nhotkey = \"Ctrl+F9\"\nmode = \"nope\"\nfunction = \"ocr\"\n",
     )
     .unwrap_err();
 
@@ -332,7 +376,7 @@ fn saved_settings_take_effect_when_the_resident_instance_reloads_the_file() {
     settings.bindings.push(BindingSettings::new(
         hotkey("Ctrl+F7"),
         CaptureMode::Display,
-        vec![PostCaptureAction::CopyToClipboard],
+        CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
     ));
 
     let text = document.render(&settings).unwrap();

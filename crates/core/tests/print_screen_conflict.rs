@@ -10,12 +10,12 @@ const PRINT_SCREEN_AND_SHIFT: &str = r#"
 [[bindings]]
 hotkey = "PrintScreen"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 
 [[bindings]]
 hotkey = "Shift+PrintScreen"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn print_screen() -> Hotkey {

@@ -1,6 +1,7 @@
 //! 窗口捕获：取窗口布局并拍冻结帧 → 显示选区遮罩 → 用户悬停高亮、单击选中顶层窗口 →
-//! 截取这个窗口的完整内容 → 截后动作。截后动作包含标注时，遮罩不关，窗口截图（太大时缩小）
-//! 显示在遮罩上供标注（与长截屏的标注阶段用同一套标注会话），标注结束后再执行其余截后动作。
+//! 截取这个窗口的完整内容 → 截后动作。截后动作为等待确认时，遮罩不关，窗口截图（太大时缩小）
+//! 显示在遮罩上供标注、录屏、长截屏、OCR、翻译、另存为、确认（与长截屏的标注阶段用同一套
+//! 标注会话）。
 //!
 //! 与区域捕获一样跨越多个平台事件：[`WindowCapture::start`] 打开遮罩后立即返回，之后每个
 //! [`OverlayInput`] 交给 [`WindowCapture::handle`]，直到用户选中窗口（以及标注完）或取消。
@@ -13,22 +14,23 @@ use bps_platform::{
 };
 
 use crate::annotation::finish::{self, Origin};
-use crate::annotation::session::{Annotator, Response};
+use crate::annotation::session::{Annotator, Response, Switch};
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::long_screenshot::annotation_view;
-use crate::region::Ending;
+use crate::recording::Target as RecordTarget;
+use crate::region::{Ending, Handoff, HandoffTo};
 use crate::selection::{ACCENT, mask_around};
 use crate::stitch::virtual_desktop_bounds;
 use crate::window_selection::{WindowSelection, WindowStep};
-use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action};
+use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
 /// 选中窗口后的标注阶段。
 struct Annotating {
     annotator: Box<Annotator>,
     /// 窗口截图（可能缩小后）显示的范围。
     view: Rect,
-    /// 被选中窗口的标题，命名模板用。
-    window_title: String,
+    /// 被选中的窗口：命名模板用它的标题，录屏、长截屏转入时用它的位置。
+    window: TopLevelWindow,
 }
 
 /// 进行中的窗口捕获。
@@ -107,7 +109,7 @@ impl WindowCapture {
         platform: &mut Platform,
         window: &TopLevelWindow,
     ) -> Option<Result<Ending, CaptureFailure>> {
-        if !self.request.actions.contains(&PostCaptureAction::Annotate) {
+        if !self.request.awaits_confirmation() {
             return Some(self.finish(platform, window).map(|()| Ending::Delivered));
         }
         let image = match platform.window_source.capture_window(window.id) {
@@ -118,12 +120,12 @@ impl WindowCapture {
             }
         };
         let view = annotation_view(window.bounds, &image, &self.displays);
-        let mut annotator = Annotator::new(self.displays.clone(), self.texts);
+        let mut annotator = Annotator::new(self.displays.clone(), self.texts).with_handoffs();
         annotator.lock_image(view, image);
         self.annotating = Some(Annotating {
             annotator: Box::new(annotator),
             view,
-            window_title: window.title.clone(),
+            window: window.clone(),
         });
         self.keep_going(platform)
     }
@@ -141,7 +143,7 @@ impl WindowCapture {
                 let annotating = self.annotating.as_ref()?;
                 let origin = Origin {
                     captured_at: self.captured_at,
-                    window_title: Some(annotating.window_title.clone()),
+                    window_title: Some(annotating.window.title.clone()),
                 };
                 match finish::conclude(
                     platform,
@@ -156,6 +158,7 @@ impl WindowCapture {
                     Some(result) => Some(result.map(|()| Ending::Delivered)),
                 }
             }
+            Ok(Response::Switch(switch)) => self.switch(platform, switch),
             Ok(Response::Cancel) => {
                 platform.overlay.close();
                 Some(Ok(Ending::Cancelled))
@@ -165,6 +168,41 @@ impl WindowCapture {
                 Some(Err(CaptureFailure::before_actions(e)))
             }
         }
+    }
+
+    /// 用户在工具条上转入了另一个功能：OCR、翻译把（含标注的）窗口截图交给结果面板；录屏录这个
+    /// 窗口，长截屏取窗口当前在屏幕上的范围，二者关闭遮罩后由常驻实例开始新的会话。
+    fn switch(
+        &mut self,
+        platform: &mut Platform,
+        switch: Switch,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        let annotating = self.annotating.as_ref()?;
+        let to = match switch {
+            Switch::Ocr | Switch::Translate => {
+                let translate = switch == Switch::Translate;
+                let done = finish::recognize(
+                    platform,
+                    &annotating.annotator,
+                    annotating.view,
+                    translate,
+                    self.texts,
+                );
+                return Some(done.map(|()| Ending::Delivered));
+            }
+            Switch::Record => HandoffTo::Recording(RecordTarget::Window(annotating.window.clone())),
+            Switch::LongScreenshot => {
+                let region = virtual_desktop_bounds(&self.displays)
+                    .and_then(|desktop| desktop.intersection(annotating.window.bounds))
+                    .unwrap_or(annotating.view);
+                HandoffTo::LongScreenshot(region)
+            }
+        };
+        platform.overlay.close();
+        Some(Ok(Ending::Switch(Handoff {
+            request: self.request.clone(),
+            to,
+        })))
     }
 
     /// 捕获还在进行：重画遮罩。重画失败时关闭遮罩，捕获失败。

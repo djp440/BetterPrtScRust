@@ -1,6 +1,7 @@
 //! 标注工具条：按钮的布局、命中测试和绘制。
 //!
-//! 工具条有两行：上一行是标注工具和结束方式，下一行是之后画的标注用的颜色和线宽。
+//! 工具条有两行：上一行是标注工具和结束方式，下一行是之后画的标注用的颜色和线宽，以及（等待确认的
+//! 截图界面上）转入其他功能的按钮：录屏、长截屏、OCR、翻译。
 //! 工具条贴在区域外侧的右下方（与区域右边对齐）；下方放不下时放到上方，上下都放不下时放在
 //! 区域内的右下角；整条工具条始终在区域右下角所在的那块显示器以内。尺寸按那块显示器的
 //! 缩放比例放大。
@@ -38,14 +39,20 @@ pub(crate) enum Button {
     /// 撤销、重做上一步标注修改。
     Undo,
     Redo,
+    /// 以当前选区开始录屏。
+    Record,
+    /// 以当前选区开始长截屏。
+    LongScreenshot,
+    /// 识别截图里的文字（打开结果面板）。
+    Ocr,
+    /// 识别截图里的文字并直接翻译。
+    Translate,
     /// 取消这次捕获。
     Cancel,
     /// 结束方式：另存为。
     SaveAs,
-    /// 结束方式：自动存储。
-    AutoSave,
-    /// 结束方式：复制到剪贴板。
-    Copy,
+    /// 结束方式：确认，把截图复制到剪贴板。
+    Confirm,
 }
 
 /// 工具条上的一种按钮。
@@ -74,10 +81,13 @@ impl ToolbarButton for Button {
             Button::Tool(Tool::Select) => "annotation-select",
             Button::Undo => "annotation-undo",
             Button::Redo => "annotation-redo",
+            Button::Record => "annotation-record",
+            Button::LongScreenshot => "annotation-long-screenshot",
+            Button::Ocr => "annotation-ocr",
+            Button::Translate => "annotation-translate",
             Button::Cancel => "annotation-cancel",
             Button::SaveAs => "annotation-save-as",
-            Button::AutoSave => "annotation-auto-save",
-            Button::Copy => "annotation-copy",
+            Button::Confirm => "annotation-confirm",
             Button::Color(_) | Button::Thickness(_) => return None,
         })
     }
@@ -104,8 +114,8 @@ pub(crate) enum Entry<B> {
     Separator,
 }
 
-/// 上一行从左到右：工具 | 撤销、重做 | 取消、结束方式（最常用的“复制”在最右边）。
-const TOP_ROW: [Entry<Button>; 13] = [
+/// 上一行从左到右：工具 | 撤销、重做 | 取消、另存为、确认（最常用的“确认”在最右边）。
+const TOP_ROW: [Entry<Button>; 12] = [
     Entry::Button(Button::Tool(Tool::Rectangle)),
     Entry::Button(Button::Tool(Tool::Arrow)),
     Entry::Button(Button::Tool(Tool::Mosaic)),
@@ -117,13 +127,13 @@ const TOP_ROW: [Entry<Button>; 13] = [
     Entry::Separator,
     Entry::Button(Button::Cancel),
     Entry::Button(Button::SaveAs),
-    Entry::Button(Button::AutoSave),
-    Entry::Button(Button::Copy),
+    Entry::Button(Button::Confirm),
 ];
 
-/// 下一行从左到右：预设颜色 | 三档线宽（从细到粗）。
-fn style_row() -> Vec<Entry<Button>> {
-    PALETTE
+/// 下一行从左到右：预设颜色 | 三档线宽（从细到粗）| （`handoffs` 时）录屏、长截屏、OCR、翻译。
+/// 转入其他功能的按钮只在等待确认的截图界面上有；长截屏拼好后的标注阶段没有。
+fn style_row(handoffs: bool) -> Vec<Entry<Button>> {
+    let mut row: Vec<Entry<Button>> = PALETTE
         .iter()
         .map(|&color| Entry::Button(Button::Color(color)))
         .chain([Entry::Separator])
@@ -132,7 +142,17 @@ fn style_row() -> Vec<Entry<Button>> {
                 .iter()
                 .map(|&thickness| Entry::Button(Button::Thickness(thickness))),
         )
-        .collect()
+        .collect();
+    if handoffs {
+        row.extend([
+            Entry::Separator,
+            Entry::Button(Button::Record),
+            Entry::Button(Button::LongScreenshot),
+            Entry::Button(Button::Ocr),
+            Entry::Button(Button::Translate),
+        ]);
+    }
+    row
 }
 
 /// 以下尺寸是 100% 缩放下的值（物理像素）。
@@ -189,10 +209,17 @@ pub(crate) struct Toolbar<B = Button> {
 }
 
 impl Toolbar<Button> {
-    /// 贴着 `region`（外侧有宽 `frame` 的边框）的标注工具条，按钮文字用 `texts` 的语言。
-    pub fn beside(region: Rect, frame: u32, displays: &[Display], texts: &Texts) -> Self {
+    /// 贴着 `region`（外侧有宽 `frame` 的边框）的标注工具条，按钮文字用 `texts` 的语言；
+    /// `handoffs` 时带转入录屏、长截屏、OCR、翻译的按钮。
+    pub fn beside(
+        region: Rect,
+        frame: u32,
+        displays: &[Display],
+        texts: &Texts,
+        handoffs: bool,
+    ) -> Self {
         Self::with_rows(
-            &[TOP_ROW.to_vec(), style_row()],
+            &[TOP_ROW.to_vec(), style_row(handoffs)],
             region,
             frame,
             displays,

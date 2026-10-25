@@ -18,10 +18,17 @@ fn fake() -> FakePlatform {
         .with_time(LocalDateTime::new(2026, 10, 24, 9, 5, 7))
 }
 
-fn capture(actions: Vec<PostCaptureAction>, format: OutputFormat) -> Command {
-    let mut request = CaptureRequest::new(CaptureMode::Display, actions);
+fn capture(after: PostCaptureAction, format: OutputFormat) -> Command {
+    let mut request = CaptureRequest::new(CaptureMode::Display, after);
     request.output.output_format = format;
     Command::Capture(request)
+}
+
+fn capture_and_save(format: OutputFormat) -> Command {
+    let Command::Capture(request) = capture(PostCaptureAction::CopyToClipboard, format) else {
+        unreachable!()
+    };
+    Command::Capture(request.with_auto_save())
 }
 
 #[test]
@@ -31,7 +38,7 @@ fn copied_image_is_encoded_in_output_format_with_dib() {
 
     instance
         .execute(capture(
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
             OutputFormat::WebP,
         ))
         .unwrap();
@@ -52,13 +59,7 @@ fn copy_with_auto_save_also_puts_saved_file_on_clipboard() {
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
     instance
-        .execute(capture(
-            vec![
-                PostCaptureAction::CopyToClipboard,
-                PostCaptureAction::AutoSave,
-            ],
-            OutputFormat::Jpeg,
-        ))
+        .execute(capture_and_save(OutputFormat::Jpeg))
         .unwrap();
 
     let saved = Path::new(DEFAULT_PICTURES_DIR)
@@ -77,35 +78,13 @@ fn copy_with_auto_save_also_puts_saved_file_on_clipboard() {
 }
 
 #[test]
-fn auto_save_without_copy_leaves_clipboard_untouched() {
-    let fake = fake();
-    let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
-
-    instance
-        .execute(capture(
-            vec![PostCaptureAction::AutoSave],
-            OutputFormat::Png,
-        ))
-        .unwrap();
-
-    assert!(fake.clipboard().is_empty());
-    assert_eq!(fake.files().len(), 1);
-}
-
-#[test]
 fn jpeg_output_fills_transparent_pixels_with_white() {
     let transparent = Image::from_rgba(64, 48, [0, 0, 0, 0].repeat(64 * 48));
     let fake = FakePlatform::new().with_display(display().with_image(transparent.clone()));
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
     instance
-        .execute(capture(
-            vec![
-                PostCaptureAction::CopyToClipboard,
-                PostCaptureAction::AutoSave,
-            ],
-            OutputFormat::Jpeg,
-        ))
+        .execute(capture_and_save(OutputFormat::Jpeg))
         .unwrap();
 
     let saved = decode::jpeg(&fake.file(&fake.files()[0]).unwrap());

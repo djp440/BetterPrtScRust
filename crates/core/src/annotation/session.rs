@@ -12,7 +12,8 @@
 //! - “选择”工具点中已画好的标注（最上面那个）：拖动它移动（整个拖动是一步历史），工具条上
 //!   的颜色、线宽按钮改它的样式，Delete 删除它。Ctrl+Z 撤销、Ctrl+Y（或 Ctrl+Shift+Z）重做，
 //!   工具条上也有“撤销”“重做”按钮；添加、移动、改样式、删除都能撤销和重做。
-//! - 点“复制”“自动存储”“另存为”结束（[`Response::Finish`]）；点“取消”或按 Esc 取消。
+//! - 点“确认”（或按 Enter、双击区域）、“另存为”结束（[`Response::Finish`]）；点“取消”或按 Esc
+//!   取消。等待确认的截图界面上还有转入录屏、长截屏、OCR、翻译的按钮（[`Response::Switch`]）。
 //!
 //! 标注的坐标是截图的像素坐标：屏幕坐标减去区域左上角。比屏幕还高的长截屏缩小显示在区域里
 //! （[`Annotator::lock_image`]），屏幕坐标再按缩小比例换算；屏幕上显示的是把标注按同样比例
@@ -46,9 +47,22 @@ const TEXT_BOX_PADDING: f64 = 3.0;
 /// 结束这次标注的方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Finish {
-    CopyToClipboard,
-    AutoSave,
+    /// 确认：复制到剪贴板（绑定开了自动保存时同时存盘）。
+    Confirm,
     SaveAs,
+}
+
+/// 用户在工具条上选择转入的其他功能：它们离开标注界面，由捕获会话接手。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Switch {
+    /// 以当前选区（或窗口）开始录屏。
+    Record,
+    /// 以当前选区开始长截屏。
+    LongScreenshot,
+    /// 识别当前截图（含标注）里的文字。
+    Ocr,
+    /// 识别并直接翻译。
+    Translate,
 }
 
 /// [`Annotator::handle`] 的结果。
@@ -60,6 +74,8 @@ pub(crate) enum Response {
     Handled,
     /// 用户选择了结束方式。
     Finish(Finish),
+    /// 用户转入了另一个功能。
+    Switch(Switch),
     /// 用户取消了这次捕获。
     Cancel,
 }
@@ -80,6 +96,8 @@ pub(crate) struct Annotator {
     pointer: Option<Point>,
     /// 区域锁定后的标注；锁定前为 `None`。
     canvas: Option<Canvas>,
+    /// 工具条上带转入录屏、长截屏、OCR、翻译的按钮。
+    handoffs: bool,
 }
 
 /// 锁定的区域、它的截图和上面的标注。
@@ -357,7 +375,14 @@ impl Annotator {
             pressed: None,
             pointer: None,
             canvas: None,
+            handoffs: false,
         }
+    }
+
+    /// 工具条上带转入录屏、长截屏、OCR、翻译的按钮（等待确认的截图界面）。
+    pub fn with_handoffs(mut self) -> Self {
+        self.handoffs = true;
+        self
     }
 
     /// 标注所在的区域：锁定后是锁定的区域，否则是选区状态机里已选定的区域。
@@ -424,7 +449,7 @@ impl Annotator {
             OverlayInput::KeyPressed {
                 key: OverlayKey::Enter,
                 ..
-            } if locked => Response::Finish(Finish::CopyToClipboard),
+            } if locked => Response::Finish(Finish::Confirm),
             OverlayInput::PointerMoved { position, .. } => {
                 self.pointer = Some(position);
                 self.hovered = toolbar.button_at(position);
@@ -457,7 +482,7 @@ impl Annotator {
                 } else if !locked {
                     Response::Pass
                 } else if double_click && region.contains(position) {
-                    Response::Finish(Finish::CopyToClipboard)
+                    Response::Finish(Finish::Confirm)
                 } else {
                     self.press_in_canvas(platform, position, region)?;
                     Response::Handled
@@ -493,7 +518,7 @@ impl Annotator {
             _ if locked => Response::Handled,
             _ => Response::Pass,
         };
-        if let Response::Finish(_) = response
+        if matches!(response, Response::Finish(_) | Response::Switch(_))
             && let Some(canvas) = self.canvas.as_mut()
         {
             // 用户看到的正在画的标注和正在输入的文字也算在最终截图里。
@@ -719,10 +744,13 @@ impl Annotator {
                 self.step_history(button == Button::Redo);
                 Response::Handled
             }
+            Button::Record => Response::Switch(Switch::Record),
+            Button::LongScreenshot => Response::Switch(Switch::LongScreenshot),
+            Button::Ocr => Response::Switch(Switch::Ocr),
+            Button::Translate => Response::Switch(Switch::Translate),
             Button::Cancel => Response::Cancel,
             Button::SaveAs => Response::Finish(Finish::SaveAs),
-            Button::AutoSave => Response::Finish(Finish::AutoSave),
-            Button::Copy => Response::Finish(Finish::CopyToClipboard),
+            Button::Confirm => Response::Finish(Finish::Confirm),
         })
     }
 
@@ -764,7 +792,7 @@ impl Annotator {
     /// 显示器的缩放比例）。
     fn toolbar(&self, region: Rect) -> Toolbar {
         let frame = (self.scale_at(Point::new(region.x, region.y)).round() as u32).max(1);
-        Toolbar::beside(region, frame, &self.displays, self.texts)
+        Toolbar::beside(region, frame, &self.displays, self.texts, self.handoffs)
     }
 
     /// `point` 所在显示器的缩放比例；不在任何显示器上时为 1。

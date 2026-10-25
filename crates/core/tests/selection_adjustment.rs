@@ -18,12 +18,12 @@ fn single_display() -> FakePlatform {
         .with_cursor_at(Point::new(10, 10))
 }
 
-fn capture(fake: &FakePlatform, actions: Vec<PostCaptureAction>) -> ResidentInstance {
+fn capture(fake: &FakePlatform, after: PostCaptureAction) -> ResidentInstance {
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            actions,
+            after,
         )))
         .unwrap();
     instance
@@ -82,7 +82,7 @@ fn size_label(fake: &FakePlatform) -> String {
 #[test]
 fn dragging_corner_handle_resizes_selection_and_capture_matches() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
     select(&fake, &mut instance, region);
 
@@ -101,7 +101,7 @@ fn dragging_corner_handle_resizes_selection_and_capture_matches() {
 #[test]
 fn dragging_edge_handle_moves_only_that_edge() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
     select(&fake, &mut instance, region);
 
@@ -118,7 +118,7 @@ fn dragging_edge_handle_moves_only_that_edge() {
 #[test]
 fn dragging_handle_past_opposite_edge_flips_selection() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
     select(&fake, &mut instance, region);
 
@@ -135,7 +135,7 @@ fn dragging_handle_past_opposite_edge_flips_selection() {
 #[test]
 fn handles_cannot_drag_selection_off_virtual_desktop() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(600, 400, 100, 100);
     select(&fake, &mut instance, region);
 
@@ -148,7 +148,7 @@ fn handles_cannot_drag_selection_off_virtual_desktop() {
 #[test]
 fn dragging_inside_selection_moves_it_within_virtual_desktop() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
     select(&fake, &mut instance, region);
 
@@ -177,7 +177,7 @@ fn dragging_inside_selection_moves_it_within_virtual_desktop() {
 #[test]
 fn clicking_inside_selection_keeps_it_and_double_click_still_finishes() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
     select(&fake, &mut instance, region);
 
@@ -208,7 +208,7 @@ const SHIFT: Modifiers = Modifiers {
 #[test]
 fn arrow_keys_nudge_selection_pixel_by_pixel() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     select(&fake, &mut instance, Rect::new(100, 80, 200, 150));
 
     // 方向键移动 1 像素。
@@ -250,7 +250,7 @@ fn arrow_keys_nudge_selection_pixel_by_pixel() {
 #[test]
 fn nudging_stops_at_virtual_desktop_edges_and_at_one_pixel() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     select(&fake, &mut instance, Rect::new(0, 0, 2, 2));
 
     feed(
@@ -297,7 +297,7 @@ fn handle_points(region: Rect) -> [Point; 8] {
 #[test]
 fn selected_region_shows_handles_on_its_frame() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     let region = Rect::new(100, 80, 200, 150);
 
     select(&fake, &mut instance, region);
@@ -322,10 +322,10 @@ fn shifted(rect: Rect, dx: i32, dy: i32) -> Rect {
 #[test]
 fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::Annotate]);
+    let mut instance = capture(&fake, PostCaptureAction::AwaitConfirmation);
     let region = Rect::new(450, 80, 250, 200);
     select(&fake, &mut instance, region);
-    let copy = text_rect(&fake, "复制");
+    let copy = text_rect(&fake, "确认");
 
     // 工具条贴在选区右下方（选区靠右一些，免得工具条被挤到屏幕左边缘）：拖右下角手柄、按方向键后，工具条随选区挪动。
     let handle = Point::new(right(region), bottom(region));
@@ -333,12 +333,12 @@ fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
         &mut instance,
         fake.drag(handle, Point::new(handle.x + 40, handle.y + 30)),
     );
-    assert_eq!(text_rect(&fake, "复制"), shifted(copy, 40, 30));
+    assert_eq!(text_rect(&fake, "确认"), shifted(copy, 40, 30));
     feed(
         &mut instance,
         vec![key(&fake, OverlayKey::Right, Modifiers::NONE)],
     );
-    assert_eq!(text_rect(&fake, "复制"), shifted(copy, 41, 30));
+    assert_eq!(text_rect(&fake, "确认"), shifted(copy, 41, 30));
     let adjusted = Rect::new(451, 80, 290, 230);
     assert!(handle_at(
         &fake.overlay_scene().unwrap(),
@@ -358,9 +358,9 @@ fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
         &mut instance,
         vec![key(&fake, OverlayKey::Right, Modifiers::NONE)],
     );
-    assert_eq!(text_rect(&fake, "复制"), shifted(copy, 41, 30));
+    assert_eq!(text_rect(&fake, "确认"), shifted(copy, 41, 30));
 
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
     let image = fake.clipboard().png_image().expect("剪贴板里应有截图");
     assert!(image == desktop_pattern(adjusted), "截图应是调整后的区域");
 }
@@ -368,7 +368,7 @@ fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
 #[test]
 fn pointer_shape_tells_what_dragging_there_does() {
     let fake = single_display();
-    let mut instance = capture(&fake, vec![PostCaptureAction::CopyToClipboard]);
+    let mut instance = capture(&fake, PostCaptureAction::CopyToClipboard);
     select(&fake, &mut instance, Rect::new(100, 80, 200, 150));
 
     let cases = [

@@ -12,19 +12,19 @@ use bps_platform::{
 };
 use bps_platform_fake::{FakeDisplay, FakePlatform, desktop_pattern};
 
-fn region_capture(actions: Vec<PostCaptureAction>) -> Command {
-    Command::Capture(CaptureRequest::new(CaptureMode::Region, actions))
+fn region_capture(after: PostCaptureAction) -> Command {
+    Command::Capture(CaptureRequest::new(CaptureMode::Region, after))
 }
 
 fn copy_region_capture() -> Command {
-    region_capture(vec![PostCaptureAction::CopyToClipboard])
+    region_capture(PostCaptureAction::CopyToClipboard)
 }
 
 fn copy_and_save_region_capture() -> Command {
-    region_capture(vec![
-        PostCaptureAction::CopyToClipboard,
-        PostCaptureAction::AutoSave,
-    ])
+    Command::Capture(
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
+            .with_auto_save(),
+    )
 }
 
 fn single_display() -> FakePlatform {
@@ -307,7 +307,7 @@ fn another_capture_is_rejected_while_overlay_is_open() {
 
     let display_capture = Command::Capture(CaptureRequest::new(
         CaptureMode::Display,
-        vec![PostCaptureAction::CopyToClipboard],
+        PostCaptureAction::CopyToClipboard,
     ));
     assert_eq!(
         instance.execute(display_capture),
@@ -346,10 +346,7 @@ fn hotkey_bound_to_region_capture_opens_overlay_and_copies_selected_region() {
     let hotkey: Hotkey = "Ctrl+Alt+A".parse().unwrap();
     let binding = HotkeyBinding {
         hotkey,
-        capture: CaptureRequest::new(
-            CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
-        ),
+        capture: CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard),
     };
     let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     assert!(instance.register_hotkeys().is_empty());

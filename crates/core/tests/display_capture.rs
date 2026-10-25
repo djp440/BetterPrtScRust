@@ -23,10 +23,7 @@ fn scaled_display() -> FakeDisplay {
 }
 
 fn copy_display_capture() -> CaptureRequest {
-    CaptureRequest::new(
-        CaptureMode::Display,
-        vec![PostCaptureAction::CopyToClipboard],
-    )
+    CaptureRequest::new(CaptureMode::Display, PostCaptureAction::CopyToClipboard)
 }
 
 #[test]

@@ -6,12 +6,13 @@
 use std::path::PathBuf;
 
 use bps_platform::Hotkey;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::config::{Format, allows_typing};
+use crate::{CaptureKind, DirectFunction};
 use crate::{
     CaptureMode, Config, ConfigError, FilenameTemplate, FilenameTemplateError, Language,
-    OutputFormat, PostCaptureAction, SaveDir, Texts,
+    OutputFormat, SaveDir, Texts,
 };
 
 const BOM: char = '\u{feff}';
@@ -54,9 +55,6 @@ impl Settings {
                     hotkey: binding.hotkey,
                 });
             }
-            if binding.actions.is_empty() {
-                problems.push(SettingsProblem::NoActions { binding: index });
-            }
         }
         problems
     }
@@ -67,8 +65,10 @@ impl Settings {
 pub struct BindingSettings {
     pub hotkey: Hotkey,
     pub mode: CaptureMode,
-    /// 截后动作，按执行顺序排列。
-    pub actions: Vec<PostCaptureAction>,
+    /// 截图类绑定的截后动作，或直达功能。
+    pub kind: CaptureKind,
+    /// 自动保存（对录屏、OCR 直达功能无意义，写回时不会写出）。
+    pub auto_save: bool,
     /// 读入时它是配置文件里的第几条绑定；新增的绑定为 `None`。
     /// 写回时据此保留这条绑定在界面上没有的覆盖项和注释。
     source: Option<usize>,
@@ -76,11 +76,12 @@ pub struct BindingSettings {
 
 impl BindingSettings {
     /// 新增的一条热键绑定。
-    pub fn new(hotkey: Hotkey, mode: CaptureMode, actions: Vec<PostCaptureAction>) -> Self {
+    pub fn new(hotkey: Hotkey, mode: CaptureMode, kind: CaptureKind) -> Self {
         Self {
             hotkey,
             mode,
-            actions,
+            kind,
+            auto_save: false,
             source: None,
         }
     }
@@ -103,10 +104,6 @@ pub enum SettingsProblem {
         binding: usize,
         hotkey: Hotkey,
     },
-    /// 第 `binding` 条（从 0 开始）绑定没有选任何截后动作。
-    NoActions {
-        binding: usize,
-    },
     /// 生成的配置文件无法解析（不应发生）。
     Invalid(ConfigError),
 }
@@ -121,9 +118,6 @@ impl SettingsProblem {
                 "settings-problem-typing-key",
                 &[("index", &(binding + 1)), ("hotkey", hotkey)],
             ),
-            SettingsProblem::NoActions { binding } => {
-                texts.format("settings-problem-no-actions", &[("index", &(binding + 1))])
-            }
             SettingsProblem::Invalid(error) => texts.format(
                 "settings-problem-invalid",
                 &[("error", &error.localized(texts))],
@@ -134,8 +128,7 @@ impl SettingsProblem {
     /// 问题出在哪条热键绑定（从 0 开始）；与绑定无关时为 `None`。
     pub fn binding(&self) -> Option<usize> {
         match self {
-            SettingsProblem::TypingKeyWithoutModifier { binding, .. }
-            | SettingsProblem::NoActions { binding } => Some(*binding),
+            SettingsProblem::TypingKeyWithoutModifier { binding, .. } => Some(*binding),
             _ => None,
         }
     }
@@ -263,11 +256,31 @@ impl SettingsDocument {
             if old.map(|o| o.mode) != Some(binding.mode) {
                 set_value(&mut table, "mode", binding.mode.config_name().into());
             }
-            if old.map(|o| &o.actions) != Some(&binding.actions) {
-                let actions: Array = binding.actions.iter().map(|a| a.config_name()).collect();
-                set_value(&mut table, "actions", actions.into());
+            if old.map(|o| o.kind) != Some(binding.kind) {
+                // `after` 与 `function` 互斥：换了种类要删掉另一个键；旧版的 `actions` 也一并清掉。
+                table.remove("actions");
+                match binding.kind {
+                    CaptureKind::Screenshot(after) => {
+                        table.remove("function");
+                        set_value(&mut table, "after", after.config_name().into());
+                    }
+                    CaptureKind::Function(function) => {
+                        table.remove("after");
+                        set_value(&mut table, "function", function.config_name().into());
+                    }
+                }
             }
-            drop_mismatched_output_format(&mut table, &binding.actions);
+            let auto_save = binding.auto_save && binding.kind.supports_auto_save();
+            if old.map(|o| o.auto_save && o.kind.supports_auto_save()) != Some(auto_save) {
+                if auto_save {
+                    set_value(&mut table, "auto_save", true.into());
+                } else {
+                    table.remove("auto_save");
+                }
+            } else if !binding.kind.supports_auto_save() {
+                table.remove("auto_save");
+            }
+            drop_mismatched_output_format(&mut table, binding.kind);
             // 按数组里的顺序输出。
             table.set_position(None);
             tables.push(table);
@@ -298,7 +311,8 @@ fn settings_of(config: &Config) -> Settings {
             .map(|(index, binding)| BindingSettings {
                 hotkey: binding.hotkey,
                 mode: binding.capture.mode,
-                actions: binding.capture.actions.clone(),
+                kind: binding.capture.kind,
+                auto_save: binding.capture.auto_save,
                 source: Some(index),
             })
             .collect(),
@@ -342,8 +356,8 @@ fn new_binding_table() -> Table {
 
 /// 截后动作变了以后，与之不符的 `output_format` 覆盖项（录屏用 mp4/gif，截图用图像格式）
 /// 不再有意义，删掉它，改用全局设置或录屏的默认值。
-fn drop_mismatched_output_format(table: &mut Table, actions: &[PostCaptureAction]) {
-    let records = actions.contains(&PostCaptureAction::Record);
+fn drop_mismatched_output_format(table: &mut Table, kind: CaptureKind) {
+    let records = kind == CaptureKind::Function(DirectFunction::Record);
     let mismatched = table
         .get("output_format")
         .and_then(Item::as_str)

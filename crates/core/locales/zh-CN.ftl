@@ -50,12 +50,10 @@ mode-virtual-desktop = 虚拟桌面
 mode-region = 区域
 mode-window = 窗口
 action-copy-to-clipboard = 复制到剪贴板
-action-auto-save = 自动存储
-action-annotate = 标注
+action-await-confirmation = 等待确认
 action-record = 录屏
 action-long-screenshot = 长截屏
 action-ocr = OCR
-action-translate = 翻译
 
 ## 执行失败的原因
 
@@ -83,11 +81,15 @@ config-hotkey-not-a-modifier = 热键“{ $hotkey }”中的“{ $part }”不�
 config-hotkey-missing-key = 热键“{ $hotkey }”缺少主键
 config-hotkey-unsupported-key = 热键“{ $hotkey }”中的“{ $key }”不是支持的按键
 config-hotkey-typing-key = 热键“{ $hotkey }”会吞掉正常输入：字母和数字键需要搭配 Ctrl、Alt 或 Win
-config-no-actions = actions 至少要有一个截后动作
 config-unknown-format = 未知的输出格式“{ $format }”：截图可用 png、jpg、webp、avif，录屏可用 mp4、gif
 config-image-format-for-recording = 录屏的 output_format 只能是 mp4 或 gif
-config-recording-format-for-screenshot = mp4、gif 只用于录屏（actions 含 record 的绑定）；截图可用 png、jpg、webp、avif
-config-recording-format-in-global = 全局的 output_format 只用于截图，可用 png、jpg、webp、avif；录屏格式（mp4、gif）写在 actions 含 record 的绑定里
+config-legacy-actions = 旧的 actions = [...] 写法已不再支持：截图类绑定改写 after = "copy_to_clipboard" 或 "await_confirmation"（自动存储改为 auto_save = true），直达功能改写 function = "record"、"long_screenshot" 或 "ocr"
+config-unknown-after = 未知的截后动作“{ $after }”，可选 copy_to_clipboard、await_confirmation
+config-unknown-function = 未知的直达功能“{ $function }”，可选 record、long_screenshot、ocr
+config-after-with-function = after 与 function 只能写一个：截图类绑定写 after，直达功能写 function
+config-auto-save-not-applicable = 直达功能 { $function } 不支持 auto_save（录屏总是保存，OCR 不保存）
+config-recording-format-for-screenshot = mp4、gif 只用于录屏（function = "record" 的绑定）；截图可用 png、jpg、webp、avif
+config-recording-format-in-global = 全局的 output_format 只用于截图，可用 png、jpg、webp、avif；录屏格式（mp4、gif）写在 function = "record" 的绑定里
 config-zero-frame-rate = frame_rate 必须大于 0
 config-unknown-language = 未知的界面语言“{ $language }”：可用 auto（跟随系统）、zh-CN、en
 template-unclosed = 命名模板中的 { "{" } 没有对应的 { "}" }
@@ -98,7 +100,6 @@ template-unknown-placeholder = 命名模板中有无法识别的占位符 { "{" 
 
 settings-problem-empty-save-dir = 自动存储目录不能为空；不想指定时请选“默认目录”
 settings-problem-typing-key = 第 { $index } 条热键绑定（{ $hotkey }）：字母和数字键需要搭配 Ctrl、Alt 或 Win
-settings-problem-no-actions = 第 { $index } 条热键绑定：至少选择一个截后动作
 settings-problem-invalid = 无法生成有效的配置文件：{ $error }
 
 ## 设置界面
@@ -132,16 +133,15 @@ settings-filename-help = 可用占位符：{ "{" }mode{ "}" }（捕获模式）�
 settings-output-format = 截图格式
 settings-output-format-hint = PNG 和 WebP 无损；JPEG 体积小但有损、不支持透明；AVIF 体积最小，但编码较慢。录屏的格式在热键绑定里另行设置。
 settings-section-bindings = 热键绑定
-settings-bindings-hint = 字母和数字键需要搭配 Ctrl、Alt 或 Win。截后动作按勾选的先后顺序执行。
+settings-bindings-hint = 字母和数字键需要搭配 Ctrl、Alt 或 Win。
 settings-binding-failed = 注册失败：{ $reason }
 settings-binding-add = 添加热键
 settings-binding-remove = 删除
 settings-binding-hotkey = 热键
 settings-binding-mode = 捕获模式
-settings-binding-actions = 截后动作
-settings-binding-order = 执行顺序：{ $actions }
+settings-binding-actions = 截后动作 / 功能
+settings-binding-auto-save = 自动保存
 settings-binding-needs-modifier = 字母和数字键需要搭配 Ctrl、Alt 或 Win
-settings-binding-needs-action = 至少选择一个截后动作
 settings-config-broken = 配置文件有错误，无法在这里编辑
 settings-config-broken-hint = 请用文本编辑器修正下面这个文件，然后点“重新读取”。
 settings-config-not-utf8 = 配置文件不是 UTF-8 编码
@@ -184,8 +184,11 @@ annotation-undo = 撤销
 annotation-redo = 重做
 annotation-cancel = 取消
 annotation-save-as = 另存为
-annotation-auto-save = 自动存储
-annotation-copy = 复制
+annotation-confirm = 确认
+annotation-record = 录屏
+annotation-long-screenshot = 长截屏
+annotation-ocr = OCR
+annotation-translate = 翻译
 save-as-file-type = { $format } 图像
 notification-save-as-failed-title = 另存为失败
 

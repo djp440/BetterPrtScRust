@@ -35,7 +35,7 @@ fn desktop() -> FakePlatform {
 /// 只有一条 Alt+PrtSc“窗口录屏”绑定的常驻实例。
 fn resident(fake: &FakePlatform) -> ResidentInstance {
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nactions = [\"record\"]\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
@@ -185,7 +185,7 @@ fn resizing_window_keeps_video_size_and_crops_or_pads_with_black() {
 #[test]
 fn file_name_uses_window_title() {
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nactions = [\"record\"]\nfilename_template = \"{window_title}\"\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\nfilename_template = \"{window_title}\"\n",
     )
     .unwrap();
     let fake = desktop();
@@ -254,7 +254,7 @@ fn window_too_small_for_mp4_is_rejected_without_leaving_files() {
 fn window_recording_supports_gif_output() {
     let fake = desktop();
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nactions = [\"record\"]\noutput_format = \"gif\"\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\noutput_format = \"gif\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);

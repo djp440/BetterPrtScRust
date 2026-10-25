@@ -1,7 +1,8 @@
 //! 进行中的长截屏：在选区遮罩上框选区域 → 按“开始”后区域透过遮罩、用户自己滚动内容，
 //! 平台持续采样区域的实时画面并逐帧拼接，区域旁边显示拼接预览 → 按“完成”（或高度到达上限
-//! 自动停止并提示）→ 这条绑定后续的截后动作：包含标注时在遮罩上标注整张长截屏（比屏幕高时
-//! 缩小显示），否则直接复制和 / 或自动存储（两者都没有时复制到剪贴板）。
+//! 自动停止并提示）→ 直达功能的长截屏直接复制到剪贴板（绑定开了自动保存时同时存盘）；
+//! 从等待确认界面转入的长截屏回到等待确认：在遮罩上标注整张长截屏（比屏幕高时缩小显示），
+//! 再确认、另存为或取消。
 //!
 //! 与区域捕获一样跨越多个平台事件：[`LongScreenshotCapture::start`] 打开遮罩后立即返回，
 //! 之后每个 [`OverlayInput`] 交给 [`LongScreenshotCapture::handle`]，每个
@@ -27,7 +28,7 @@ use crate::selection::{
     Step, mask_around,
 };
 use crate::stitch::virtual_desktop_bounds;
-use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action};
+use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
 /// 拼接预览的边框。
 const PREVIEW_BORDER: Color = Color::rgba(255, 255, 255, 160);
@@ -108,11 +109,31 @@ pub(crate) struct LongScreenshotCapture {
     magnifier: Magnifier,
     /// 开始捕获时的界面语言：遮罩上的文字和通知都用它。
     texts: &'static Texts,
+    /// 从等待确认界面转入的：拼好后回到等待确认（标注、确认、另存为、取消），
+    /// 而不是直接交付。
+    confirm_after: bool,
     /// 经 CLI 转交来、等捕获结束再回复的请求。
     pub requester: Option<IncomingRequest>,
 }
 
 impl LongScreenshotCapture {
+    /// 从等待确认界面转入：以已经选好的 `region` 直接开始采样（不再框选，也不用再按“开始”）。
+    /// 这个会话打开自己的选区遮罩（拍新的冻结帧）。
+    pub fn start_in(
+        platform: &mut Platform,
+        request: CaptureRequest,
+        texts: &'static Texts,
+        region: Rect,
+    ) -> Result<Self, CoreError> {
+        let mut capture = Self::start(platform, request, texts)?;
+        capture.confirm_after = true;
+        match capture.begin_sampling(platform, region) {
+            None => Ok(capture),
+            Some(Err(failure)) => Err(failure.error),
+            Some(Ok(_)) => unreachable!("开始采样不会直接结束"),
+        }
+    }
+
     /// 拍下冻结帧并显示选区遮罩。显示器、虚拟桌面模式不用框选：区域一开始就是整块显示器
     /// 或整个虚拟桌面，用户直接按“开始”。
     pub fn start(
@@ -155,6 +176,7 @@ impl LongScreenshotCapture {
             pointer: None,
             drawn: None,
             texts,
+            confirm_after: false,
             requester: None,
         };
         if let Err(e) = capture.redraw(platform) {
@@ -281,7 +303,10 @@ impl LongScreenshotCapture {
         };
         let view = *view;
         match annotator.handle(platform, input, Some(view)) {
-            Ok(Response::Pass | Response::Handled) => self.keep_going(platform),
+            // 这里的工具条没有转入其他功能的按钮。
+            Ok(Response::Pass | Response::Handled | Response::Switch(_)) => {
+                self.keep_going(platform)
+            }
             Ok(Response::Finish(how)) => {
                 let Phase::Annotating { annotator, .. } = &self.phase else {
                     return None;
@@ -403,8 +428,8 @@ impl LongScreenshotCapture {
         self.keep_going(platform)
     }
 
-    /// 结束拼接：停止采样；到达高度上限时提示用户。截后动作包含标注时进入标注，否则关闭遮罩，
-    /// 复制和 / 或自动存储（两者都没有时复制到剪贴板）。
+    /// 结束拼接：停止采样；到达高度上限时提示用户。从等待确认界面转入的回到等待确认（进入标注），
+    /// 否则关闭遮罩，复制到剪贴板（绑定开了自动保存时同时存盘）。
     fn complete(&mut self, platform: &mut Platform) -> Option<Result<Ending, CaptureFailure>> {
         self.stop_sampling(platform);
         let Phase::Sampling(sampling) = std::mem::replace(&mut self.phase, Phase::Over) else {
@@ -422,7 +447,7 @@ impl LongScreenshotCapture {
             });
         }
         let image = long.into_image();
-        if self.request.actions.contains(&PostCaptureAction::Annotate) {
+        if self.confirm_after {
             let view = preview::annotation_view(region, &image, &self.displays);
             let mut annotator = Annotator::new(self.displays.clone(), self.texts);
             annotator.lock_image(view, image);
@@ -441,16 +466,10 @@ impl LongScreenshotCapture {
             captured_at: self.captured_at,
             window_title: None,
         };
-        let mut request = self.request.clone();
-        if !request.actions.iter().any(|a| {
-            matches!(
-                a,
-                PostCaptureAction::CopyToClipboard | PostCaptureAction::AutoSave
-            )
-        }) {
-            request.actions.push(PostCaptureAction::CopyToClipboard);
-        }
-        Some(action::run(platform, &screenshot, &request, self.texts).map(|()| Ending::Delivered))
+        Some(
+            action::run(platform, &screenshot, &self.request, self.texts)
+                .map(|()| Ending::Delivered),
+        )
     }
 
     /// 用户取消：停止采样、关闭遮罩，没有任何产物。

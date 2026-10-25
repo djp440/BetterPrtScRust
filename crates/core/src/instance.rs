@@ -8,12 +8,13 @@ use crate::active::ActiveCapture;
 use crate::capture::CaptureFailure;
 use crate::long_screenshot::LongScreenshotCapture;
 use crate::recording::Recording;
-use crate::region::{Ending, RegionCapture};
+use crate::region::{Ending, Handoff, HandoffTo, RegionCapture};
 use crate::window::WindowCapture;
 use crate::{
-    BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG, Flow,
-    HotkeyBinding, HotkeyRegistrationFailure, Locale, PostCaptureAction, RegistrationError, Reply,
-    Request, ResidentStatus, Texts, UpdateStatus, VERSION, action, capture, update,
+    BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG,
+    DirectFunction, Flow, HotkeyBinding, HotkeyRegistrationFailure, Locale, PostCaptureAction,
+    RegistrationError, Reply, Request, ResidentStatus, Texts, UpdateStatus, VERSION, action,
+    capture, update,
 };
 
 /// 托盘菜单“设置”。
@@ -430,7 +431,7 @@ impl ResidentInstance {
                     .map(|binding| binding.capture.clone())
                     .unwrap_or_else(|| CaptureRequest {
                         output: self.config.output.clone(),
-                        ..CaptureRequest::new(*mode, vec![PostCaptureAction::CopyToClipboard])
+                        ..CaptureRequest::new(*mode, PostCaptureAction::CopyToClipboard)
                     }),
             ),
             Request::Activate => Command::Activate,
@@ -470,14 +471,14 @@ impl ResidentInstance {
             ));
         }
         let texts = self.texts();
-        if request.actions.contains(&PostCaptureAction::Record) {
+        if request.is_function(DirectFunction::Record) {
             let recording = Recording::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Recording(recording));
             return Ok(Progress::AwaitingUser);
         }
         // 长截屏不论什么模式都先在选区遮罩上框选区域，之后的截后动作（含标注）由它负责。
-        if request.actions.contains(&PostCaptureAction::LongScreenshot) {
+        if request.is_function(DirectFunction::LongScreenshot) {
             let capture = LongScreenshotCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::LongScreenshot(capture));
@@ -490,9 +491,7 @@ impl ResidentInstance {
             self.active = Some(ActiveCapture::Window(capture));
             return Ok(Progress::AwaitingUser);
         }
-        if request.mode == CaptureMode::Region
-            || request.actions.contains(&PostCaptureAction::Annotate)
-        {
+        if request.mode == CaptureMode::Region || request.awaits_confirmation() {
             let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Region(Box::new(capture)));
@@ -549,7 +548,43 @@ impl ResidentInstance {
             return Ok(Flow::Continue);
         };
         let requester = self.active.take().and_then(ActiveCapture::into_requester);
-        self.end_overlay_capture(requester, ending)
+        match ending {
+            Ok(Ending::Switch(handoff)) => self.switch_to(requester, handoff),
+            ending => self.end_overlay_capture(requester, ending),
+        }
+    }
+
+    /// 用户在等待确认界面上转入了录屏或长截屏：开始新的会话接手，等待中的请求随之转给它；
+    /// 开始失败时这次捕获就此失败。
+    fn switch_to(
+        &mut self,
+        requester: Option<IncomingRequest>,
+        handoff: Handoff,
+    ) -> Result<Flow, CoreError> {
+        let Handoff { request, to } = handoff;
+        let texts = self.texts();
+        let started = match to {
+            HandoffTo::Recording(target) => {
+                Recording::start_at(&mut self.platform, request, texts, target)
+                    .map(ActiveCapture::Recording)
+            }
+            HandoffTo::LongScreenshot(region) => {
+                LongScreenshotCapture::start_in(&mut self.platform, request, texts, region)
+                    .map(ActiveCapture::LongScreenshot)
+            }
+        };
+        match started {
+            Ok(mut active) => {
+                if let Some(requester) = requester {
+                    active.set_requester(requester);
+                }
+                self.active = Some(active);
+                Ok(Flow::Continue)
+            }
+            Err(error) => {
+                self.end_overlay_capture(requester, Err(CaptureFailure::before_actions(error)))
+            }
+        }
     }
 
     /// 遮罩上的捕获结束了：回复等待中的请求；热键触发的捕获失败时通知用户。
@@ -561,7 +596,8 @@ impl ResidentInstance {
         match (requester, ending) {
             (Some(requester), ending) => {
                 let reply = match &ending {
-                    Ok(Ending::Delivered) => Reply::Done,
+                    // 转入其他会话的在 `switch_to` 里处理，不会走到这里。
+                    Ok(Ending::Delivered | Ending::Switch(_)) => Reply::Done,
                     Ok(Ending::Cancelled) => Reply::Cancelled,
                     Err(failure) => reply_for_error(&failure.error, self.texts()),
                 };

@@ -12,7 +12,7 @@ const BINDING: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn config(check_for_updates: bool, language: &str) -> String {

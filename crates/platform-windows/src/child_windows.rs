@@ -20,6 +20,8 @@ pub const SETTINGS_ARGUMENT: &str = "--settings";
 /// 结果面板子进程的命令行参数。要识别的截图经子进程的标准输入传入，
 /// 子进程用 [`read_screenshot`] 读取。
 pub const RESULT_PANEL_ARGUMENT: &str = "--result-panel";
+/// 结果面板子进程的附加参数：识别完成后直接翻译。
+pub const TRANSLATE_ARGUMENT: &str = "--translate";
 
 /// 子进程的命令行参数：`BetterPrtSc.exe <参数>` 打开对应的窗口。
 pub fn window_argument(window: &StandaloneWindow) -> &'static str {
@@ -44,10 +46,16 @@ impl ChildProcessWindows {
         }
     }
 
-    fn spawn(&self, argument: &str, stdin: Stdio) -> Result<Child, PlatformError> {
+    fn spawn(
+        &self,
+        argument: &str,
+        extra: Option<&str>,
+        stdin: Stdio,
+    ) -> Result<Child, PlatformError> {
         // 标准输出沿用常驻实例的：debug 版的日志进同一个控制台，release 版没有控制台。
         let child = Command::new(&self.exe)
             .arg(argument)
+            .args(extra)
             .stdin(stdin)
             .spawn()
             .map_err(|e| PlatformError::new(format!("无法启动 {}：{e}", self.exe.display())))?;
@@ -68,11 +76,15 @@ impl WindowLauncher for ChildProcessWindows {
                     bring_to_front(child.id());
                     return Ok(());
                 }
-                self.settings = Some(self.spawn(SETTINGS_ARGUMENT, Stdio::inherit())?);
+                self.settings = Some(self.spawn(SETTINGS_ARGUMENT, None, Stdio::inherit())?);
                 Ok(())
             }
-            StandaloneWindow::ResultPanel { screenshot } => {
-                let mut child = self.spawn(RESULT_PANEL_ARGUMENT, Stdio::piped())?;
+            StandaloneWindow::ResultPanel {
+                screenshot,
+                translate,
+            } => {
+                let extra = translate.then_some(TRANSLATE_ARGUMENT);
+                let mut child = self.spawn(RESULT_PANEL_ARGUMENT, extra, Stdio::piped())?;
                 let mut stdin = child.stdin.take().expect("标准输入是管道");
                 // 截图可能有几十 MB，另开线程写，不阻塞常驻实例的事件循环；写完关闭管道。
                 // 子进程提前退出时写入失败，什么也不用做。

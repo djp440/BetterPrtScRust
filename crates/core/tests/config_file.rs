@@ -3,7 +3,10 @@
 
 use std::path::PathBuf;
 
-use bps_core::{CaptureMode, Config, PostCaptureAction, RecordingFormat, ResidentInstance};
+use bps_core::{
+    CaptureKind, CaptureMode, Config, DirectFunction, PostCaptureAction, RecordingFormat,
+    ResidentInstance,
+};
 use bps_platform::{Hotkey, Key, Modifiers, NotificationClick, Rect};
 use bps_platform_fake::{FakeDisplay, FakePlatform};
 
@@ -26,6 +29,7 @@ fn default_hotkeys() -> Vec<Hotkey> {
 #[test]
 fn first_run_writes_config_file_with_six_default_bindings() {
     use CaptureMode::*;
+    use DirectFunction::*;
     use PostCaptureAction::*;
     let fake = FakePlatform::new();
 
@@ -36,18 +40,45 @@ fn first_run_writes_config_file_with_six_default_bindings() {
     let bindings: Vec<_> = config
         .bindings
         .iter()
-        .map(|b| (b.hotkey, b.capture.mode, b.capture.actions.clone()))
+        .map(|b| {
+            (
+                b.hotkey,
+                b.capture.mode,
+                b.capture.kind,
+                b.capture.auto_save,
+            )
+        })
         .collect();
     let hotkeys = default_hotkeys();
     assert_eq!(
         bindings,
         [
-            (hotkeys[0], Region, vec![Annotate]),
-            (hotkeys[1], Display, vec![CopyToClipboard, AutoSave]),
-            (hotkeys[2], Window, vec![CopyToClipboard, AutoSave]),
-            (hotkeys[3], Region, vec![Record]),
-            (hotkeys[4], Region, vec![LongScreenshot]),
-            (hotkeys[5], Region, vec![Ocr]),
+            (
+                hotkeys[0],
+                Region,
+                CaptureKind::Screenshot(AwaitConfirmation),
+                false
+            ),
+            (
+                hotkeys[1],
+                Display,
+                CaptureKind::Screenshot(CopyToClipboard),
+                true
+            ),
+            (
+                hotkeys[2],
+                Window,
+                CaptureKind::Screenshot(AwaitConfirmation),
+                false
+            ),
+            (hotkeys[3], Region, CaptureKind::Function(Record), false),
+            (
+                hotkeys[4],
+                Region,
+                CaptureKind::Function(LongScreenshot),
+                false
+            ),
+            (hotkeys[5], Region, CaptureKind::Function(Ocr), false),
         ]
     );
     assert_eq!(
@@ -72,7 +103,7 @@ const ONLY_F9_COPIES_DISPLAY: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 #[test]
@@ -100,7 +131,8 @@ output_format = "jpg"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard", "auto_save"]
+after = "copy_to_clipboard"
+auto_save = true
 "#;
 
 #[test]
@@ -123,7 +155,7 @@ const ONLY_F10_COPIES_DISPLAY: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F10"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 #[test]

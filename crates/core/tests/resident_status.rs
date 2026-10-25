@@ -11,17 +11,17 @@ const THREE_BINDINGS: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 
 [[bindings]]
 hotkey = "Ctrl+F10"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 
 [[bindings]]
 hotkey = "Ctrl+F10"
 mode = "virtual_desktop"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn ctrl(key: Key) -> Hotkey {
@@ -169,7 +169,7 @@ fn print_screen_taken_by_the_system_screenshot_tool_is_reported_as_such() {
     let fake = FakePlatform::new()
         .with_print_screen_key_taken_by_system_screenshot_tool()
         .with_config_file(
-            "[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nactions = [\"copy_to_clipboard\"]\n",
+            "[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nafter = \"copy_to_clipboard\"\n",
         );
     let instance = ResidentInstance::start(fake.platform());
 

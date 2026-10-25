@@ -15,8 +15,8 @@ fn fake() -> FakePlatform {
         .with_time(LocalDateTime::new(2026, 10, 24, 9, 5, 7))
 }
 
-fn capture(actions: Vec<PostCaptureAction>) -> CaptureRequest {
-    CaptureRequest::new(CaptureMode::Display, actions)
+fn capture(after: PostCaptureAction) -> CaptureRequest {
+    CaptureRequest::new(CaptureMode::Display, after)
 }
 
 #[test]
@@ -25,7 +25,9 @@ fn auto_save_notifies_and_click_opens_saved_file() {
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
     instance
-        .execute(Command::Capture(capture(vec![PostCaptureAction::AutoSave])))
+        .execute(Command::Capture(
+            capture(PostCaptureAction::CopyToClipboard).with_auto_save(),
+        ))
         .unwrap();
 
     let saved = Path::new(DEFAULT_PICTURES_DIR)
@@ -51,9 +53,9 @@ fn copy_without_auto_save_sends_no_notification() {
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
 
     instance
-        .execute(Command::Capture(capture(vec![
+        .execute(Command::Capture(capture(
             PostCaptureAction::CopyToClipboard,
-        ])))
+        )))
         .unwrap();
 
     assert!(fake.notifications().is_empty());
@@ -64,10 +66,7 @@ fn failed_auto_save_notifies_failure_but_still_copies_image() {
     let read_only = PathBuf::from(r"D:\只读");
     let fake = fake().with_read_only_dir(&read_only);
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
-    let mut request = capture(vec![
-        PostCaptureAction::CopyToClipboard,
-        PostCaptureAction::AutoSave,
-    ]);
+    let mut request = capture(PostCaptureAction::CopyToClipboard).with_auto_save();
     request.output.save_dir = SaveDir::Custom(read_only.join("截图"));
 
     let result = instance.execute(Command::Capture(request));
@@ -94,10 +93,7 @@ fn failed_auto_save_triggered_by_hotkey_is_notified_only_once() {
     let read_only = PathBuf::from(r"D:\只读");
     let fake = fake().with_read_only_dir(&read_only);
     let ctrl_f9 = Hotkey::new(Modifiers::CTRL, Key::F(9));
-    let mut request = capture(vec![
-        PostCaptureAction::CopyToClipboard,
-        PostCaptureAction::AutoSave,
-    ]);
+    let mut request = capture(PostCaptureAction::CopyToClipboard).with_auto_save();
     request.output.save_dir = SaveDir::Custom(read_only.join("截图"));
     let binding = HotkeyBinding {
         hotkey: ctrl_f9,

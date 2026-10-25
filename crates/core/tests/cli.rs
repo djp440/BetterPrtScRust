@@ -90,10 +90,7 @@ fn bps_launches_resident_instance_when_not_running_then_completes_command() {
 fn bindings_with_region_copy() -> Vec<HotkeyBinding> {
     let region_copy = HotkeyBinding {
         hotkey: Hotkey::new(Modifiers::CTRL, Key::F(8)),
-        capture: CaptureRequest::new(
-            CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
-        ),
+        capture: CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard),
     };
     [vec![region_copy], default_bindings()].concat()
 }
@@ -164,8 +161,8 @@ fn bps_capture_region_reports_cancelled_when_user_presses_escape() {
 }
 
 #[test]
-fn bps_capture_region_with_default_bindings_replies_after_user_finishes_annotating() {
-    // 默认的 PrtSc 是“区域 + 标注”：框选后进入标注，用户点“复制”才结束。
+fn bps_capture_region_with_default_bindings_replies_after_user_confirms() {
+    // 默认的 PrtSc 是“区域 + 等待确认”：框选后停留在截图界面，用户点“确认”才结束。
     let fake = two_displays_cursor_on_second();
     let region = Rect::new(10, 5, 40, 30);
     let mut channel = FakeResidentChannel::running(resident_instance_with_bindings_and_user(
@@ -175,7 +172,7 @@ fn bps_capture_region_with_default_bindings_replies_after_user_finishes_annotati
             let mut selected = false;
             move |fake| {
                 if std::mem::replace(&mut selected, true) {
-                    fake.click_text("复制")
+                    fake.click_text("确认")
                 } else {
                     fake.drag(Point::new(10, 5), Point::new(49, 34))
                 }
@@ -198,7 +195,7 @@ fn bps_capture_fails_while_previous_capture_is_still_selecting() {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         )))
         .unwrap();
     let shared = Rc::new(std::cell::RefCell::new(instance));
@@ -222,17 +219,25 @@ fn bps_capture_fails_while_previous_capture_is_still_selecting() {
 fn bps_capture_window_replies_after_user_clicks_window_like_ctrl_print_screen() {
     let window = FakeWindow::new("记事本", Rect::new(70, 0, 60, 30));
     let fake = two_displays_cursor_on_second().with_window(window.clone());
-    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, |fake| {
-        fake.click(PointerButton::Left, Point::new(100, 20))
+    // 默认的 Ctrl+PrtSc 是“窗口 + 等待确认”：单击窗口后还要点“确认”。
+    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, {
+        let mut clicked = false;
+        move |fake| {
+            if std::mem::replace(&mut clicked, true) {
+                fake.click_text("确认")
+            } else {
+                fake.click(PointerButton::Left, Point::new(100, 20))
+            }
+        }
     }));
 
     let outcome = run_cli(["capture", "window"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
-    // 与 Ctrl+PrtSc 的默认绑定一致：复制 + 自动存储。
+    // 与 Ctrl+PrtSc 的默认绑定一致：确认后复制，默认不自动保存。
     let clipboard = fake.clipboard();
-    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
+    assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
     assert_eq!(clipboard.png_image().unwrap(), *window.image());
 }
 
@@ -253,16 +258,17 @@ fn bps_capture_window_reports_cancelled_when_user_presses_escape() {
 }
 
 #[test]
-fn bps_capture_uses_post_capture_actions_of_first_hotkey_binding_with_that_mode() {
+fn bps_capture_uses_post_capture_action_of_first_hotkey_binding_with_that_mode() {
     let fake = two_displays_cursor_on_second();
-    // 这条显示器绑定没有任何截后动作：按热键只截图、不复制，bps 也必须一样。
-    let display_without_actions = HotkeyBinding {
+    // 这条显示器绑定只复制、不自动保存（默认的 Shift+PrtSc 绑定会自动保存）：
+    // 按热键怎么做，bps 也必须一样。
+    let display_copy_only = HotkeyBinding {
         hotkey: Hotkey::new(Modifiers::CTRL, Key::F(9)),
-        capture: CaptureRequest::new(CaptureMode::Display, Vec::new()),
+        capture: CaptureRequest::new(CaptureMode::Display, PostCaptureAction::CopyToClipboard),
     };
     let mut instance = ResidentInstance::new(
         fake.platform(),
-        [vec![display_without_actions], default_bindings()].concat(),
+        [vec![display_copy_only], default_bindings()].concat(),
     );
     let mut channel = FakeResidentChannel::running(move |event| {
         let _ = instance.handle(event);
@@ -271,7 +277,8 @@ fn bps_capture_uses_post_capture_actions_of_first_hotkey_binding_with_that_mode(
     let outcome = run_cli(["capture", "display"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
-    assert!(fake.clipboard().is_empty());
+    assert_eq!(fake.clipboard().formats(), ["PNG", "DIB"]);
+    assert!(fake.files().is_empty(), "第一条显示器绑定不自动保存");
 }
 
 #[test]
