@@ -48,6 +48,7 @@ mod encode;
 mod error;
 mod filename;
 mod forward;
+mod hotkey_recorder;
 mod i18n;
 mod instance;
 mod location;
@@ -79,15 +80,17 @@ pub use command::{
 pub use config::{Config, ConfigError, DEFAULT_CONFIG};
 pub use error::CoreError;
 pub use filename::{
-    DEFAULT_FILENAME_TEMPLATE, FilenameFields, FilenameTemplate, FilenameTemplateError,
+    DEFAULT_FILENAME_TEMPLATE, EXAMPLE_CAPTURE_TIME, FilenameFields, FilenameTemplate,
+    FilenameTemplateError,
 };
 pub use forward::{ForwardError, WhenNotRunning, forward};
+pub use hotkey_recorder::{HotkeyRecorder, RecordingOutcome};
 pub use i18n::{Language, Locale, Texts, UnknownLanguage};
 pub use instance::{ResidentInstance, StartOptions};
 pub use location::{DataLocation, PORTABLE_MARKER};
 pub use long_screenshot::{LongScreenshot, Stitched};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
-pub use request::{Reply, Request};
+pub use request::{HOTKEY_PAUSE_LEASE, Reply, Request};
 pub use result_panel::{
     Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel, Translation,
     TranslationOutcome, TranslationStatus,

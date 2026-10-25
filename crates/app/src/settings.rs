@@ -8,13 +8,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bps_core::{Reply, Request, WhenNotRunning, forward};
+use bps_platform_windows::start_key_capture;
 use bps_platform_windows::{
-    PipeChannel, WindowsClock, map_system_font, open_with_default_program, pick_folder,
-    read_clipboard_text, resident_pipe_name, standard_user_can_write, user_ui_languages,
-    write_clipboard_text,
+    PipeChannel, map_system_font, open_with_default_program, pick_folder, read_clipboard_text,
+    resident_pipe_name, standard_user_can_write, user_ui_languages, write_clipboard_text,
 };
 use bps_ui::{
-    SettingsEnvironment, SystemClipboard, UiEnvironment, UiFont, WindowIcon, run_settings_window,
+    KeyStream, SettingsEnvironment, SystemClipboard, UiEnvironment, UiFont, WindowIcon,
+    run_settings_window,
 };
 
 use crate::{data_location, icon};
@@ -23,6 +24,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let location = data_location()?;
     let exe = std::env::current_exe()?;
     let mut channel = PipeChannel::new(&resident_pipe_name(), exe.clone());
+    let pause_exe = exe.clone();
     let environment = SettingsEnvironment {
         ui: ui_environment(),
         config_file: location.config_file(),
@@ -33,7 +35,22 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }),
         pick_folder: Arc::new(|title: &str, initial: Option<&Path>| pick_folder(title, initial)),
-        clock: Box::new(WindowsClock::new()),
+        key_capture: Arc::new(|| {
+            let (inputs, guard) = start_key_capture().map_err(|e| e.to_string())?;
+            Ok(KeyStream {
+                inputs,
+                guard: Box::new(guard),
+            })
+        }),
+        pause_hotkeys: Arc::new(move |pause| {
+            let mut channel = PipeChannel::new(&resident_pipe_name(), pause_exe.clone());
+            let request = if pause {
+                Request::PauseHotkeys
+            } else {
+                Request::ResumeHotkeys
+            };
+            let _ = forward(&request, &mut channel, WhenNotRunning::GiveUp);
+        }),
         program_writable_by_standard_users: program_writable_by_standard_users(&exe),
     };
     run_settings_window(environment)?;

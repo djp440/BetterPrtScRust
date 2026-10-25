@@ -10,13 +10,16 @@ use std::thread;
 use std::time::Duration;
 
 use bps_core::{
-    BindingFailure, BindingSettings, CaptureKind, CaptureMode, FilenameFields, FilenameTemplate,
-    Language, OutputFormat, PostCaptureAction, ResidentStatus, Settings, SettingsDocument,
-    SettingsProblem, Texts, UpdateStatus, VERSION,
+    BindingFailure, BindingSettings, CaptureKind, CaptureMode, FilenameTemplate, Language,
+    OutputFormat, PostCaptureAction, ResidentStatus, Settings, SettingsDocument, SettingsProblem,
+    Texts, UpdateStatus, VERSION,
 };
-use bps_platform::{Clock, Hotkey, Key, Modifiers};
+use bps_platform::{Hotkey, Key, Modifiers};
 use eframe::egui::{self, RichText};
 
+use crate::hotkey_recording::{
+    Conclusion, PauseHotkeys, Progress, RecordingSession, StartKeyCapture,
+};
 use crate::store::{self, LoadProblem, Loaded, SaveError};
 use crate::{UiEnvironment, WindowSpec, run_window};
 
@@ -35,8 +38,10 @@ pub struct SettingsEnvironment {
     pub query_status: Box<dyn FnMut() -> Option<ResidentStatus> + Send>,
     /// 弹出“选择文件夹”对话框（标题、起始目录），取消时返回 `None`。在后台线程里调用。
     pub pick_folder: PickFolder,
-    /// 用来预览命名模板。
-    pub clock: Box<dyn Clock>,
+    /// 录制热键时开始捕获按键（低层键盘钩子，能拿到 PrintScreen 和 Win 组合）。
+    pub key_capture: StartKeyCapture,
+    /// 录制热键期间暂停（续租）/ 恢复常驻实例的全局热键，免得按下的组合键触发截图。
+    pub pause_hotkeys: PauseHotkeys,
     /// 普通权限的程序能改写本程序（例如装在用户自己的目录里）。
     /// 这时开启“以管理员身份运行”有提权风险，界面上给出提示。
     pub program_writable_by_standard_users: bool,
@@ -64,10 +69,18 @@ struct SettingsApp {
     ui: UiEnvironment,
     config_file: PathBuf,
     pick_folder: PickFolder,
-    clock: Box<dyn Clock>,
+    key_capture: StartKeyCapture,
+    pause_hotkeys: PauseHotkeys,
     program_writable_by_standard_users: bool,
 
     page: Page,
+    group: Group,
+    /// 正在进行的热键录制。
+    recording: Option<RecordingSession>,
+    /// 上一帧录制中的热键框的位置：点到它之外就取消录制。
+    record_rect: Option<egui::Rect>,
+    /// 无法开始录制的原因。
+    record_error: Option<String>,
     resident: Resident,
     statuses: Receiver<Option<ResidentStatus>>,
     picked_folder: Option<Receiver<Option<PathBuf>>>,
@@ -77,6 +90,31 @@ struct SettingsApp {
     /// 当前的窗口标题，语言变了才更新。
     title: String,
 }
+
+/// 左侧的分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Group {
+    General,
+    Hotkeys,
+    Saving,
+    About,
+}
+
+impl Group {
+    const ALL: [Group; 4] = [Group::General, Group::Hotkeys, Group::Saving, Group::About];
+
+    fn label(self, texts: &Texts) -> String {
+        texts.get(match self {
+            Group::General => "settings-group-general",
+            Group::Hotkeys => "settings-group-hotkeys",
+            Group::Saving => "settings-group-saving",
+            Group::About => "settings-group-about",
+        })
+    }
+}
+
+/// 项目主页。
+const PROJECT_URL: &str = "https://github.com/djp440/BetterPrtScRust";
 
 enum Page {
     Editing(Box<Editor>),
@@ -139,7 +177,8 @@ impl SettingsApp {
             config_file,
             query_status,
             pick_folder,
-            clock,
+            key_capture,
+            pause_hotkeys,
             program_writable_by_standard_users,
         } = environment;
         let page = match loaded {
@@ -152,9 +191,14 @@ impl SettingsApp {
             ui,
             config_file,
             pick_folder,
-            clock,
+            key_capture,
+            pause_hotkeys,
             program_writable_by_standard_users,
             page,
+            group: Group::General,
+            recording: None,
+            record_rect: None,
+            record_error: None,
             resident: Resident::Unknown,
             statuses: poll_status(query_status, ctx),
             picked_folder: None,
@@ -178,7 +222,51 @@ impl SettingsApp {
         matches!(&self.page, Page::Editing(editor) if editor.is_modified())
     }
 
+    /// 录制热键：处理钩子收到的按键，有结论就写进正在编辑的绑定；点到热键框之外则取消。
+    fn pump_recording(&mut self, ctx: &egui::Context) {
+        let Some(session) = self.recording.as_mut() else {
+            return;
+        };
+        let clicked_away = ctx.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_none_or(|pos| self.record_rect.is_none_or(|rect| !rect.contains(pos)))
+        });
+        if session.has_concluded() {
+            if session.drain_finished() {
+                self.recording = None;
+            }
+        } else if clicked_away {
+            self.recording = None;
+        } else if let Progress::Concluded(conclusion) = session.poll() {
+            let index = session.binding;
+            if let Page::Editing(editor) = &mut self.page
+                && let Some(binding) = editor.settings.bindings.get_mut(index)
+            {
+                match conclusion {
+                    Conclusion::Recorded(hotkey) => binding.hotkey = Some(hotkey),
+                    Conclusion::Cleared => binding.hotkey = None,
+                    Conclusion::Cancelled => {}
+                }
+            }
+        }
+        if self.recording.is_some() {
+            // 钩子线程没法唤醒界面，录制期间定时刷新来取按键。
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+    }
+
+    fn start_recording(&mut self, binding: usize) {
+        self.record_error = None;
+        match RecordingSession::start(binding, &self.key_capture, self.pause_hotkeys.clone()) {
+            Ok(session) => self.recording = Some(session),
+            Err(error) => self.record_error = Some(error),
+        }
+    }
+
     fn reload(&mut self) {
+        self.recording = None;
         self.page = match store::load(&self.config_file) {
             Loaded::Editable { document, on_disk } => {
                 Page::Editing(Box::new(Editor::new(*document, on_disk)))
@@ -305,6 +393,7 @@ impl eframe::App for SettingsApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.receive_background_results();
+        self.pump_recording(&ctx);
         let texts = self.texts();
 
         let title = texts.get("settings-window-title");
@@ -324,6 +413,12 @@ impl eframe::App for SettingsApp {
                 self.bottom_bar(ui, texts);
                 ui.add_space(4.0);
             });
+        if matches!(self.page, Page::Editing(_)) {
+            egui::Panel::left("groups")
+                .resizable(false)
+                .exact_size(150.0)
+                .show(ui, |ui| self.group_list(ui, texts));
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -355,12 +450,46 @@ impl SettingsApp {
             }
             Resident::Unknown | Resident::Running(_) => {}
         }
-        self.general_section(ui, texts);
-        ui.add_space(14.0);
-        self.saving_section(ui, texts);
-        ui.add_space(14.0);
-        self.bindings_section(ui, texts);
+        match self.group {
+            Group::General => self.general_section(ui, texts),
+            Group::Hotkeys => self.bindings_section(ui, texts),
+            Group::Saving => self.saving_section(ui, texts),
+            Group::About => self.about_section(ui, texts),
+        }
         ui.add_space(8.0);
+    }
+
+    fn group_list(&mut self, ui: &mut egui::Ui, texts: &Texts) {
+        ui.add_space(8.0);
+        let mut chosen = self.group;
+        for group in Group::ALL {
+            let button = egui::Button::selectable(self.group == group, group.label(texts))
+                .min_size(egui::vec2(ui.available_width(), 30.0));
+            if ui.add(button).clicked() {
+                chosen = group;
+            }
+        }
+        if chosen != self.group {
+            self.group = chosen;
+            // 离开热键页就结束录制。
+            self.recording = None;
+        }
+    }
+
+    fn about_section(&mut self, ui: &mut egui::Ui, texts: &Texts) {
+        ui.heading(texts.get("settings-group-about"));
+        ui.add_space(4.0);
+        ui.label("BetterPrtSc");
+        ui.label(texts.format("settings-version", &[("version", &VERSION)]));
+        ui.label(texts.format(
+            "settings-about-license",
+            &[("license", &env!("CARGO_PKG_LICENSE"))],
+        ));
+        ui.add_space(4.0);
+        if ui.link(texts.get("settings-about-project")).clicked() {
+            self.open(PROJECT_URL.as_ref());
+        }
+        hint(ui, PROJECT_URL.to_owned());
     }
 
     fn general_section(&mut self, ui: &mut egui::Ui, texts: &Texts) {
@@ -433,8 +562,6 @@ impl SettingsApp {
                 ),
             }
         }
-        ui.add_space(2.0);
-        ui.label(RichText::new(texts.format("settings-version", &[("version", &VERSION)])).weak());
         if let Some(url) = open_page {
             self.open(url.as_ref());
         }
@@ -489,11 +616,8 @@ impl SettingsApp {
         });
         match FilenameTemplate::parse(&settings.filename_template) {
             Ok(template) => {
-                let name = template.render(&FilenameFields {
-                    captured_at: self.clock.now(),
-                    mode: CaptureMode::Region,
-                    window_title: None,
-                });
+                // 固定的示例时间，预览不随秒数变化。
+                let name = template.render_example();
                 hint(
                     ui,
                     texts.format(
@@ -538,6 +662,16 @@ impl SettingsApp {
             Resident::Running(status) => &status.registration_failures,
             Resident::Unknown | Resident::NotRunning => &[],
         };
+        let recording = self
+            .recording
+            .as_ref()
+            .filter(|r| !r.has_concluded())
+            .map(|r| RecordingView {
+                binding: r.binding,
+                preview: r.preview,
+                unsupported: r.unsupported,
+            });
+        let record_error = self.record_error.clone();
         let Page::Editing(editor) = &mut self.page else {
             return;
         };
@@ -546,13 +680,21 @@ impl SettingsApp {
         hint(ui, texts.get("settings-bindings-hint"));
         ui.add_space(4.0);
 
+        if let Some(message) = record_error {
+            error(
+                ui,
+                texts.format("settings-record-unavailable", &[("error", &message)]),
+            );
+        }
         let problems = settings.problems();
         let mut removed = None;
+        let mut start_recording = None;
+        let mut record_rect = None;
         for (index, binding) in settings.bindings.iter_mut().enumerate() {
             // 常驻实例报告的失败按配置文件里的位置和热键对应到界面上的绑定。
             let failure = failures
                 .iter()
-                .find(|f| Some(f.index) == binding.source() && f.hotkey == binding.hotkey);
+                .find(|f| Some(f.index) == binding.source() && Some(f.hotkey) == binding.hotkey);
             let reasons: Vec<String> = failure
                 .map(|f| {
                     texts.format(
@@ -568,13 +710,21 @@ impl SettingsApp {
                         .map(|p| binding_problem(p, texts)),
                 )
                 .collect();
-            if binding_editor(ui, texts, index, binding, &reasons) {
+            let outcome = binding_editor(ui, texts, index, binding, &reasons, recording);
+            if outcome.remove {
                 removed = Some(index);
+            }
+            if outcome.start_recording {
+                start_recording = Some(index);
+            }
+            if outcome.record_rect.is_some() {
+                record_rect = outcome.record_rect;
             }
             ui.add_space(4.0);
         }
         if let Some(index) = removed {
             settings.bindings.remove(index);
+            self.recording = None;
         }
         if ui.button(texts.get("settings-binding-add")).clicked() {
             let hotkey = unused_hotkey(&settings.bindings);
@@ -583,6 +733,10 @@ impl SettingsApp {
                 CaptureMode::Region,
                 CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
             ));
+        }
+        self.record_rect = record_rect;
+        if let Some(index) = start_recording {
+            self.start_recording(index);
         }
     }
 
@@ -742,14 +896,33 @@ enum CloseChoice {
     Cancel,
 }
 
-/// 一条热键绑定；返回用户是否点了“删除”。
+/// 正在进行的热键录制中界面要显示的部分。
+#[derive(Clone, Copy)]
+struct RecordingView {
+    binding: usize,
+    preview: Modifiers,
+    unsupported: bool,
+}
+
+/// 一条热键绑定上的操作。
+#[derive(Default)]
+struct BindingOutcome {
+    remove: bool,
+    start_recording: bool,
+    /// 这条绑定正在录制时，热键框的位置。
+    record_rect: Option<egui::Rect>,
+}
+
+/// 一条热键绑定。
 fn binding_editor(
     ui: &mut egui::Ui,
     texts: &Texts,
     index: usize,
     binding: &mut BindingSettings,
     reasons: &[String],
-) -> bool {
+    recording: Option<RecordingView>,
+) -> BindingOutcome {
+    let mut outcome = BindingOutcome::default();
     let mut remove = false;
     let mut frame = egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(8));
     if !reasons.is_empty() {
@@ -758,27 +931,36 @@ fn binding_editor(
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(binding.hotkey.to_string()).strong());
+            ui.label(RichText::new(hotkey_text(binding.hotkey, texts)).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 remove = ui.button(texts.get("settings-binding-remove")).clicked();
             });
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(texts.get("settings-binding-hotkey"));
-            let modifiers = &mut binding.hotkey.modifiers;
-            ui.checkbox(&mut modifiers.ctrl, "Ctrl");
-            ui.checkbox(&mut modifiers.alt, "Alt");
-            ui.checkbox(&mut modifiers.shift, "Shift");
-            ui.checkbox(&mut modifiers.win, "Win");
-            ui.label("+");
-            egui::ComboBox::from_id_salt(("key", index))
-                .selected_text(binding.hotkey.key.to_string())
-                .height(320.0)
-                .show_ui(ui, |ui| {
-                    for key in all_keys() {
-                        ui.selectable_value(&mut binding.hotkey.key, key, key.to_string());
-                    }
-                });
+            let mine = recording.filter(|r| r.binding == index);
+            let label = match mine {
+                Some(view) => recording_prompt(view.preview, texts),
+                None => hotkey_text(binding.hotkey, texts),
+            };
+            let response = ui
+                .add(
+                    egui::Button::selectable(mine.is_some(), RichText::new(label).monospace())
+                        .min_size(egui::vec2(240.0, 0.0)),
+                )
+                .on_hover_text(texts.get("settings-hotkey-record-tooltip"));
+            if mine.is_some() {
+                outcome.record_rect = Some(response.rect);
+            } else if response.clicked() {
+                outcome.start_recording = true;
+            }
+            if let Some(view) = mine {
+                if view.unsupported {
+                    error(ui, texts.get("settings-record-unsupported"));
+                } else {
+                    hint(ui, texts.get("settings-record-help"));
+                }
+            }
         });
         ui.horizontal(|ui| {
             ui.label(texts.get("settings-binding-mode"));
@@ -812,7 +994,33 @@ fn binding_editor(
             error(ui, reason.clone());
         }
     });
-    remove
+    outcome.remove = remove;
+    outcome
+}
+
+/// 热键框里的文字：热键本身，清空后显示“未设置”。
+fn hotkey_text(hotkey: Option<Hotkey>, texts: &Texts) -> String {
+    hotkey.map_or_else(|| texts.get("settings-hotkey-unset"), |h| h.to_string())
+}
+
+/// 录制中热键框里的文字：提示，加上正按住的修饰键。
+fn recording_prompt(held: Modifiers, texts: &Texts) -> String {
+    let mut text = String::new();
+    for (on, name) in [
+        (held.win, "Win+"),
+        (held.ctrl, "Ctrl+"),
+        (held.alt, "Alt+"),
+        (held.shift, "Shift+"),
+    ] {
+        if on {
+            text.push_str(name);
+        }
+    }
+    if text.is_empty() {
+        texts.get("settings-record-prompt")
+    } else {
+        text
+    }
 }
 
 /// 绑定自己的问题已经显示在这条绑定里，不必再说是第几条。
@@ -830,16 +1038,8 @@ fn unused_hotkey(bindings: &[BindingSettings]) -> Hotkey {
     [Modifiers::CTRL, Modifiers::CTRL.with(Modifiers::ALT)]
         .into_iter()
         .flat_map(|modifiers| (1..=12).map(move |n| Hotkey::new(modifiers, Key::F(n))))
-        .find(|hotkey| bindings.iter().all(|b| b.hotkey != *hotkey))
+        .find(|hotkey| bindings.iter().all(|b| b.hotkey != Some(*hotkey)))
         .unwrap_or(Hotkey::new(Modifiers::CTRL, Key::F(1)))
-}
-
-/// 主键的全部选项。
-fn all_keys() -> impl Iterator<Item = Key> {
-    std::iter::once(Key::PrintScreen)
-        .chain((1..=24).map(Key::F))
-        .chain(('A'..='Z').map(Key::Letter))
-        .chain((0..=9).map(Key::Digit))
 }
 
 const OUTPUT_FORMATS: [OutputFormat; 4] = [

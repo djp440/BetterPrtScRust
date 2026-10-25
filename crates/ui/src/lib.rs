@@ -9,6 +9,7 @@
 //! 界面子进程需要常驻实例的数据时，经命名管道发请求查询（`bps_core::Request`）。
 
 mod clipboard;
+mod hotkey_recording;
 mod result_panel;
 mod settings_window;
 mod store;
@@ -20,6 +21,7 @@ use bps_core::{Language, Texts};
 use eframe::egui;
 
 pub use clipboard::{ReadClipboardText, SystemClipboard, WriteClipboardText};
+pub use hotkey_recording::{KeyStream, PauseHotkeys, StartKeyCapture};
 pub use result_panel::{ResultPanelEnvironment, run_result_panel};
 pub use settings_window::{PickFolder, SettingsEnvironment, run_settings_window};
 

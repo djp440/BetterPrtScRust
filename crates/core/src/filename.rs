@@ -21,6 +21,9 @@ use crate::request::mode_name;
 /// 默认命名模板。
 pub const DEFAULT_FILENAME_TEMPLATE: &str = "{yyyy-MM-dd HH-mm-ss}";
 
+/// 设置界面预览命名模板用的固定示例时间：2026-01-01 12:34:56。
+pub const EXAMPLE_CAPTURE_TIME: LocalDateTime = LocalDateTime::new(2026, 1, 1, 12, 34, 56);
+
 /// 文件名主干（不含扩展名）的最大长度（UTF-16 码元），给目录、`-N` 后缀和扩展名留出余量。
 const MAX_STEM_UTF16: usize = 200;
 
@@ -152,6 +155,20 @@ impl FilenameTemplate {
     ///
     /// 不允许出现在文件名里的字符替换成 `_`；结果为空时改用默认命名模板。
     pub fn render(&self, fields: &FilenameFields<'_>) -> String {
+        self.render_inner(fields)
+    }
+
+    /// 用固定的示例时间（[`EXAMPLE_CAPTURE_TIME`]）、区域模式、无窗口标题渲染，
+    /// 设置界面据此预览命名效果；结果不随当前时间变化。
+    pub fn render_example(&self) -> String {
+        self.render_inner(&FilenameFields {
+            captured_at: EXAMPLE_CAPTURE_TIME,
+            mode: CaptureMode::Region,
+            window_title: None,
+        })
+    }
+
+    fn render_inner(&self, fields: &FilenameFields<'_>) -> String {
         let mut name = String::new();
         for segment in &self.segments {
             match segment {
@@ -163,7 +180,7 @@ impl FilenameTemplate {
         }
         let name = sanitize(&name);
         if name.is_empty() && self.source != DEFAULT_FILENAME_TEMPLATE {
-            return FilenameTemplate::default().render(fields);
+            return FilenameTemplate::default().render_inner(fields);
         }
         name
     }

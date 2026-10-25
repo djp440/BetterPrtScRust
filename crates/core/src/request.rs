@@ -1,7 +1,7 @@
 //! 其他进程转交给常驻实例的请求、常驻实例的回复，以及它们在通道上的文本形式。
 //!
 //! 文本形式是 `bps` / 再次启动的程序 / 设置界面与常驻实例之间的约定：一条请求、一条回复，UTF-8。
-//! - 请求：`capture <捕获模式名>`、`activate`、`status`
+//! - 请求：`capture <捕获模式名>`、`activate`、`status`、`pause-hotkeys`、`resume-hotkeys`
 //! - 回复：`ok`、`cancelled`、`failed <说明>`，以及对 `status` 的状态回复
 //!   （格式见 [`ResidentStatus`]）
 
@@ -16,7 +16,16 @@ pub enum Request {
     Activate,
     /// 设置界面查询常驻实例的状态（注册失败的热键绑定、检查更新的结果）；只读，不执行命令。
     Status,
+    /// 设置界面开始录制热键：暂停响应全局热键，免得按下录制的组合键时触发截图。
+    /// 暂停是一份短租约（[`HOTKEY_PAUSE_LEASE`]），设置界面录制期间要不断续租；
+    /// 设置进程异常退出没来得及恢复时，租约到期后热键自动恢复。
+    PauseHotkeys,
+    /// 录制结束：立即恢复响应全局热键。
+    ResumeHotkeys,
 }
+
+/// 暂停全局热键的租约时长：设置界面每秒续租一次，崩溃后最多这么久热键自动恢复。
+pub const HOTKEY_PAUSE_LEASE: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// 常驻实例对一条请求的回复。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +47,8 @@ impl Request {
             Request::Capture(mode) => format!("capture {}", mode_name(*mode)),
             Request::Activate => "activate".to_owned(),
             Request::Status => "status".to_owned(),
+            Request::PauseHotkeys => "pause-hotkeys".to_owned(),
+            Request::ResumeHotkeys => "resume-hotkeys".to_owned(),
         }
     }
 
@@ -47,6 +58,8 @@ impl Request {
             Some(("capture", name)) => mode_from_name(name).map(Request::Capture),
             None if message == "activate" => Some(Request::Activate),
             None if message == "status" => Some(Request::Status),
+            None if message == "pause-hotkeys" => Some(Request::PauseHotkeys),
+            None if message == "resume-hotkeys" => Some(Request::ResumeHotkeys),
             _ => None,
         }
     }

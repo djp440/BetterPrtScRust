@@ -61,6 +61,8 @@ pub struct ResidentInstance {
     announced_version: Option<String>,
     /// 进行中的捕获（区域、窗口、长截屏、录屏）；同一时刻最多一个。
     active: Option<ActiveCapture>,
+    /// 设置界面录制热键期间暂停响应热键：租约到期的单调时间；`None` 表示没有暂停。
+    hotkeys_paused_until: Option<std::time::Duration>,
 }
 
 /// 命令执行到哪一步了。
@@ -90,6 +92,7 @@ impl ResidentInstance {
             update: UpdateStatus::Disabled,
             announced_version: None,
             active: None,
+            hotkeys_paused_until: None,
         }
     }
 
@@ -346,6 +349,9 @@ impl ResidentInstance {
                 self.latest_release_fetched(result);
                 return Ok(Flow::Continue);
             }
+            PlatformEvent::HotkeyPressed(_) if self.hotkeys_paused() => {
+                return Ok(Flow::Continue);
+            }
             PlatformEvent::HotkeyPressed(_)
             | PlatformEvent::ExitRequested
             | PlatformEvent::TrayMenuItemSelected(_) => {}
@@ -399,6 +405,17 @@ impl ResidentInstance {
                 incoming.reply(Reply::Status(self.status()).encode());
                 return Ok(Flow::Continue);
             }
+            Some((Request::PauseHotkeys, None)) => {
+                self.hotkeys_paused_until =
+                    Some(self.platform.clock.monotonic() + crate::HOTKEY_PAUSE_LEASE);
+                incoming.reply(Reply::Done.encode());
+                return Ok(Flow::Continue);
+            }
+            Some((Request::ResumeHotkeys, None)) => {
+                self.hotkeys_paused_until = None;
+                incoming.reply(Reply::Done.encode());
+                return Ok(Flow::Continue);
+            }
             Some((_, None)) | None => Err(CoreError::InvalidRequest(incoming.message().to_owned())),
         };
         match result {
@@ -435,7 +452,7 @@ impl ResidentInstance {
                     }),
             ),
             Request::Activate => Command::Activate,
-            Request::Status => return None,
+            Request::Status | Request::PauseHotkeys | Request::ResumeHotkeys => return None,
         })
     }
 
@@ -913,6 +930,19 @@ impl ResidentInstance {
             body,
             on_click: Some(NotificationClick::OpenFile(path)),
         });
+    }
+
+    /// 设置界面正在录制热键、租约还没到期：热键按下不触发任何命令。
+    /// 租约到期（设置进程崩溃，没有续租也没有恢复）时自动恢复。
+    fn hotkeys_paused(&mut self) -> bool {
+        let Some(until) = self.hotkeys_paused_until else {
+            return false;
+        };
+        if self.platform.clock.monotonic() < until {
+            return true;
+        }
+        self.hotkeys_paused_until = None;
+        false
     }
 
     /// 注销所有已注册的热键。尽力而为：某个热键注销失败不影响其他热键，

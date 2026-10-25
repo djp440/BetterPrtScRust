@@ -49,21 +49,42 @@ impl Settings {
             problems.push(SettingsProblem::EmptySaveDir);
         }
         for (index, binding) in self.bindings.iter().enumerate() {
-            if !allows_typing(binding.hotkey) {
+            let Some(hotkey) = binding.hotkey else {
+                problems.push(SettingsProblem::MissingHotkey { binding: index });
+                continue;
+            };
+            if !allows_typing(hotkey) {
                 problems.push(SettingsProblem::TypingKeyWithoutModifier {
                     binding: index,
-                    hotkey: binding.hotkey,
+                    hotkey,
+                });
+            }
+            if let Some(other) = self.conflicting_binding(index) {
+                problems.push(SettingsProblem::DuplicateHotkey {
+                    binding: index,
+                    other,
+                    hotkey,
                 });
             }
         }
         problems
+    }
+
+    /// 第 `index` 条绑定的热键与哪条更靠前的绑定相同（与常驻实例注册时的判定一致：
+    /// 后面的那条会注册失败）；没有冲突、或热键已清空时为 `None`。
+    pub fn conflicting_binding(&self, index: usize) -> Option<usize> {
+        let hotkey = self.bindings.get(index)?.hotkey?;
+        self.bindings[..index]
+            .iter()
+            .position(|earlier| earlier.hotkey == Some(hotkey))
     }
 }
 
 /// 设置界面上的一条热键绑定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingSettings {
-    pub hotkey: Hotkey,
+    /// 热键；录制时按 Backspace / Delete 清空后为 `None`，此时无法保存。
+    pub hotkey: Option<Hotkey>,
     pub mode: CaptureMode,
     /// 截图类绑定的截后动作，或直达功能。
     pub kind: CaptureKind,
@@ -78,7 +99,7 @@ impl BindingSettings {
     /// 新增的一条热键绑定。
     pub fn new(hotkey: Hotkey, mode: CaptureMode, kind: CaptureKind) -> Self {
         Self {
-            hotkey,
+            hotkey: Some(hotkey),
             mode,
             kind,
             auto_save: false,
@@ -104,6 +125,16 @@ pub enum SettingsProblem {
         binding: usize,
         hotkey: Hotkey,
     },
+    /// 第 `binding` 条（从 0 开始）绑定没有设置热键。
+    MissingHotkey {
+        binding: usize,
+    },
+    /// 第 `binding` 条绑定的热键与更靠前的第 `other` 条相同（从 0 开始）。
+    DuplicateHotkey {
+        binding: usize,
+        other: usize,
+        hotkey: Hotkey,
+    },
     /// 生成的配置文件无法解析（不应发生）。
     Invalid(ConfigError),
 }
@@ -118,6 +149,22 @@ impl SettingsProblem {
                 "settings-problem-typing-key",
                 &[("index", &(binding + 1)), ("hotkey", hotkey)],
             ),
+            SettingsProblem::MissingHotkey { binding } => texts.format(
+                "settings-problem-missing-hotkey",
+                &[("index", &(binding + 1))],
+            ),
+            SettingsProblem::DuplicateHotkey {
+                binding,
+                other,
+                hotkey,
+            } => texts.format(
+                "settings-problem-duplicate-hotkey",
+                &[
+                    ("index", &(binding + 1)),
+                    ("hotkey", hotkey),
+                    ("other", &(other + 1)),
+                ],
+            ),
             SettingsProblem::Invalid(error) => texts.format(
                 "settings-problem-invalid",
                 &[("error", &error.localized(texts))],
@@ -128,7 +175,9 @@ impl SettingsProblem {
     /// 问题出在哪条热键绑定（从 0 开始）；与绑定无关时为 `None`。
     pub fn binding(&self) -> Option<usize> {
         match self {
-            SettingsProblem::TypingKeyWithoutModifier { binding, .. } => Some(*binding),
+            SettingsProblem::TypingKeyWithoutModifier { binding, .. }
+            | SettingsProblem::MissingHotkey { binding }
+            | SettingsProblem::DuplicateHotkey { binding, .. } => Some(*binding),
             _ => None,
         }
     }
@@ -250,8 +299,10 @@ impl SettingsDocument {
                 Some((table, old)) => (table.clone(), Some(old)),
                 None => (new_binding_table(), None),
             };
-            if old.map(|o| o.hotkey) != Some(binding.hotkey) {
-                set_value(&mut table, "hotkey", binding.hotkey.to_string().into());
+            if let Some(hotkey) = binding.hotkey
+                && old.map(|o| o.hotkey) != Some(binding.hotkey)
+            {
+                set_value(&mut table, "hotkey", hotkey.to_string().into());
             }
             if old.map(|o| o.mode) != Some(binding.mode) {
                 set_value(&mut table, "mode", binding.mode.config_name().into());
@@ -309,7 +360,7 @@ fn settings_of(config: &Config) -> Settings {
             .iter()
             .enumerate()
             .map(|(index, binding)| BindingSettings {
-                hotkey: binding.hotkey,
+                hotkey: Some(binding.hotkey),
                 mode: binding.capture.mode,
                 kind: binding.capture.kind,
                 auto_save: binding.capture.auto_save,

@@ -106,3 +106,17 @@ fn filename_template_keeps_its_source_text() {
     assert_eq!(template.as_str(), "{mode} {HH-mm}");
     assert_eq!(template.to_string(), "{mode} {HH-mm}");
 }
+
+#[test]
+fn example_name_uses_a_fixed_example_time_not_the_clock() {
+    assert_eq!(
+        FilenameTemplate::default().render_example(),
+        "2026-01-01 12-34-56"
+    );
+    assert_eq!(
+        FilenameTemplate::parse("{mode}_{HH-mm-ss.fff}")
+            .unwrap()
+            .render_example(),
+        "region_12-34-56.000"
+    );
+}
