@@ -40,6 +40,16 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == resident::REMOVE_AUTOSTART_ARG) {
         return resident::remove_autostart_before_uninstall();
     }
+    if args
+        .first()
+        .is_some_and(|a| a == bps_platform_windows::RECORD_KEYS_ARGUMENT)
+    {
+        // 设置界面录制热键用的无窗口子进程：低层键盘钩子只能装在没有 eframe 窗口的进程里。
+        return match bps_platform_windows::run_key_capture_child() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     let result = if args.first().is_some_and(|a| a == SETTINGS_ARGUMENT) {
         settings::run()
     } else if args.first().is_some_and(|a| a == RESULT_PANEL_ARGUMENT) {

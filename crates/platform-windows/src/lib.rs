@@ -87,7 +87,10 @@ pub use font::map_system_font;
 pub use frame_source::DxgiFrameSource;
 pub use hotkeys::WindowsHotkeys;
 pub use http::WinHttpTransport;
-pub use key_capture::{KeyCapture, recorded_key, start_key_capture};
+pub use key_capture::{
+    KeyCapture, KeyCaptureProcess, RECORD_KEYS_ARGUMENT, RawKey, recorded_key,
+    run_key_capture_child, spawn_key_capture, start_key_capture,
+};
 pub use language::{WindowsSystemLanguage, user_ui_languages};
 pub use notifier::TrayNotifier;
 pub use ocr::WindowsTextRecognizer;
