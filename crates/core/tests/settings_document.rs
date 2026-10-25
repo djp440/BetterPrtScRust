@@ -38,7 +38,7 @@ fn default_config_exposes_every_setting_with_its_default() {
     let listed: Vec<String> = settings
         .bindings
         .iter()
-        .map(|b| b.hotkey.to_string())
+        .map(|b| b.hotkey.unwrap().to_string())
         .collect();
     assert_eq!(
         listed,
@@ -137,7 +137,7 @@ fn bindings_can_be_added_modified_and_removed() {
     let mut settings = document.settings().clone();
     settings.bindings.remove(0); // PrintScreen
     let shift_prtsc = &mut settings.bindings[0];
-    shift_prtsc.hotkey = hotkey("Ctrl+Alt+S");
+    shift_prtsc.hotkey = Some(hotkey("Ctrl+Alt+S"));
     shift_prtsc.mode = CaptureMode::VirtualDesktop;
     shift_prtsc.auto_save = false;
     let mut with_auto_save = BindingSettings::new(
@@ -268,7 +268,7 @@ fn invalid_settings_are_rejected_with_reasons_in_the_interface_language() {
     let mut settings = document.settings().clone();
     settings.filename_template = "{title}".to_owned();
     settings.save_dir = Some(PathBuf::from("  "));
-    settings.bindings[1].hotkey = Hotkey::new(Modifiers::SHIFT, Key::Letter('A'));
+    settings.bindings[1].hotkey = Some(Hotkey::new(Modifiers::SHIFT, Key::Letter('A')));
 
     let problems = document.render(&settings).unwrap_err();
 
@@ -372,7 +372,7 @@ fn saved_settings_take_effect_when_the_resident_instance_reloads_the_file() {
     settings.language = Language::En;
     settings
         .bindings
-        .retain(|b| b.hotkey != hotkey("PrintScreen"));
+        .retain(|b| b.hotkey != Some(hotkey("PrintScreen")));
     settings.bindings.push(BindingSettings::new(
         hotkey("Ctrl+F7"),
         CaptureMode::Display,
@@ -387,4 +387,43 @@ fn saved_settings_take_effect_when_the_resident_instance_reloads_the_file() {
     assert!(fake.registered_hotkeys().contains(&hotkey("Ctrl+F7")));
     assert!(!fake.registered_hotkeys().contains(&hotkey("PrintScreen")));
     assert_eq!(instance.config().language, Language::En);
+}
+
+#[test]
+fn binding_sharing_a_hotkey_with_an_earlier_one_is_a_problem_naming_that_binding() {
+    let document = SettingsDocument::parse(DEFAULT_CONFIG).unwrap();
+    let mut settings = document.settings().clone();
+    let first = settings.bindings[0].hotkey;
+    settings.bindings[2].hotkey = first;
+
+    assert_eq!(settings.conflicting_binding(2), Some(0));
+    assert_eq!(settings.conflicting_binding(0), None);
+    let problems = settings.problems();
+    assert_eq!(
+        problems,
+        [SettingsProblem::DuplicateHotkey {
+            binding: 2,
+            other: 0,
+            hotkey: first.unwrap()
+        }]
+    );
+    assert_eq!(problems[0].binding(), Some(2));
+    let en = problems[0].localized(Texts::of(Locale::En));
+    assert!(en.contains("binding 1") || en.contains("Binding 1"), "{en}");
+    assert!(document.render(&settings).is_err());
+}
+
+#[test]
+fn cleared_hotkey_blocks_saving_until_a_new_one_is_recorded() {
+    let document = SettingsDocument::parse(DEFAULT_CONFIG).unwrap();
+    let mut settings = document.settings().clone();
+    settings.bindings[1].hotkey = None;
+
+    assert_eq!(
+        settings.problems(),
+        [SettingsProblem::MissingHotkey { binding: 1 }]
+    );
+    assert_eq!(settings.conflicting_binding(1), None);
+    let zh = settings.problems()[0].localized(Texts::of(Locale::ZhCn));
+    assert!(zh.contains("第 2 条"), "{zh}");
 }

@@ -22,6 +22,7 @@ mod geometry;
 mod hotkey;
 mod http;
 mod image;
+mod key_input;
 mod language;
 mod notifier;
 mod ocr;
@@ -54,6 +55,7 @@ pub use hotkey::{
 };
 pub use http::{HttpRequest, HttpResponse, HttpTransport};
 pub use image::Image;
+pub use key_input::{KeyInput, ModifierKey, RecordedKey};
 pub use language::SystemLanguage;
 pub use notifier::{Notification, NotificationClick, Notifier};
 pub use ocr::{RecognitionLanguage, RecognizedLine, TextRecognizer};

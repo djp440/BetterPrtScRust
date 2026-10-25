@@ -100,6 +100,20 @@ template-unknown-placeholder = Unknown placeholder { "{" }{ $name }{ "}" } in th
 
 settings-problem-empty-save-dir = The auto-save folder cannot be empty; choose “Default folder” if you do not want to set one
 settings-problem-typing-key = Binding { $index } ({ $hotkey }): letter and digit keys need Ctrl, Alt or Win
+settings-problem-missing-hotkey = Binding { $index } has no hotkey
+settings-problem-duplicate-hotkey = Binding { $index } ({ $hotkey }) uses the same hotkey as binding { $other }; pick another combination
+settings-group-general = General
+settings-group-hotkeys = Hotkeys
+settings-group-saving = Capture & saving
+settings-group-about = About
+settings-about-license = License: { $license }
+settings-about-project = Project page
+settings-hotkey-unset = Not set
+settings-hotkey-record-tooltip = Click, then press the new key combination
+settings-record-prompt = Press the key combination…
+settings-record-help = Esc cancels, Backspace / Delete clears
+settings-record-unsupported = That key is not supported: hotkeys can use PrintScreen, F1–F24, A–Z, 0–9
+settings-record-unavailable = Cannot record hotkeys: { $error }
 settings-problem-invalid = Cannot produce a valid configuration file: { $error }
 
 ## Settings window
@@ -128,12 +142,12 @@ settings-save-dir-custom = Custom folder
 settings-browse = Browse…
 settings-choose-folder = Choose the auto-save folder
 settings-filename-template = File name
-settings-filename-example = Example: { $name }
+settings-filename-example = Example: { $name } (rendered with a fixed sample time, 2026-01-01 12:34:56, not the current time)
 settings-filename-help = Placeholders: { "{" }mode{ "}" } (capture mode), { "{" }window_title{ "}" } (window title), and date-times such as { "{" }yyyy-MM-dd HH-mm-ss{ "}" } (yyyy, MM, dd, HH, mm, ss, fff and so on).
 settings-output-format = Screenshot format
 settings-output-format-hint = PNG and WebP are lossless; JPEG is small but lossy and has no transparency; AVIF is the smallest but slow to encode. Recording formats are set per hotkey binding.
 settings-section-bindings = Hotkeys
-settings-bindings-hint = Letter and digit keys need Ctrl, Alt or Win.
+settings-bindings-hint = Click a hotkey box, then press the key combination to record it. Letter and digit keys need Ctrl, Alt or Win.
 settings-binding-failed = Not registered: { $reason }
 settings-binding-add = Add hotkey
 settings-binding-remove = Remove

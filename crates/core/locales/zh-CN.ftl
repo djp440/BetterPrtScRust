@@ -100,6 +100,20 @@ template-unknown-placeholder = 命名模板中有无法识别的占位符 { "{" 
 
 settings-problem-empty-save-dir = 自动存储目录不能为空；不想指定时请选“默认目录”
 settings-problem-typing-key = 第 { $index } 条热键绑定（{ $hotkey }）：字母和数字键需要搭配 Ctrl、Alt 或 Win
+settings-problem-missing-hotkey = 第 { $index } 条热键绑定没有设置热键
+settings-problem-duplicate-hotkey = 第 { $index } 条热键绑定（{ $hotkey }）与第 { $other } 条重复，请换一个组合键
+settings-group-general = 常规
+settings-group-hotkeys = 热键
+settings-group-saving = 截图与保存
+settings-group-about = 关于
+settings-about-license = 许可证：{ $license }
+settings-about-project = 项目地址
+settings-hotkey-unset = 未设置
+settings-hotkey-record-tooltip = 点击后按下新的组合键
+settings-record-prompt = 请按下组合键…
+settings-record-help = Esc 取消，Backspace / Delete 清空
+settings-record-unsupported = 不支持这个键：热键可用 PrintScreen、F1–F24、A–Z、0–9
+settings-record-unavailable = 无法录制热键：{ $error }
 settings-problem-invalid = 无法生成有效的配置文件：{ $error }
 
 ## 设置界面
@@ -128,12 +142,12 @@ settings-save-dir-custom = 自定义目录
 settings-browse = 浏览…
 settings-choose-folder = 选择自动存储目录
 settings-filename-template = 文件命名
-settings-filename-example = 示例：{ $name }
+settings-filename-example = 示例：{ $name }（按固定的示例时间 2026-01-01 12:34:56 生成，不是当前时间）
 settings-filename-help = 可用占位符：{ "{" }mode{ "}" }（捕获模式）、{ "{" }window_title{ "}" }（窗口标题），以及 { "{" }yyyy-MM-dd HH-mm-ss{ "}" } 这样的日期时间（yyyy、MM、dd、HH、mm、ss、fff 等）。
 settings-output-format = 截图格式
 settings-output-format-hint = PNG 和 WebP 无损；JPEG 体积小但有损、不支持透明；AVIF 体积最小，但编码较慢。录屏的格式在热键绑定里另行设置。
 settings-section-bindings = 热键绑定
-settings-bindings-hint = 字母和数字键需要搭配 Ctrl、Alt 或 Win。
+settings-bindings-hint = 点击热键框后直接按下组合键即可录制；字母和数字键需要搭配 Ctrl、Alt 或 Win。
 settings-binding-failed = 注册失败：{ $reason }
 settings-binding-add = 添加热键
 settings-binding-remove = 删除
