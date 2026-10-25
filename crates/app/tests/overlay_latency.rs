@@ -68,7 +68,7 @@ use windows::core::{Interface, w};
 const CONFIG: &str = "[[bindings]]
 hotkey = \"Ctrl+Alt+Shift+F8\"
 mode = \"region\"
-actions = [\"copy_to_clipboard\"]
+after = \"copy_to_clipboard\"
 ";
 const REGION_HOTKEY_ID: usize = 1;
 const VK_ESCAPE: usize = 0x1B;

@@ -1,5 +1,5 @@
-//! 标注：截后动作包含标注时，选区旁浮现标注工具条；用户画框、箭头，最后选择复制到剪贴板、
-//! 自动存储或另存为结束这次捕获。
+//! 标注：截后动作为等待确认时，选区旁浮现标注工具条；用户画框、箭头，最后确认（复制到剪贴板）
+//! 或另存为结束这次捕获。
 //!
 //! 用户在遮罩上的操作由假平台模拟：工具条按钮用 `click_text`（点击遮罩上写着这段文字的地方），
 //! 画标注用 `drag`。期望图像来自假平台的 `desktop_pattern`。
@@ -17,15 +17,18 @@ use bps_platform::{
 use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, decode, desktop_pattern};
 
 /// 工具条上的全部按钮文字。
-const TOOLBAR: [&str; 8] = [
+const TOOLBAR: [&str; 11] = [
     "矩形",
     "箭头",
     "马赛克",
     "文字",
+    "录屏",
+    "长截屏",
+    "OCR",
+    "翻译",
     "取消",
     "另存为",
-    "自动存储",
-    "复制",
+    "确认",
 ];
 
 /// 工具条上的 5 种预设颜色（第一种是默认的红色）。
@@ -39,7 +42,10 @@ const PALETTE: [Color; 5] = [
 const BLUE: Color = PALETTE[3];
 
 fn annotate(mode: CaptureMode) -> Command {
-    Command::Capture(CaptureRequest::new(mode, vec![PostCaptureAction::Annotate]))
+    Command::Capture(CaptureRequest::new(
+        mode,
+        PostCaptureAction::AwaitConfirmation,
+    ))
 }
 
 fn single_display() -> FakePlatform {
@@ -165,7 +171,7 @@ fn toolbar_is_hidden_while_dragging_and_absent_without_annotate() {
     drag.pop(); // 还没松开左键
     feed(&mut instance, drag);
     assert!(
-        fake.overlay_scene().unwrap().text_rect("复制").is_none(),
+        fake.overlay_scene().unwrap().text_rect("确认").is_none(),
         "拖拽框选期间不显示工具条"
     );
 
@@ -174,7 +180,7 @@ fn toolbar_is_hidden_while_dragging_and_absent_without_annotate() {
         &fake,
         Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         )),
     );
     feed(
@@ -182,7 +188,7 @@ fn toolbar_is_hidden_while_dragging_and_absent_without_annotate() {
         drag_region(&fake, Rect::new(100, 80, 300, 200)),
     );
     assert!(
-        fake.overlay_scene().unwrap().text_rect("复制").is_none(),
+        fake.overlay_scene().unwrap().text_rect("确认").is_none(),
         "不含标注的捕获没有工具条"
     );
 }
@@ -194,7 +200,7 @@ fn copy_button_without_annotations_copies_the_region() {
     let region = Rect::new(100, 80, 300, 200);
     feed(&mut instance, drag_region(&fake, region));
 
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     assert!(!fake.overlay_visible(), "选择结束方式后遮罩应关闭");
     let clipboard = fake.clipboard();
@@ -262,7 +268,7 @@ fn rectangle_drawn_on_region_is_in_copied_screenshot() {
         &mut instance,
         fake.drag(Point::new(150, 120), Point::new(249, 179)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().expect("应复制到剪贴板");
     let base = desktop_pattern(region);
@@ -299,7 +305,7 @@ fn arrow_drawn_on_region_is_in_copied_screenshot() {
         &mut instance,
         fake.drag(Point::new(120, 180), Point::new(320, 180)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -330,7 +336,7 @@ fn overlay_shows_exactly_the_screenshot_that_will_be_produced() {
 
     let (area, shown) = fake.overlay_canvas().expect("标注时遮罩上应有画布");
     assert_eq!(area, region, "画布正好盖住区域");
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert!(png == shown, "屏幕上看到的应与最终截图逐像素一致");
@@ -367,7 +373,7 @@ fn mosaic_dragged_on_region_replaces_its_content_with_coarse_blocks() {
         &mut instance,
         fake.drag(Point::new(140, 110), Point::new(299, 209)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -417,7 +423,7 @@ fn changing_color_and_thickness_affects_only_annotations_drawn_afterwards() {
         &mut instance,
         fake.drag(Point::new(160, 230), Point::new(359, 309)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -443,7 +449,7 @@ fn thin_thickness_draws_two_pixel_lines() {
         &mut instance,
         fake.drag(Point::new(150, 120), Point::new(249, 179)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert_eq!(png.pixel(51, 70), [240, 40, 40, 255]);
@@ -497,12 +503,12 @@ fn default_save_dir() -> PathBuf {
 }
 
 /// 在 `region` 里画了一个框的标注捕获，时间是 2026-10-24 09:05:07。
-fn annotated_with_rectangle(actions: Vec<PostCaptureAction>) -> (FakePlatform, ResidentInstance) {
+fn annotated_with_rectangle(auto_save: bool) -> (FakePlatform, ResidentInstance) {
     let fake = single_display().with_time(LocalDateTime::new(2026, 10, 24, 9, 5, 7));
-    let mut instance = start(
-        &fake,
-        Command::Capture(CaptureRequest::new(CaptureMode::Region, actions)),
-    );
+    let mut request =
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation);
+    request.auto_save = auto_save;
+    let mut instance = start(&fake, Command::Capture(request));
     feed(
         &mut instance,
         drag_region(&fake, Rect::new(100, 80, 300, 200)),
@@ -516,16 +522,19 @@ fn annotated_with_rectangle(actions: Vec<PostCaptureAction>) -> (FakePlatform, R
 }
 
 #[test]
-fn auto_save_button_saves_annotated_screenshot_by_filename_template_and_notifies() {
-    let (fake, mut instance) = annotated_with_rectangle(vec![PostCaptureAction::Annotate]);
+fn auto_save_runs_on_confirm_by_filename_template_and_clipboard_carries_the_file() {
+    let (fake, mut instance) = annotated_with_rectangle(true);
 
-    feed(&mut instance, fake.click_text("自动存储"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let path = default_save_dir().join("2026-10-24 09-05-07.png");
     assert_eq!(fake.files(), std::slice::from_ref(&path));
+    let clipboard = fake.clipboard();
+    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
+    assert_eq!(clipboard.files(), Some(vec![path.clone()]));
+    assert!(is_red(clipboard.png_image().unwrap().pixel(50, 40)));
     let saved = decode::png(&fake.file(&path).unwrap());
     assert!(is_red(saved.pixel(50, 40)), "存下的截图包含标注");
-    assert!(fake.clipboard().is_empty(), "只选了自动存储，不复制");
     let notifications = fake.notifications();
     assert_eq!(notifications.len(), 1);
     assert_eq!(notifications[0].title, "截图已保存");
@@ -533,29 +542,11 @@ fn auto_save_button_saves_annotated_screenshot_by_filename_template_and_notifies
         notifications[0].on_click,
         Some(NotificationClick::OpenFile(path))
     );
-    assert!(!fake.overlay_visible());
-}
-
-#[test]
-fn bound_auto_save_also_runs_when_user_copies_and_clipboard_carries_the_file() {
-    let (fake, mut instance) = annotated_with_rectangle(vec![
-        PostCaptureAction::Annotate,
-        PostCaptureAction::AutoSave,
-    ]);
-
-    feed(&mut instance, fake.click_text("复制"));
-
-    let path = default_save_dir().join("2026-10-24 09-05-07.png");
-    assert_eq!(fake.files(), std::slice::from_ref(&path));
-    let clipboard = fake.clipboard();
-    assert_eq!(clipboard.formats(), ["PNG", "DIB", "Files"]);
-    assert_eq!(clipboard.files(), Some(vec![path]));
-    assert!(is_red(clipboard.png_image().unwrap().pixel(50, 40)));
 }
 
 #[test]
 fn save_as_writes_annotated_screenshot_to_the_chosen_path_in_its_format() {
-    let (fake, mut instance) = annotated_with_rectangle(vec![PostCaptureAction::Annotate]);
+    let (fake, mut instance) = annotated_with_rectangle(false);
     let fake = fake.with_dir(r"D:\Shots");
     let chosen = PathBuf::from(r"D:\Shots\bug.jpg");
     fake.answer_save_as(Some(chosen.clone()));
@@ -603,7 +594,8 @@ fn file_type(name: &str, extensions: &[&str]) -> FileType {
 fn save_as_overwrites_the_file_user_confirmed_and_defaults_to_output_format() {
     let existing = PathBuf::from(r"D:\Shots\bug.webp");
     let fake = single_display().with_file(&existing, b"old".to_vec());
-    let mut request = CaptureRequest::new(CaptureMode::Region, vec![PostCaptureAction::Annotate]);
+    let mut request =
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation);
     request.output.output_format = OutputFormat::WebP;
     let mut instance = start(&fake, Command::Capture(request));
     feed(
@@ -623,7 +615,7 @@ fn save_as_overwrites_the_file_user_confirmed_and_defaults_to_output_format() {
 
 #[test]
 fn cancelling_save_as_dialog_returns_to_annotating() {
-    let (fake, mut instance) = annotated_with_rectangle(vec![PostCaptureAction::Annotate]);
+    let (fake, mut instance) = annotated_with_rectangle(false);
     fake.answer_save_as(None);
 
     feed(&mut instance, fake.click_text("另存为"));
@@ -633,13 +625,13 @@ fn cancelling_save_as_dialog_returns_to_annotating() {
     let (_, canvas) = fake.overlay_canvas().unwrap();
     assert!(is_red(canvas.pixel(50, 40)), "已画的标注还在");
 
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
     assert!(is_red(fake.clipboard().png_image().unwrap().pixel(50, 40)));
 }
 
 #[test]
 fn failed_save_as_is_notified() {
-    let (fake, mut instance) = annotated_with_rectangle(vec![PostCaptureAction::Annotate]);
+    let (fake, mut instance) = annotated_with_rectangle(false);
     let read_only = PathBuf::from(r"D:\ReadOnly");
     let fake = fake.with_read_only_dir(&read_only);
     fake.answer_save_as(Some(read_only.join("a.png")));
@@ -678,7 +670,7 @@ fn display_capture_with_annotate_goes_straight_to_annotating_the_display_under_c
         &mut instance,
         fake.drag(Point::new(850, 0), Point::new(1050, 0)),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert_eq!((png.width(), png.height()), (640, 480));
@@ -696,7 +688,7 @@ fn virtual_desktop_capture_with_annotate_annotates_the_whole_virtual_desktop() {
         .with_display(FakeDisplay::new(Rect::new(800, 0, 640, 480)));
     let mut instance = start(&fake, annotate(CaptureMode::VirtualDesktop));
 
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert_eq!((png.width(), png.height()), (1440, 600));
@@ -739,7 +731,7 @@ fn chinese_text_typed_with_input_method_is_drawn_where_the_user_clicked() {
         Some(Rect::new(194, 120, 1, 28)),
         "插入点在“好”之后"
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -770,7 +762,7 @@ fn backspace_deletes_and_enter_starts_a_new_line_while_typing() {
     );
     assert!(fake.clipboard().is_empty());
     feed(&mut instance, fake.type_text("A"));
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -827,7 +819,7 @@ fn clicking_elsewhere_starts_another_text_and_style_changes_apply_to_the_text_be
         "改样式不打断输入"
     );
     feed(&mut instance, fake.type_text("好"));
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     let base = desktop_pattern(region);
@@ -847,7 +839,7 @@ fn switching_tool_finishes_typing_and_typing_is_ignored_by_other_tools() {
     feed(&mut instance, fake.click_text("矩形"));
     assert_eq!(caret(&fake), None);
     feed(&mut instance, fake.type_text("好"));
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert!(is_red(png.pixel(60, 54)), "切换工具时已输入的文字保留");
@@ -882,7 +874,7 @@ fn overlay_shows_exactly_the_screenshot_with_mosaic_and_text_that_will_be_produc
 
     let (area, shown) = fake.overlay_canvas().expect("标注时遮罩上应有画布");
     assert_eq!(area, region);
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let png = fake.clipboard().png_image().unwrap();
     assert!(
@@ -918,7 +910,7 @@ fn press(instance: &mut ResidentInstance, fake: &FakePlatform, key: OverlayKey, 
 }
 
 fn copy_result(fake: &FakePlatform, instance: &mut ResidentInstance) -> bps_platform::Image {
-    feed(instance, fake.click_text("复制"));
+    feed(instance, fake.click_text("确认"));
     fake.clipboard().png_image().expect("应复制到剪贴板")
 }
 

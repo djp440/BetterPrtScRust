@@ -16,12 +16,12 @@ use bps_platform::{
 };
 use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, FakeWindow, decode};
 
-fn window_capture(actions: Vec<PostCaptureAction>) -> Command {
-    Command::Capture(CaptureRequest::new(CaptureMode::Window, actions))
+fn window_capture(after: PostCaptureAction) -> Command {
+    Command::Capture(CaptureRequest::new(CaptureMode::Window, after))
 }
 
 fn copy_window_capture() -> Command {
-    window_capture(vec![PostCaptureAction::CopyToClipboard])
+    window_capture(PostCaptureAction::CopyToClipboard)
 }
 
 const DESKTOP: Rect = Rect::new(0, 0, 200, 150);
@@ -98,10 +98,10 @@ fn assert_no_product(fake: &FakePlatform) {
 }
 
 fn copy_and_save_window_capture() -> Command {
-    window_capture(vec![
-        PostCaptureAction::CopyToClipboard,
-        PostCaptureAction::AutoSave,
-    ])
+    Command::Capture(
+        CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+            .with_auto_save(),
+    )
 }
 
 #[test]
@@ -296,7 +296,8 @@ fn window_title_fills_filename_template_with_illegal_characters_replaced() {
         "报告: 第1版 / 草稿",
         Rect::new(20, 10, 80, 60),
     ));
-    let mut request = CaptureRequest::new(CaptureMode::Window, vec![PostCaptureAction::AutoSave]);
+    let mut request = CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+        .with_auto_save();
     request.output.filename_template = FilenameTemplate::parse("{window_title} {mode}").unwrap();
     let mut instance = picking(&fake, Command::Capture(request));
 
@@ -349,7 +350,8 @@ fn pixels_outside_rounded_corners_become_white_in_jpg() {
     let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60))
         .with_image(rounded_window_image(80, 60));
     let fake = desktop().with_window(window);
-    let mut request = CaptureRequest::new(CaptureMode::Window, vec![PostCaptureAction::AutoSave]);
+    let mut request = CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+        .with_auto_save();
     request.output.output_format = OutputFormat::Jpeg;
     let mut instance = picking(&fake, Command::Capture(request));
 
@@ -370,7 +372,7 @@ fn pixels_outside_rounded_corners_become_white_in_jpg() {
 }
 
 #[test]
-fn ctrl_print_screen_default_binding_copies_and_saves_clicked_window() {
+fn ctrl_print_screen_default_binding_waits_for_confirmation_after_clicking_window() {
     let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
     let fake = desktop().with_window(window.clone());
     let mut instance = ResidentInstance::start(fake.platform());
@@ -380,6 +382,32 @@ fn ctrl_print_screen_default_binding_copies_and_saves_clicked_window() {
         .expect("默认绑定应注册 Ctrl+PrtSc");
     assert_eq!(instance.handle(pressed), Ok(Flow::Continue));
     assert!(fake.overlay_visible(), "Ctrl+PrtSc 应显示选区遮罩");
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(50, 40)),
+    );
+    assert!(fake.overlay_visible(), "单击窗口后应等待确认");
+    assert!(fake.clipboard().is_empty());
+
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
+
+    assert!(!fake.overlay_visible());
+    assert!(fake.clipboard().png_image().unwrap() == *window.image());
+    assert!(fake.files().is_empty(), "默认不自动保存");
+}
+
+#[test]
+fn window_binding_with_copy_and_auto_save_copies_and_saves_clicked_window() {
+    let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
+    let fake = desktop().with_window(window.clone()).with_config_file(
+        "[[bindings]]\nhotkey = \"Ctrl+PrintScreen\"\nmode = \"window\"\nafter = \"copy_to_clipboard\"\nauto_save = true\n",
+    );
+    let mut instance = ResidentInstance::start(fake.platform());
+
+    let pressed = fake
+        .press(Hotkey::new(Modifiers::CTRL, Key::PrintScreen))
+        .expect("应注册 Ctrl+PrtSc");
+    instance.handle(pressed).unwrap();
     feed(
         &mut instance,
         fake.click(PointerButton::Left, Point::new(50, 40)),
@@ -431,7 +459,7 @@ fn another_capture_is_rejected_while_choosing_window() {
 
     let result = instance.execute(Command::Capture(CaptureRequest::new(
         CaptureMode::Display,
-        vec![PostCaptureAction::CopyToClipboard],
+        PostCaptureAction::CopyToClipboard,
     )));
 
     assert_eq!(result, Err(CoreError::CaptureInProgress));
@@ -450,7 +478,7 @@ fn exit_while_choosing_window_closes_overlay() {
     assert!(fake.clipboard().is_empty());
 }
 
-/// 绑定“窗口 + 标注 + 复制”：先单击选窗，再在这个窗口的截图上标注。
+/// 绑定“窗口 + 等待确认”：先单击选窗，再在这个窗口的截图上标注。
 #[test]
 fn window_mode_with_annotate_picks_window_first_then_annotates_its_image() {
     let window = FakeWindow::new("记事本", Rect::new(200, 100, 80, 60));
@@ -458,13 +486,7 @@ fn window_mode_with_annotate_picks_window_first_then_annotates_its_image() {
         .with_display(FakeDisplay::new(Rect::new(0, 0, 800, 600)).primary())
         .with_cursor_at(Point::new(700, 500))
         .with_window(window.clone());
-    let mut instance = picking(
-        &fake,
-        window_capture(vec![
-            PostCaptureAction::Annotate,
-            PostCaptureAction::CopyToClipboard,
-        ]),
-    );
+    let mut instance = picking(&fake, window_capture(PostCaptureAction::AwaitConfirmation));
     assert!(
         fake.overlay_canvas().is_none(),
         "窗口 + 标注也应先悬停高亮选窗，而不是框选区域"
@@ -487,7 +509,7 @@ fn window_mode_with_annotate_picks_window_first_then_annotates_its_image() {
             Point::new(view.x + 40, view.y + 40),
         ),
     );
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     assert!(!fake.overlay_visible());
     let copied = fake.clipboard().png_image().unwrap();
@@ -505,10 +527,10 @@ fn cancelling_annotation_of_a_picked_window_leaves_no_product() {
         .with_window(FakeWindow::new("记事本", Rect::new(200, 100, 80, 60)));
     let mut instance = picking(
         &fake,
-        window_capture(vec![
-            PostCaptureAction::Annotate,
-            PostCaptureAction::AutoSave,
-        ]),
+        Command::Capture(
+            CaptureRequest::new(CaptureMode::Window, PostCaptureAction::AwaitConfirmation)
+                .with_auto_save(),
+        ),
     );
     feed(
         &mut instance,

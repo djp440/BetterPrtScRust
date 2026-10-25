@@ -15,20 +15,17 @@ fn desktop() -> FakePlatform {
         .with_cursor_at(Point::new(10, 10))
 }
 
-fn display_capture(format: OutputFormat, actions: Vec<PostCaptureAction>) -> Command {
-    let mut request = CaptureRequest::new(CaptureMode::Display, actions);
+fn display_capture(format: OutputFormat, after: PostCaptureAction) -> Command {
+    let mut request = CaptureRequest::new(CaptureMode::Display, after);
     request.output.output_format = format;
     Command::Capture(request)
 }
 
 fn avif_copy_and_save() -> Command {
-    display_capture(
-        OutputFormat::Avif,
-        vec![
-            PostCaptureAction::CopyToClipboard,
-            PostCaptureAction::AutoSave,
-        ],
-    )
+    let mut request = CaptureRequest::new(CaptureMode::Display, PostCaptureAction::CopyToClipboard)
+        .with_auto_save();
+    request.output.output_format = OutputFormat::Avif;
+    Command::Capture(request)
 }
 
 /// 让后台任务跑完，把平台递交的完成事件交给常驻实例。
@@ -83,7 +80,7 @@ fn fast_formats_are_still_finished_within_the_command() {
     instance
         .execute(display_capture(
             OutputFormat::Png,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         ))
         .unwrap();
 
@@ -95,7 +92,7 @@ fn fast_formats_are_still_finished_within_the_command() {
 fn another_capture_can_start_while_avif_is_encoding_and_results_land_in_order() {
     let fake = desktop();
     let mut instance = ResidentInstance::new(fake.platform(), Vec::new());
-    let copy = || display_capture(OutputFormat::Avif, vec![PostCaptureAction::CopyToClipboard]);
+    let copy = || display_capture(OutputFormat::Avif, PostCaptureAction::CopyToClipboard);
 
     instance.execute(copy()).unwrap();
     let second_screen = solid(64, 48, [10, 200, 30, 255]);
@@ -129,7 +126,7 @@ fn encoding_a_file_for_save_as_in_avif_runs_in_background() {
     instance
         .execute(display_capture(
             OutputFormat::Png,
-            vec![PostCaptureAction::Annotate],
+            PostCaptureAction::AwaitConfirmation,
         ))
         .unwrap();
 

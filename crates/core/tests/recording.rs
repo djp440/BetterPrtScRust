@@ -192,7 +192,7 @@ fn recording_follows_live_screen_changes() {
 /// 只有一条 Alt+PrtSc 录屏绑定的常驻实例；`overrides` 是这条绑定额外的配置行。
 fn resident_with_record_binding(fake: &FakePlatform, overrides: &str) -> ResidentInstance {
     let config = Config::parse(&format!(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"region\"\nactions = [\"record\"]\n{overrides}\n"
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"region\"\nfunction = \"record\"\n{overrides}\n"
     ))
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
@@ -628,7 +628,7 @@ fn display_mode_records_display_under_cursor_without_framing() {
         .with_display(FakeDisplay::new(second))
         .with_cursor_at(Point::new(200, 200));
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"display\"\nactions = [\"record\"]\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"display\"\nfunction = \"record\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
@@ -658,7 +658,7 @@ fn virtual_desktop_mode_records_all_displays() {
         .with_display(FakeDisplay::new(Rect::new(128, -10, 40, 34)))
         .with_cursor_at(Point::new(500, 500));
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"virtual_desktop\"\nactions = [\"record\"]\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"virtual_desktop\"\nfunction = \"record\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);

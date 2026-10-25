@@ -17,7 +17,7 @@ fn display() -> FakeDisplay {
 }
 
 fn auto_save_request() -> CaptureRequest {
-    CaptureRequest::new(CaptureMode::Display, vec![PostCaptureAction::AutoSave])
+    CaptureRequest::new(CaptureMode::Display, PostCaptureAction::CopyToClipboard).with_auto_save()
 }
 
 fn default_save_dir() -> PathBuf {

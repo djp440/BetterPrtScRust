@@ -36,6 +36,8 @@ pub struct ResultPanelEnvironment {
     pub translation: Option<TranslationConfig>,
     /// 翻译请求的 HTTP 传输；在后台线程里调用。
     pub http: Arc<dyn HttpTransport + Send + Sync>,
+    /// 识别完成后直接翻译（截图界面上的“翻译”；翻译服务没配置时只显示识别结果）。
+    pub translate: bool,
 }
 
 /// 打开结果面板、开始识别，运行到用户关闭它。
@@ -65,6 +67,8 @@ struct ResultPanelApp {
     translation_finished: Receiver<TranslationOutcome>,
     /// 识别结果出来后把输入焦点放到文本框里一次，方便直接 Ctrl+A、Ctrl+C。
     focus_text: bool,
+    /// 识别完成后还要自动翻译一次。
+    translate_when_recognized: bool,
     notice: Option<Notice>,
 }
 
@@ -102,6 +106,7 @@ impl ResultPanelApp {
             translated,
             translation_finished,
             focus_text: false,
+            translate_when_recognized: environment.translate,
             notice: None,
         };
         app.start(recognition);
@@ -133,6 +138,9 @@ impl ResultPanelApp {
             self.panel.finish(outcome);
             if self.panel.status() == &RecognitionStatus::Recognized {
                 self.focus_text = true;
+                if std::mem::take(&mut self.translate_when_recognized) {
+                    self.start_translation();
+                }
             }
         }
     }

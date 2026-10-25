@@ -10,9 +10,9 @@ use std::thread;
 use std::time::Duration;
 
 use bps_core::{
-    BindingFailure, BindingSettings, CaptureMode, FilenameFields, FilenameTemplate, Language,
-    OutputFormat, PostCaptureAction, ResidentStatus, Settings, SettingsDocument, SettingsProblem,
-    Texts, UpdateStatus, VERSION,
+    BindingFailure, BindingSettings, CaptureKind, CaptureMode, FilenameFields, FilenameTemplate,
+    Language, OutputFormat, PostCaptureAction, ResidentStatus, Settings, SettingsDocument,
+    SettingsProblem, Texts, UpdateStatus, VERSION,
 };
 use bps_platform::{Clock, Hotkey, Key, Modifiers};
 use eframe::egui::{self, RichText};
@@ -581,7 +581,7 @@ impl SettingsApp {
             settings.bindings.push(BindingSettings::new(
                 hotkey,
                 CaptureMode::Region,
-                vec![PostCaptureAction::CopyToClipboard],
+                CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
             ));
         }
     }
@@ -790,34 +790,24 @@ fn binding_editor(
                     }
                 });
         });
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.label(texts.get("settings-binding-actions"));
-            for action in PostCaptureAction::ALL {
-                let mut chosen = binding.actions.contains(&action);
-                if ui
-                    .checkbox(&mut chosen, action.localized_label(texts))
-                    .changed()
-                {
-                    if chosen {
-                        // 新选的动作排在最后执行。
-                        binding.actions.push(action);
-                    } else {
-                        binding.actions.retain(|a| *a != action);
+            egui::ComboBox::from_id_salt(("kind", index))
+                .selected_text(binding.kind.localized_label(texts))
+                .show_ui(ui, |ui| {
+                    for kind in CaptureKind::ALL {
+                        ui.selectable_value(&mut binding.kind, kind, kind.localized_label(texts));
                     }
-                }
-            }
-        });
-        if binding.actions.len() > 1 {
-            let order: Vec<String> = binding
-                .actions
-                .iter()
-                .map(|a| a.localized_label(texts))
-                .collect();
-            hint(
-                ui,
-                texts.format("settings-binding-order", &[("actions", &order.join(" → "))]),
+                });
+            // 录屏总是保存、OCR 不保存：自动保存只对截图类绑定和长截屏有意义。
+            ui.add_enabled(
+                binding.kind.supports_auto_save(),
+                egui::Checkbox::new(
+                    &mut binding.auto_save,
+                    texts.get("settings-binding-auto-save"),
+                ),
             );
-        }
+        });
         for reason in reasons {
             error(ui, reason.clone());
         }
@@ -831,7 +821,6 @@ fn binding_problem(problem: &SettingsProblem, texts: &Texts) -> String {
         SettingsProblem::TypingKeyWithoutModifier { .. } => {
             texts.get("settings-binding-needs-modifier")
         }
-        SettingsProblem::NoActions { .. } => texts.get("settings-binding-needs-action"),
         other => other.localized(texts),
     }
 }

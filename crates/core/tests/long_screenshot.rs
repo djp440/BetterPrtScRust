@@ -7,8 +7,8 @@
 //! 画面变化后采到一帧。期望的长截屏直接从文档裁剪得到。
 
 use bps_core::{
-    CaptureMode, CaptureRequest, CliStatus, Command, CoreError, Flow, HotkeyBinding, Locale,
-    LongScreenshot, PostCaptureAction, ResidentInstance, run_cli,
+    CaptureMode, CaptureRequest, CliStatus, Command, CoreError, DirectFunction, Flow,
+    HotkeyBinding, Locale, LongScreenshot, PostCaptureAction, ResidentInstance, run_cli,
 };
 use bps_platform::{
     Hotkey, Image, Key, Modifiers, OverlayItem, OverlayKey, PlatformEvent, Point, PointerButton,
@@ -107,10 +107,26 @@ fn desktop_with_window(doc: Image, viewport: Rect) -> ScrollingWindow {
     window
 }
 
-fn long_screenshot(actions: &[PostCaptureAction]) -> Command {
-    let mut all = vec![PostCaptureAction::LongScreenshot];
-    all.extend_from_slice(actions);
-    Command::Capture(CaptureRequest::new(CaptureMode::Region, all))
+/// 直达功能的长截屏（热键直接进入）。
+fn long_screenshot() -> Command {
+    Command::Capture(CaptureRequest::function(
+        CaptureMode::Region,
+        DirectFunction::LongScreenshot,
+    ))
+}
+
+/// 从等待确认界面转入长截屏：先框选 [`VIEWPORT`]，再点工具条上的“长截屏”（以选区直接开始采样）。
+fn start_from_confirmation(fake: &FakePlatform) -> ResidentInstance {
+    let mut instance = start(
+        fake,
+        Command::Capture(CaptureRequest::new(
+            CaptureMode::Region,
+            PostCaptureAction::AwaitConfirmation,
+        )),
+    );
+    feed(&mut instance, drag_region(fake, VIEWPORT));
+    feed(&mut instance, fake.click_text("长截屏"));
+    instance
 }
 
 fn start(fake: &FakePlatform, command: Command) -> ResidentInstance {
@@ -175,7 +191,7 @@ fn assert_same(actual: &Image, expected: &Image) {
 fn start_and_cancel_buttons_appear_beside_selected_region() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
 
     assert!(!has_text(fake, "开始"), "还没有选区时不显示“开始”");
     feed(&mut instance, drag_region(fake, VIEWPORT));
@@ -194,7 +210,7 @@ fn start_and_cancel_buttons_appear_beside_selected_region() {
 fn pressing_start_samples_the_region_and_lets_the_user_scroll_it() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
 
     feed(&mut instance, fake.click_text("开始"));
@@ -215,7 +231,7 @@ fn finishing_copies_the_stitched_long_screenshot() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
@@ -234,7 +250,7 @@ fn finishing_copies_the_stitched_long_screenshot() {
 fn preview_beside_region_shows_stitched_size_while_scrolling() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
     assert!(
@@ -263,7 +279,7 @@ fn scrolling_too_fast_asks_user_to_scroll_back_and_recovers() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
@@ -285,7 +301,7 @@ fn reaching_the_height_limit_stops_stitching_and_tells_the_user() {
     let doc = document(limit + 1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
@@ -314,7 +330,7 @@ fn reaching_the_height_limit_stops_stitching_and_tells_the_user() {
 fn escape_while_scrolling_cancels_without_any_product() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
     window.scroll_to(&mut instance, 100);
@@ -332,7 +348,7 @@ fn escape_while_scrolling_cancels_without_any_product() {
 fn cancel_button_while_scrolling_cancels_and_stops_sampling() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
     window.scroll_to(&mut instance, 100);
@@ -349,7 +365,7 @@ fn enter_starts_scrolling_and_enter_again_finishes() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
 
     feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
@@ -367,7 +383,7 @@ fn binding_without_copy_or_auto_save_copies_the_long_screenshot() {
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
     // 默认的 Ctrl+Shift+PrtSc 绑定只有长截屏一个截后动作。
-    let mut instance = start(fake, long_screenshot(&[]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
     window.scroll_to(&mut instance, 90);
@@ -383,7 +399,13 @@ fn auto_save_saves_the_long_screenshot_and_notifies() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::AutoSave]));
+    let mut instance = start(
+        fake,
+        Command::Capture(
+            CaptureRequest::function(CaptureMode::Region, DirectFunction::LongScreenshot)
+                .with_auto_save(),
+        ),
+    );
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
     window.scroll_to(&mut instance, 120);
@@ -393,7 +415,11 @@ fn auto_save_saves_the_long_screenshot_and_notifies() {
     assert_eq!(files.len(), 1, "{files:?}");
     let saved = decode::png(&fake.file(&files[0]).unwrap());
     assert_same(&saved, &rows(&doc, 0, 120 + VIEWPORT.height));
-    assert!(fake.clipboard().is_empty(), "绑定没有复制时不碰剪贴板");
+    assert_eq!(
+        fake.clipboard().files(),
+        Some(files),
+        "长截屏总是复制，开了自动保存时剪贴板附带存下的文件"
+    );
     assert_eq!(fake.notifications().len(), 1);
 }
 
@@ -402,21 +428,16 @@ fn annotating_a_long_screenshot_shows_it_scaled_down_and_produces_full_size() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(
-        fake,
-        long_screenshot(&[
-            PostCaptureAction::Annotate,
-            PostCaptureAction::CopyToClipboard,
-        ]),
-    );
-    feed(&mut instance, drag_region(fake, VIEWPORT));
-    feed(&mut instance, fake.click_text("开始"));
+    let mut instance = start_from_confirmation(fake);
     for offset in (0..=600).step_by(30) {
         window.scroll_to(&mut instance, offset);
     }
     feed(&mut instance, fake.click_text("完成"));
 
-    assert!(fake.overlay_visible(), "包含标注时完成后进入标注");
+    assert!(
+        fake.overlay_visible(),
+        "从等待确认转入的长截屏，完成后回到等待确认（标注）"
+    );
     assert_eq!(fake.sampling_region(), None);
     assert_eq!(
         fake.overlay_pass_through(),
@@ -434,7 +455,7 @@ fn annotating_a_long_screenshot_shows_it_scaled_down_and_produces_full_size() {
         Point::new(view.x + 20, view.y + 30),
     );
     feed(&mut instance, fake.drag(from, to));
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     assert!(!fake.overlay_visible());
     let copied = fake.clipboard().png_image().unwrap();
@@ -459,7 +480,7 @@ fn annotating_a_long_screenshot_shows_it_scaled_down_and_produces_full_size() {
 fn sampling_failure_ends_the_capture_and_notifies() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
@@ -480,7 +501,7 @@ fn sampling_failure_ends_the_capture_and_notifies() {
 fn exiting_while_scrolling_stops_sampling_and_closes_overlay() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
@@ -498,11 +519,11 @@ fn exiting_while_scrolling_stops_sampling_and_closes_overlay() {
 fn another_capture_is_refused_while_scrolling() {
     let window = desktop_with_window(document(1000), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(fake, long_screenshot(&[PostCaptureAction::CopyToClipboard]));
+    let mut instance = start(fake, long_screenshot());
     feed(&mut instance, drag_region(fake, VIEWPORT));
     feed(&mut instance, fake.click_text("开始"));
 
-    let again = instance.execute(long_screenshot(&[]));
+    let again = instance.execute(long_screenshot());
 
     assert_eq!(again, Err(CoreError::CaptureInProgress));
     assert_eq!(
@@ -518,9 +539,9 @@ fn display_mode_starts_with_the_whole_display_selected() {
     let fake = &window.fake;
     let mut instance = start(
         fake,
-        Command::Capture(CaptureRequest::new(
+        Command::Capture(CaptureRequest::function(
             CaptureMode::Display,
-            vec![PostCaptureAction::LongScreenshot],
+            DirectFunction::LongScreenshot,
         )),
     );
 
@@ -549,10 +570,7 @@ fn bps_capture_region_with_long_screenshot_binding_replies_after_user_finishes()
         fake.platform(),
         vec![HotkeyBinding {
             hotkey: Hotkey::new(Modifiers::CTRL.with(Modifiers::SHIFT), Key::PrintScreen),
-            capture: CaptureRequest::new(
-                CaptureMode::Region,
-                vec![PostCaptureAction::LongScreenshot],
-            ),
+            capture: CaptureRequest::function(CaptureMode::Region, DirectFunction::LongScreenshot),
         }],
     );
     assert!(instance.register_hotkeys().is_empty());
@@ -590,15 +608,7 @@ fn selecting_moving_and_undoing_work_on_the_scaled_down_long_screenshot() {
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(
-        fake,
-        long_screenshot(&[
-            PostCaptureAction::Annotate,
-            PostCaptureAction::CopyToClipboard,
-        ]),
-    );
-    feed(&mut instance, drag_region(fake, VIEWPORT));
-    feed(&mut instance, fake.click_text("开始"));
+    let mut instance = start_from_confirmation(fake);
     for offset in (0..=600).step_by(30) {
         window.scroll_to(&mut instance, offset);
     }
@@ -644,7 +654,7 @@ fn selecting_moving_and_undoing_work_on_the_scaled_down_long_screenshot() {
         .unwrap();
 
     // 复制：原尺寸的长截屏上，框左边线整体移动了 (10,12) 个屏幕像素 = 乘缩小比例的像素。
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
     let copied = fake.clipboard().png_image().unwrap();
     assert_eq!((copied.width(), copied.height()), (120, 750));
     let at = |x: f64, y: f64| copied.pixel((x * scale) as u32, (y * scale) as u32);
@@ -657,15 +667,7 @@ fn deleting_the_selection_on_the_scaled_down_long_screenshot_restores_the_stitch
     let doc = document(1000);
     let window = desktop_with_window(doc.clone(), VIEWPORT);
     let fake = &window.fake;
-    let mut instance = start(
-        fake,
-        long_screenshot(&[
-            PostCaptureAction::Annotate,
-            PostCaptureAction::CopyToClipboard,
-        ]),
-    );
-    feed(&mut instance, drag_region(fake, VIEWPORT));
-    feed(&mut instance, fake.click_text("开始"));
+    let mut instance = start_from_confirmation(fake);
     for offset in (0..=600).step_by(30) {
         window.scroll_to(&mut instance, offset);
     }
@@ -686,7 +688,7 @@ fn deleting_the_selection_on_the_scaled_down_long_screenshot_restores_the_stitch
         fake.click(PointerButton::Left, Point::new(view.x + 5, view.y + 17)),
     );
     instance.handle(fake.press_key(OverlayKey::Delete)).unwrap();
-    feed(&mut instance, fake.click_text("复制"));
+    feed(&mut instance, fake.click_text("确认"));
 
     let copied = fake.clipboard().png_image().unwrap();
     assert_same(&copied, &rows(&doc, 0, 750));

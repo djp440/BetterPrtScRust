@@ -10,6 +10,8 @@ pub enum StandaloneWindow {
     ResultPanel {
         /// 要识别文字的截图。
         screenshot: Image,
+        /// 识别完成后直接翻译（已配置翻译服务时；等待确认界面上的“翻译”）。
+        translate: bool,
     },
 }
 

@@ -4,8 +4,9 @@
 //! 一个进行中的会话，而不是一次函数调用：[`RegionCapture::start`] 打开遮罩后立即返回，
 //! 之后每个 [`OverlayInput`] 交给 [`RegionCapture::handle`]，直到用户确定或取消。
 //!
-//! 截后动作包含标注时，输入先交给标注（`annotation::session::Annotator`：工具条、画标注、
-//! 选择结束方式），标注不处理的再交给选区状态机；捕获以用户选择的结束方式结束。
+//! 截后动作为等待确认时，输入先交给标注（`annotation::session::Annotator`：工具条、画标注、
+//! 选择结束方式、转入录屏 / 长截屏 / OCR / 翻译），标注不处理的再交给选区状态机；
+//! 捕获以用户选择的结束方式结束。
 //! 选好工具开始标注之前，标注把手柄、方向键等输入都交给选区状态机，选区仍可调整，工具条随
 //! 调整后的选区重新定位；开始标注后区域锁定，选区状态机不再收到输入、不再画手柄和放大镜。
 //!
@@ -17,21 +18,42 @@ use bps_platform::{
 };
 
 use crate::annotation::finish::{self, Origin};
-use crate::annotation::session::{Annotator, Finish, Response};
+use crate::annotation::session::{Annotator, Finish, Response, Switch};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
 use crate::magnifier::Magnifier;
+use crate::recording::Target as RecordTarget;
 use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::{DesktopImage, stitch, virtual_desktop_bounds};
-use crate::{CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action};
+use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
-/// 一次区域捕获是怎么结束的。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 一次捕获是怎么结束的。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ending {
-    /// 截图已交给截后动作处理。
+    /// 截图已交付（复制、自动保存、另存为、交给结果面板）。
     Delivered,
     /// 用户取消了，没有任何产物。
     Cancelled,
+    /// 用户在工具条上转入了录屏或长截屏：遮罩已关闭，由常驻实例开始新的会话接手
+    /// （等待中的 CLI 请求随之转给新会话）。
+    Switch(Handoff),
+}
+
+/// 转入新会话所需的信息。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Handoff {
+    /// 原来的捕获请求：新会话沿用它的输出选项、自动保存开关，再按同一热键可停止录屏。
+    pub request: CaptureRequest,
+    pub to: HandoffTo,
+}
+
+/// 转入哪个功能。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HandoffTo {
+    /// 以这个对象开始录屏。
+    Recording(RecordTarget),
+    /// 以这块区域开始长截屏。
+    LongScreenshot(Rect),
 }
 
 /// 进行中的区域捕获。
@@ -42,7 +64,7 @@ pub(crate) struct RegionCapture {
     /// 冻结帧覆盖的显示器。
     displays: Vec<Display>,
     selection: RegionSelection,
-    /// 截后动作包含标注时的标注界面；否则为 `None`。
+    /// 截后动作为等待确认时的标注界面；否则为 `None`。
     annotator: Option<Annotator>,
     /// 框选时光标旁的放大镜。
     magnifier: Magnifier,
@@ -75,9 +97,8 @@ impl RegionCapture {
             selection = selection.with_snapping(snapping);
         }
         let mut annotator = request
-            .actions
-            .contains(&PostCaptureAction::Annotate)
-            .then(|| Annotator::new(displays.clone(), texts));
+            .awaits_confirmation()
+            .then(|| Annotator::new(displays.clone(), texts).with_handoffs());
         if let Some(annotator) = annotator.as_mut() {
             selection = selection.without_selected_hint();
             // 显示器、虚拟桌面模式不用框选：区域就是整块显示器或整个虚拟桌面，直接开始标注。
@@ -129,6 +150,7 @@ impl RegionCapture {
                 Ok(Response::Pass) => {}
                 Ok(Response::Handled) => return self.keep_going(platform),
                 Ok(Response::Finish(finish)) => return self.finish_annotation(platform, finish),
+                Ok(Response::Switch(switch)) => return self.switch(platform, switch),
                 Ok(Response::Cancel) => {
                     platform.overlay.close();
                     return Some(Ok(Ending::Cancelled));
@@ -145,9 +167,9 @@ impl RegionCapture {
             .load_controls(input, platform.window_source.as_ref());
         match self.selection.handle(input) {
             Step::Continue => self.keep_going(platform),
-            // 标注时 Enter 或双击选区等于点“复制”。
+            // 等待确认时 Enter 或双击选区等于点“确认”。
             Step::Confirmed(_) if self.annotator.is_some() => {
-                self.finish_annotation(platform, Finish::CopyToClipboard)
+                self.finish_annotation(platform, Finish::Confirm)
             }
             Step::Confirmed(region) => {
                 Some(self.finish(platform, region).map(|()| Ending::Delivered))
@@ -175,6 +197,33 @@ impl RegionCapture {
                 Some(Err(CaptureFailure::before_actions(e)))
             }
         }
+    }
+
+    /// 用户在工具条上转入了另一个功能。OCR、翻译把（含标注的）截图交给结果面板；录屏、长截屏
+    /// 关闭遮罩，由常驻实例以当前选区开始新的会话（已画的标注不带过去）。
+    fn switch(
+        &mut self,
+        platform: &mut Platform,
+        switch: Switch,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        let annotator = self.annotator.as_ref()?;
+        let region = annotator
+            .locked_region()
+            .or_else(|| self.selection.selected())?;
+        let to = match switch {
+            Switch::Ocr | Switch::Translate => {
+                let translate = switch == Switch::Translate;
+                let done = finish::recognize(platform, annotator, region, translate, self.texts);
+                return Some(done.map(|()| Ending::Delivered));
+            }
+            Switch::Record => HandoffTo::Recording(RecordTarget::Region(region)),
+            Switch::LongScreenshot => HandoffTo::LongScreenshot(region),
+        };
+        platform.overlay.close();
+        Some(Ok(Ending::Switch(Handoff {
+            request: self.request.clone(),
+            to,
+        })))
     }
 
     /// 用户选择了标注的结束方式：取得合成了标注的截图，关闭遮罩，按结束方式输出。

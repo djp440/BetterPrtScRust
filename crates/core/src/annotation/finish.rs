@@ -1,8 +1,8 @@
-//! 标注的结束方式：复制到剪贴板、自动存储、另存为。
+//! 等待确认界面的结束方式：确认（复制到剪贴板）、另存为；以及把截图交给 OCR / 翻译。
 //!
-//! 复制和自动存储直接复用截后动作（`action::run`），遵守同样的剪贴板和命名规则；绑定里
-//! 除标注外还有复制或自动存储时，无论选哪种结束方式它们也一并执行（例如绑定了“标注 +
-//! 自动存储”，点“复制”时既复制也自动存储，剪贴板因此附带存下的文件）。
+//! 确认直接复用交付逻辑（`action::run`），遵守同样的剪贴板和命名规则：绑定开了自动保存时
+//! 同时存盘，剪贴板因此附带存下的文件。另存为只写用户选的那个文件；OCR、翻译只打开结果面板，
+//! 都不复制、不自动保存。
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,7 @@ use bps_platform::{FileType, LocalDateTime, Notification, Platform, Rect, SaveAs
 use super::session::{Annotator, Finish};
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
-use crate::{CaptureRequest, OutputFormat, PostCaptureAction, Texts, action};
+use crate::{CaptureRequest, OutputFormat, Texts, action};
 
 /// 被标注的截图是什么时候、从哪里截下来的：命名模板用它。
 pub(crate) struct Origin {
@@ -113,46 +113,32 @@ fn run(
     save_as: Option<&Path>,
     texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
-    let mut actions: Vec<PostCaptureAction> = request
-        .actions
-        .iter()
-        .copied()
-        .filter(|a| {
-            matches!(
-                a,
-                PostCaptureAction::CopyToClipboard | PostCaptureAction::AutoSave
-            )
-        })
-        .collect();
-    let chosen = match finish {
-        Finish::CopyToClipboard => Some(PostCaptureAction::CopyToClipboard),
-        Finish::AutoSave => Some(PostCaptureAction::AutoSave),
-        Finish::SaveAs => None,
-    };
-    if let Some(action) = chosen
-        && !actions.contains(&action)
-    {
-        actions.push(action);
-    }
-    let effective = CaptureRequest {
-        actions,
-        ..request.clone()
-    };
-
-    let saved_as = save_as.map(|path| {
-        write_save_as(
+    match (finish, save_as) {
+        (Finish::SaveAs, Some(path)) => write_save_as(
             platform,
             screenshot,
             request.output.output_format,
             path,
             texts,
-        )
-    });
-    let ran = action::run(platform, screenshot, &effective, texts);
-    match saved_as {
-        Some(Err(failure)) => Err(failure),
-        _ => ran,
+        ),
+        _ => action::run(platform, screenshot, request, texts),
     }
+}
+
+/// 用户在工具条上点了 OCR（`translate` 为假）或翻译：取得合成了标注的截图（`region` 是标注所在的
+/// 区域），关闭遮罩，打开结果面板。
+pub(crate) fn recognize(
+    platform: &mut Platform,
+    annotator: &Annotator,
+    region: Rect,
+    translate: bool,
+    texts: &'static Texts,
+) -> Result<(), CaptureFailure> {
+    let image = annotator.final_image(platform, region);
+    platform.overlay.close();
+    let image = image.map_err(CaptureFailure::before_actions)?;
+    action::open_result_panel(platform, image, translate, texts)
+        .map_err(CaptureFailure::already_notified)
 }
 
 /// 按路径的扩展名（不认识时用输出格式）编码，写到用户选的路径，覆盖已有文件。

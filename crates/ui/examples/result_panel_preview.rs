@@ -126,6 +126,7 @@ fn main() {
         },
     };
     let result = run_result_panel(ResultPanelEnvironment {
+        translate: false,
         ui,
         language,
         screenshot: Image::from_rgba(1, 1, vec![255; 4]),

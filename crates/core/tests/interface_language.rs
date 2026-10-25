@@ -12,7 +12,7 @@ const ONE_BINDING: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn with_language(language: &str) -> String {
@@ -152,7 +152,7 @@ fn print_screen_and_administrator_notices_follow_the_interface_language() {
         .with_print_screen_key_taken_by_system_screenshot_tool()
         .with_administrator_restart_declined()
         .with_config_file(
-            "language = \"en\"\nrun_as_admin = true\n\n[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nactions = [\"copy_to_clipboard\"]\n",
+            "language = \"en\"\nrun_as_admin = true\n\n[[bindings]]\nhotkey = \"PrintScreen\"\nmode = \"region\"\nafter = \"copy_to_clipboard\"\n",
         );
 
     let _instance = ResidentInstance::start(fake.platform());
@@ -178,7 +178,7 @@ fn selection_overlay_hint_follows_the_interface_language() {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         )))
         .unwrap();
     for event in fake.drag(Point::new(20, 40), Point::new(119, 89)) {
@@ -211,7 +211,7 @@ fn annotation_toolbar_follows_the_interface_language() {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            vec![PostCaptureAction::Annotate],
+            PostCaptureAction::AwaitConfirmation,
         )))
         .unwrap();
     for event in fake.drag(Point::new(20, 40), Point::new(119, 89)) {
@@ -222,15 +222,18 @@ fn annotation_toolbar_follows_the_interface_language() {
     for text in [
         "Rectangle",
         "Arrow",
+        "Record",
+        "Long shot",
+        "OCR",
+        "Translate",
         "Cancel",
         "Save as",
-        "Auto-save",
-        "Copy",
+        "Confirm",
     ] {
         assert!(scene.text_rect(text).is_some(), "工具条上应有“{text}”");
     }
     assert!(scene.text_rect("复制").is_none());
-    for event in fake.click_text("Copy") {
+    for event in fake.click_text("Confirm") {
         instance.handle(event).unwrap();
     }
     assert!(!fake.overlay_visible());

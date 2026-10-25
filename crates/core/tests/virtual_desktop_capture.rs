@@ -16,7 +16,7 @@ const GAP: [u8; 4] = [0, 0, 0, 0];
 fn copy_virtual_desktop_capture() -> Command {
     Command::Capture(CaptureRequest::new(
         CaptureMode::VirtualDesktop,
-        vec![PostCaptureAction::CopyToClipboard],
+        PostCaptureAction::CopyToClipboard,
     ))
 }
 
@@ -111,7 +111,7 @@ fn hotkey_binding_with_virtual_desktop_mode_copies_virtual_desktop() {
         hotkey,
         capture: CaptureRequest::new(
             CaptureMode::VirtualDesktop,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         ),
     };
     let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);

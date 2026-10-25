@@ -1,4 +1,5 @@
-//! 截后动作：复制到剪贴板、自动存储、OCR。标注的结束方式也经由这里输出（见 `annotation::finish`）。
+//! 截图的交付：复制到剪贴板、自动保存（`CaptureRequest::auto_save`），或直达 OCR 时打开结果面板。
+//! 等待确认界面上的确认也经由这里输出（见 `annotation::finish`）。
 
 use std::path::PathBuf;
 
@@ -10,48 +11,43 @@ use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
 use crate::output::DEFAULT_SAVE_SUBDIR;
 use crate::{
-    CaptureRequest, CoreError, OutputFormat, OutputOptions, PostCaptureAction, SaveDir, Texts,
-    encode,
+    CaptureRequest, CoreError, DirectFunction, OutputFormat, OutputOptions, SaveDir, Texts, encode,
 };
 
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 
-/// 对截图执行截后动作：先复制到剪贴板、自动存储，再打开结果面板做 OCR
-/// （标注、长截屏在此之前已由区域捕获、长截屏会话处理，这里忽略它们）。
+/// 交付截图：直达 OCR 时交给结果面板；否则复制到剪贴板，`auto_save` 时同时按命名模板存进保存目录
+/// （复制并退出、等待确认里的确认都走这里；取消不会走到这里）。
 ///
-/// 某个动作失败不影响其他动作，返回第一个失败。通知文字用 `texts` 的语言。
+/// 通知文字用 `texts` 的语言。
 pub(crate) fn run(
     platform: &mut Platform,
     screenshot: &Screenshot,
     request: &CaptureRequest,
     texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
-    let mut failure = None;
-    if let Err(error) = copy_and_save(platform, screenshot, request, texts) {
-        failure = Some(error);
+    if request.is_function(DirectFunction::Ocr) {
+        return open_result_panel(platform, screenshot.image.clone(), false, texts)
+            .map_err(CaptureFailure::already_notified);
     }
-    // 翻译动作同样打开结果面板：识别出文字后由用户点“翻译”（只在用户主动点击时才联网）。
-    if (request.actions.contains(&PostCaptureAction::Ocr)
-        || request.actions.contains(&PostCaptureAction::Translate))
-        && let Err(error) = open_result_panel(platform, screenshot.image.clone(), texts)
-    {
-        failure.get_or_insert(CaptureFailure::already_notified(error));
-    }
-    failure.map_or(Ok(()), Err)
+    copy_and_save(platform, screenshot, request, texts)
 }
 
-/// OCR：把截图交给一个新的结果面板，由它在本机识别文字并显示；打不开时通知用户。
+/// OCR：把截图交给一个新的结果面板，由它在本机识别文字并显示；`translate` 时识别完成后
+/// 直接翻译（等待确认界面上的“翻译”）。打不开时通知用户。
 ///
 /// 识别在结果面板的子进程里进行，常驻实例不加载 OCR（常驻内存的硬约束）。
-fn open_result_panel(
+pub(crate) fn open_result_panel(
     platform: &mut Platform,
     screenshot: Image,
+    translate: bool,
     texts: &Texts,
 ) -> Result<(), CoreError> {
-    let opened = platform
-        .windows
-        .open(StandaloneWindow::ResultPanel { screenshot });
+    let opened = platform.windows.open(StandaloneWindow::ResultPanel {
+        screenshot,
+        translate,
+    });
     if let Err(e) = &opened {
         platform.notifier.notify(Notification {
             title: texts.get("notification-result-panel-unavailable-title"),
@@ -109,7 +105,7 @@ pub(crate) fn run_continuations(platform: &mut Platform) -> Vec<CaptureFailure> 
     failures
 }
 
-/// 复制到剪贴板与自动存储。
+/// 复制到剪贴板，以及 `auto_save` 时的自动存储。
 ///
 /// 两者共用同一份按输出格式编码的结果（AVIF 编码很慢，只编一次，且在后台线程进行）。
 /// 先存盘，再一次性写剪贴板，这样剪贴板能附带存下的文件；存储失败不影响复制。
@@ -120,13 +116,6 @@ fn copy_and_save(
     request: &CaptureRequest,
     texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
-    let copy = request
-        .actions
-        .contains(&PostCaptureAction::CopyToClipboard);
-    let save = request.actions.contains(&PostCaptureAction::AutoSave);
-    if !copy && !save {
-        return Ok(());
-    }
     let request = request.clone();
     let format = request.output.output_format;
     encode_then(
@@ -145,10 +134,7 @@ fn store(
     texts: &Texts,
     encoded: Result<Vec<u8>, CoreError>,
 ) -> Result<(), CaptureFailure> {
-    let copy = request
-        .actions
-        .contains(&PostCaptureAction::CopyToClipboard);
-    let save = request.actions.contains(&PostCaptureAction::AutoSave);
+    let save = request.auto_save;
     let failed = |error: CoreError| CaptureFailure {
         error,
         // 做了自动存储时，自动存储已经就结果发过通知（“截图已保存”或“自动存储失败”）。
@@ -166,12 +152,8 @@ fn store(
 
     let format = request.output.output_format;
     let saved = save.then(|| auto_save(platform, screenshot, &request.output, &encoded));
-    let copied = if copy {
-        let saved_file = saved.as_ref().and_then(|r| r.as_ref().ok()).cloned();
-        copy_to_clipboard(platform, screenshot, format, encoded, saved_file)
-    } else {
-        Ok(())
-    };
+    let saved_file = saved.as_ref().and_then(|r| r.as_ref().ok()).cloned();
+    let copied = copy_to_clipboard(platform, screenshot, format, encoded, saved_file);
     if let Some(saved) = &saved {
         notify_auto_save(platform, saved, texts);
     }

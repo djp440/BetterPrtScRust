@@ -8,12 +8,16 @@ use std::error::Error;
 use std::sync::Arc;
 
 use bps_core::Config;
-use bps_platform_windows::{WinHttpTransport, WindowsTextRecognizer, read_screenshot};
+use bps_platform_windows::{
+    TRANSLATE_ARGUMENT, WinHttpTransport, WindowsTextRecognizer, read_screenshot,
+};
 use bps_ui::{ResultPanelEnvironment, run_result_panel};
 
 use crate::{data_location, settings};
 
 pub fn run() -> Result<(), Box<dyn Error>> {
+    // 常驻实例用 `--translate` 要求识别完成后直接翻译（截图界面上的“翻译”按钮）。
+    let translate = std::env::args().any(|a| a == TRANSLATE_ARGUMENT);
     let screenshot = read_screenshot(&mut std::io::stdin().lock())?;
     let config = configured();
     run_result_panel(ResultPanelEnvironment {
@@ -23,6 +27,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         recognizer: Arc::new(WindowsTextRecognizer),
         translation: config.and_then(|c| c.translation),
         http: Arc::new(WinHttpTransport),
+        translate,
     })?;
     Ok(())
 }

@@ -242,7 +242,8 @@ fn magnifier_color_and_adjusted_selection_on_real_overlay() {
     let b = primary.bounds;
     let origin = Point::new(b.x, b.y);
     let center = Point::new(b.x + b.width as i32 / 2, b.y + b.height as i32 / 2);
-    let mut request = CaptureRequest::new(CaptureMode::Region, vec![PostCaptureAction::AutoSave]);
+    let mut request = CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
+        .with_auto_save();
     request.output.save_dir = SaveDir::Custom(temp.clone());
     instance.execute(Command::Capture(request)).unwrap();
 

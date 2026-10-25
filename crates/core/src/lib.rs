@@ -73,8 +73,8 @@ pub use autostart::remove_autostart;
 pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, default_bindings};
 pub use cli::{CliOutcome, CliStatus, cli_locale, run_cli};
 pub use command::{
-    CaptureMode, CaptureRequest, Command, Flow, PostCaptureAction, RecordingFormat,
-    RecordingOptions,
+    CaptureKind, CaptureMode, CaptureRequest, Command, DirectFunction, Flow, PostCaptureAction,
+    RecordingFormat, RecordingOptions,
 };
 pub use config::{Config, ConfigError, DEFAULT_CONFIG};
 pub use error::CoreError;

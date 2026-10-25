@@ -243,7 +243,9 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
             region.y + (f64::from(region.height) * fy) as i32,
         )
     };
-    let mut request = CaptureRequest::new(CaptureMode::Region, vec![PostCaptureAction::Annotate]);
+    let mut request =
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation);
+    request.auto_save = true;
     request.output.save_dir = SaveDir::Custom(temp.clone());
 
     let started = Instant::now();
@@ -373,7 +375,7 @@ fn annotation_on_real_overlay_matches_saved_screenshot() {
     }
     assert!(scene.borrow().is_some(), "取消另存为后应回到标注");
 
-    click(&mut instance, &scene, "自动存储");
+    click(&mut instance, &scene, "确认");
     eprintln!("从按下热键到存下截图：{:?}", started.elapsed());
     assert!(scene.borrow().is_none(), "自动存储后遮罩应关闭");
 

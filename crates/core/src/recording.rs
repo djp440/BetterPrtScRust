@@ -90,7 +90,8 @@ enum Phase {
 }
 
 /// 录制的对象：确定下来的屏幕区域，或一个窗口。
-enum Target {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Target {
     Region(Rect),
     Window(TopLevelWindow),
 }
@@ -211,6 +212,26 @@ impl Recording {
             platform.overlay.close();
             return Err(e.into());
         }
+        Ok(recording)
+    }
+
+    /// 以已经选好的 `target` 直接开始录制（等待确认界面上的“录屏”：不再框选）。
+    /// 提示和通知用 `texts` 的语言。
+    pub fn start_at(
+        platform: &mut Platform,
+        request: CaptureRequest,
+        texts: &'static Texts,
+        target: Target,
+    ) -> Result<Self, CoreError> {
+        Settings::of(&request)?;
+        let mut recording = Self {
+            request,
+            phase: Phase::Ended,
+            texts,
+            requester: None,
+        };
+        let active = recording.begin(platform, target)?;
+        recording.phase = Phase::Recording(Box::new(active));
         Ok(recording)
     }
 

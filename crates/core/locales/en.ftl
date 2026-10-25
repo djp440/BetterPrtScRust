@@ -50,12 +50,10 @@ mode-virtual-desktop = Virtual desktop
 mode-region = Region
 mode-window = Window
 action-copy-to-clipboard = Copy to clipboard
-action-auto-save = Auto-save
-action-annotate = Annotate
+action-await-confirmation = Wait for confirmation
 action-record = Record
 action-long-screenshot = Long screenshot
 action-ocr = OCR
-action-translate = Translate
 
 ## Why a command failed
 
@@ -83,11 +81,15 @@ config-hotkey-not-a-modifier = In hotkey “{ $hotkey }”, “{ $part }” is n
 config-hotkey-missing-key = Hotkey “{ $hotkey }” has no main key
 config-hotkey-unsupported-key = In hotkey “{ $hotkey }”, “{ $key }” is not a supported key
 config-hotkey-typing-key = Hotkey “{ $hotkey }” would swallow normal typing: letter and digit keys need Ctrl, Alt or Win
-config-no-actions = actions needs at least one post-capture action
 config-unknown-format = Unknown output format “{ $format }”: screenshots can use png, jpg, webp, avif; recordings can use mp4, gif
 config-image-format-for-recording = The output_format of a recording can only be mp4 or gif
-config-recording-format-for-screenshot = mp4 and gif are only for recordings (bindings whose actions include record); screenshots can use png, jpg, webp, avif
-config-recording-format-in-global = The global output_format is for screenshots only (png, jpg, webp, avif); put recording formats (mp4, gif) in bindings whose actions include record
+config-legacy-actions = The old actions = [...] form is no longer supported: screenshot bindings now use after = "copy_to_clipboard" or "await_confirmation" (auto-save is auto_save = true), direct functions use function = "record", "long_screenshot" or "ocr"
+config-unknown-after = Unknown post-capture action "{ $after }"; choose copy_to_clipboard or await_confirmation
+config-unknown-function = Unknown direct function "{ $function }"; choose record, long_screenshot or ocr
+config-after-with-function = Write either after or function, not both: after for screenshot bindings, function for direct functions
+config-auto-save-not-applicable = The direct function { $function } does not support auto_save (recordings are always saved, OCR never is)
+config-recording-format-for-screenshot = mp4 and gif are only for recordings (bindings with function = "record"); screenshots can use png, jpg, webp, avif
+config-recording-format-in-global = The global output_format is for screenshots only (png, jpg, webp, avif); put recording formats (mp4, gif) in bindings with function = "record"
 config-zero-frame-rate = frame_rate must be greater than 0
 config-unknown-language = Unknown interface language “{ $language }”: use auto (follow the system), zh-CN or en
 template-unclosed = A { "{" } in the filename template has no matching { "}" }
@@ -98,7 +100,6 @@ template-unknown-placeholder = Unknown placeholder { "{" }{ $name }{ "}" } in th
 
 settings-problem-empty-save-dir = The auto-save folder cannot be empty; choose “Default folder” if you do not want to set one
 settings-problem-typing-key = Binding { $index } ({ $hotkey }): letter and digit keys need Ctrl, Alt or Win
-settings-problem-no-actions = Binding { $index }: choose at least one post-capture action
 settings-problem-invalid = Cannot produce a valid configuration file: { $error }
 
 ## Settings window
@@ -132,16 +133,15 @@ settings-filename-help = Placeholders: { "{" }mode{ "}" } (capture mode), { "{" 
 settings-output-format = Screenshot format
 settings-output-format-hint = PNG and WebP are lossless; JPEG is small but lossy and has no transparency; AVIF is the smallest but slow to encode. Recording formats are set per hotkey binding.
 settings-section-bindings = Hotkeys
-settings-bindings-hint = Letter and digit keys need Ctrl, Alt or Win. Post-capture actions run in the order you tick them.
+settings-bindings-hint = Letter and digit keys need Ctrl, Alt or Win.
 settings-binding-failed = Not registered: { $reason }
 settings-binding-add = Add hotkey
 settings-binding-remove = Remove
 settings-binding-hotkey = Hotkey
 settings-binding-mode = Capture mode
-settings-binding-actions = After capture
-settings-binding-order = Runs in this order: { $actions }
+settings-binding-actions = After capture / function
+settings-binding-auto-save = Auto-save
 settings-binding-needs-modifier = Letter and digit keys need Ctrl, Alt or Win
-settings-binding-needs-action = Choose at least one post-capture action
 settings-config-broken = The configuration file has errors and cannot be edited here
 settings-config-broken-hint = Fix the file below in a text editor, then click “Reload”.
 settings-config-not-utf8 = The configuration file is not UTF-8 encoded
@@ -184,8 +184,11 @@ annotation-undo = Undo
 annotation-redo = Redo
 annotation-cancel = Cancel
 annotation-save-as = Save as
-annotation-auto-save = Auto-save
-annotation-copy = Copy
+annotation-confirm = Confirm
+annotation-record = Record
+annotation-long-screenshot = Long shot
+annotation-ocr = OCR
+annotation-translate = Translate
 save-as-file-type = { $format } image
 notification-save-as-failed-title = Could not save the screenshot
 

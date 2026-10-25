@@ -14,6 +14,7 @@ use toml::Spanned;
 
 use crate::i18n::UnknownLanguage;
 use crate::translation::{TargetLanguage, TranslationConfig, TranslationProvider};
+use crate::{CaptureKind, DirectFunction};
 use crate::{
     CaptureMode, CaptureRequest, FilenameTemplate, FilenameTemplateError, HotkeyBinding, Language,
     Locale, OutputFormat, OutputOptions, PostCaptureAction, RecordingFormat, RecordingOptions,
@@ -41,8 +42,14 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   hotkey   热键：Ctrl、Alt、Shift、Win 与一个主键用 + 连接，
 #            主键可以是 PrintScreen、F1–F24、A–Z、0–9（字母和数字需搭配 Ctrl、Alt 或 Win）
 #   mode     捕获模式：display（显示器）、virtual_desktop（虚拟桌面）、region（区域）、window（窗口）
-#   actions  按顺序执行的截后动作：copy_to_clipboard（复制到剪贴板）、auto_save（自动存储）、
-#            annotate（标注）、record（录屏）、long_screenshot（长截屏）、ocr（OCR）、translate（翻译）
+#   after    截图完成后做什么（截图类绑定，缺省为 copy_to_clipboard）：
+#              copy_to_clipboard   直接复制到剪贴板并退出截图界面
+#              await_confirmation  停留在截图界面，选区上有工具条：标注、录屏、长截屏、OCR、翻译、
+#                                  另存为、确认（Enter，复制到剪贴板并退出）、取消（Esc，不复制）
+#   function 或者改写 function 作直达功能（与 after 二选一）：record（录屏）、long_screenshot（长截屏）、
+#            ocr（OCR），热键直接进入该功能
+#   auto_save  true / false，默认 false：截图最终交付时（复制并退出、确认）同时存进保存目录，
+#            取消时不保存；与 after 无关。对 long_screenshot 同样有效
 # 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif）、
 #   frame_rate（录屏帧率，MP4 默认 30、GIF 默认 15）、show_cursor（录屏时是否显示鼠标指针：true / false）
 #
@@ -59,33 +66,34 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 [[bindings]]
 hotkey = "PrintScreen"
 mode = "region"
-actions = ["annotate"]
+after = "await_confirmation"
 
 [[bindings]]
 hotkey = "Shift+PrintScreen"
 mode = "display"
-actions = ["copy_to_clipboard", "auto_save"]
+after = "copy_to_clipboard"
+auto_save = true
 
 [[bindings]]
 hotkey = "Ctrl+PrintScreen"
 mode = "window"
-actions = ["copy_to_clipboard", "auto_save"]
+after = "await_confirmation"
 
 [[bindings]]
 hotkey = "Alt+PrintScreen"
 mode = "region"
-actions = ["record"]
+function = "record"
 output_format = "mp4"
 
 [[bindings]]
 hotkey = "Ctrl+Shift+PrintScreen"
 mode = "region"
-actions = ["long_screenshot"]
+function = "long_screenshot"
 
 [[bindings]]
 hotkey = "Win+Shift+O"
 mode = "region"
-actions = ["ocr"]
+function = "ocr"
 "#;
 
 /// 配置文件的内容。
@@ -195,7 +203,14 @@ enum ConfigProblem {
     InvalidHotkey(ParseHotkeyError),
     /// 字母、数字热键没有搭配 Ctrl、Alt 或 Win；附带热键原文。
     TypingKeyWithoutModifier(String),
-    NoActions,
+    /// 旧版的 `actions = [...]` 写法已不再支持。
+    LegacyActions,
+    UnknownAfter(String),
+    UnknownFunction(String),
+    /// 同一条绑定同时写了 `after` 和 `function`。
+    AfterWithFunction,
+    /// `auto_save = true` 用在了录屏、OCR 这类不自动保存的直达功能上。
+    AutoSaveNotApplicable(String),
     InvalidFilenameTemplate(FilenameTemplateError),
     UnknownOutputFormat(String),
     ImageFormatForRecording,
@@ -263,7 +278,17 @@ impl ConfigProblem {
             ConfigProblem::TypingKeyWithoutModifier(hotkey) => {
                 texts.format("config-hotkey-typing-key", &[("hotkey", hotkey)])
             }
-            ConfigProblem::NoActions => texts.get("config-no-actions"),
+            ConfigProblem::LegacyActions => texts.get("config-legacy-actions"),
+            ConfigProblem::UnknownAfter(name) => {
+                texts.format("config-unknown-after", &[("after", name)])
+            }
+            ConfigProblem::UnknownFunction(name) => {
+                texts.format("config-unknown-function", &[("function", name)])
+            }
+            ConfigProblem::AfterWithFunction => texts.get("config-after-with-function"),
+            ConfigProblem::AutoSaveNotApplicable(function) => {
+                texts.format("config-auto-save-not-applicable", &[("function", function)])
+            }
             ConfigProblem::InvalidFilenameTemplate(error) => error.localized(texts),
             ConfigProblem::UnknownOutputFormat(format) => {
                 texts.format("config-unknown-format", &[("format", format)])
@@ -390,7 +415,11 @@ impl RawTranslation {
 struct RawBinding {
     hotkey: Spanned<String>,
     mode: CaptureMode,
-    actions: Spanned<Vec<PostCaptureAction>>,
+    after: Option<Spanned<String>>,
+    function: Option<Spanned<String>>,
+    auto_save: Option<Spanned<bool>>,
+    /// 旧版写法，只用来给出明确的错误。
+    actions: Option<Spanned<toml::Value>>,
     save_dir: Option<PathBuf>,
     filename_template: Option<Spanned<String>>,
     output_format: Option<Spanned<String>>,
@@ -403,17 +432,50 @@ impl RawBinding {
     fn resolve(self, global: &OutputOptions, text: &str) -> Result<HotkeyBinding, ConfigError> {
         let at = |span: Range<usize>, problem| ConfigError::at(text, span, problem);
         let hotkey = parse_hotkey(self.hotkey.get_ref()).map_err(|p| at(self.hotkey.span(), p))?;
-        if self.actions.get_ref().is_empty() {
-            return Err(at(self.actions.span(), ConfigProblem::NoActions));
+        if let Some(actions) = &self.actions {
+            return Err(at(actions.span(), ConfigProblem::LegacyActions));
         }
+        let kind = match (&self.after, &self.function) {
+            (Some(_), Some(function)) => {
+                return Err(at(function.span(), ConfigProblem::AfterWithFunction));
+            }
+            (Some(after), None) => CaptureKind::Screenshot(
+                PostCaptureAction::from_config_name(after.get_ref()).ok_or_else(|| {
+                    at(
+                        after.span(),
+                        ConfigProblem::UnknownAfter(after.get_ref().clone()),
+                    )
+                })?,
+            ),
+            (None, Some(function)) => CaptureKind::Function(
+                DirectFunction::from_config_name(function.get_ref()).ok_or_else(|| {
+                    at(
+                        function.span(),
+                        ConfigProblem::UnknownFunction(function.get_ref().clone()),
+                    )
+                })?,
+            ),
+            (None, None) => CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard),
+        };
+        let auto_save = match self.auto_save {
+            Some(flag) if *flag.get_ref() && !kind.supports_auto_save() => {
+                let CaptureKind::Function(function) = kind else {
+                    unreachable!("截图类绑定都支持自动保存")
+                };
+                return Err(at(
+                    flag.span(),
+                    ConfigProblem::AutoSaveNotApplicable(function.config_name().to_owned()),
+                ));
+            }
+            flag => flag.is_some_and(Spanned::into_inner),
+        };
         let frame_rate = match self.frame_rate {
             Some(rate) if *rate.get_ref() == 0 => {
                 return Err(at(rate.span(), ConfigProblem::ZeroFrameRate));
             }
             rate => rate.map(Spanned::into_inner),
         };
-        let actions = self.actions.into_inner();
-        let records = actions.contains(&PostCaptureAction::Record);
+        let records = kind == CaptureKind::Function(DirectFunction::Record);
         let mut output = global.clone();
         let mut recording = RecordingOptions {
             format: None,
@@ -442,7 +504,8 @@ impl RawBinding {
             hotkey,
             capture: CaptureRequest {
                 mode: self.mode,
-                actions,
+                kind,
+                auto_save,
                 output,
                 recording,
             },

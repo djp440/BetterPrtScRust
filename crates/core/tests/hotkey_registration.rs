@@ -8,12 +8,12 @@ const F9_AND_F10: &str = r#"
 [[bindings]]
 hotkey = "Ctrl+F9"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 
 [[bindings]]
 hotkey = "Ctrl+F10"
 mode = "display"
-actions = ["copy_to_clipboard"]
+after = "copy_to_clipboard"
 "#;
 
 fn ctrl(key: Key) -> Hotkey {

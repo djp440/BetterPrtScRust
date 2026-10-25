@@ -22,7 +22,7 @@ fn selecting(fake: &FakePlatform) -> ResidentInstance {
     instance
         .execute(Command::Capture(CaptureRequest::new(
             CaptureMode::Region,
-            vec![PostCaptureAction::CopyToClipboard],
+            PostCaptureAction::CopyToClipboard,
         )))
         .unwrap();
     instance

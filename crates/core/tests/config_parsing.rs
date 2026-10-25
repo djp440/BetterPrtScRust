@@ -3,22 +3,20 @@
 use std::path::PathBuf;
 
 use bps_core::{
-    CaptureMode, Config, DEFAULT_FILENAME_TEMPLATE, OutputFormat, OutputOptions, PostCaptureAction,
-    RecordingFormat, RecordingOptions, SaveDir,
+    CaptureKind, CaptureMode, Config, DEFAULT_FILENAME_TEMPLATE, DirectFunction, OutputFormat,
+    OutputOptions, RecordingFormat, RecordingOptions, SaveDir,
 };
 use bps_platform::{Hotkey, Key, Modifiers};
 
 /// 一条录屏绑定（第 1–4 行），`extra` 从第 5 行开始。
 fn binding_with(extra: &str) -> String {
-    format!(
-        "[[bindings]]\nhotkey = \"Ctrl+F9\"\nmode = \"region\"\nactions = [\"record\"]\n{extra}"
-    )
+    format!("[[bindings]]\nhotkey = \"Ctrl+F9\"\nmode = \"region\"\nfunction = \"record\"\n{extra}")
 }
 
 /// 一条截图绑定（第 1–4 行），`extra` 从第 5 行开始。
 fn screenshot_binding_with(extra: &str) -> String {
     format!(
-        "[[bindings]]\nhotkey = \"Ctrl+F8\"\nmode = \"display\"\nactions = [\"copy_to_clipboard\", \"auto_save\"]\n{extra}"
+        "[[bindings]]\nhotkey = \"Ctrl+F8\"\nmode = \"display\"\nafter = \"copy_to_clipboard\"\n{extra}"
     )
 }
 
@@ -37,7 +35,7 @@ show_cursor = false
 
     let capture = &config.bindings[0].capture;
     assert_eq!(capture.mode, CaptureMode::Region);
-    assert_eq!(capture.actions, [PostCaptureAction::Record]);
+    assert_eq!(capture.kind, CaptureKind::Function(DirectFunction::Record));
     assert_eq!(capture.output.save_dir, SaveDir::Custom(r"D:\录屏".into()));
     assert_eq!(
         capture.output.filename_template.as_str(),
@@ -192,9 +190,8 @@ fn invalid_bindings_are_rejected_with_line_and_reason() {
             "字母和数字键需要搭配 Ctrl、Alt 或 Win",
         ),
         (("\"region\"", "\"regoin\""), 3, "regoin"),
-        (("[\"record\"]", "[\"recrod\"]"), 4, "recrod"),
-        (("[\"record\"]", "[]"), 4, "至少要有一个截后动作"),
-        (("actions", "acitons"), 4, "acitons"),
+        (("\"record\"", "\"recrod\""), 4, "recrod"),
+        (("function", "funciton"), 4, "funciton"),
     ];
     for ((from, to), line, reason) in cases {
         let (error_line, message) = parse_error(&binding_with("").replacen(from, to, 1));
@@ -237,7 +234,7 @@ fn invalid_global_settings_are_rejected_with_line_and_reason() {
     let cases = [
         (
             "output_format = \"gif\"\n",
-            "录屏格式（mp4、gif）写在 actions 含 record 的绑定里",
+            "录屏格式（mp4、gif）写在 function = \"record\" 的绑定里",
         ),
         ("filename_template = \"{yyyy\"\n", "没有对应的 }"),
     ];
@@ -257,7 +254,7 @@ fn toml_syntax_error_reports_line() {
 
 #[test]
 fn binding_missing_mode_is_rejected() {
-    let text = "[[bindings]]\nhotkey = \"Ctrl+F9\"\nactions = [\"ocr\"]\n";
+    let text = "[[bindings]]\nhotkey = \"Ctrl+F9\"\nfunction = \"ocr\"\n";
 
     let (_, message) = parse_error(text);
 
