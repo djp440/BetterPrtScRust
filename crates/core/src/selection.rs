@@ -5,7 +5,10 @@
 //!
 //! 交互规则：
 //! - 按住左键拖拽框选；松开后选区确定下来（`Selected`），可以在选区外重新拖拽替换它。
-//! - 选区确定后按 Enter 或双击选区内部，完成框选。
+//! - 选区确定后按 Enter 或双击选区内部，完成框选。例外：打开了
+//!   [`RegionSelection::confirm_on_release`]（截后动作为复制到剪贴板）时，拖拽框出有效选区、
+//!   松开左键的那一刻就完成，不显示手柄，也不需要 Enter 或双击；拖拽过程中 Esc、右键取消、
+//!   放大镜、按 C 取色、边缘吸附照常。
 //! - Esc 随时取消整次捕获；右键在有选区（或正在拖拽）时清除选区，没有选区时取消捕获。
 //! - 选区包含拖拽起点和终点两个像素；按下后没有移动就松开不算框选。
 //! - 选区框好后边框上有手柄：在边框附近按下拖动改变大小（靠近角时同时改两条边，拖过对边时
@@ -96,6 +99,8 @@ pub(crate) struct RegionSelection {
     locked: bool,
     /// 拖拽框选时选区的边吸附到窗口、控件的边缘；默认没有目标，不吸附。
     snapping: Snapping,
+    /// 拖拽框出有效选区、松开左键时直接完成（复制到剪贴板的区域模式）。
+    confirm_on_release: bool,
 }
 
 impl RegionSelection {
@@ -110,7 +115,15 @@ impl RegionSelection {
             pointer: None,
             locked: false,
             snapping: Snapping::default(),
+            confirm_on_release: false,
         })
+    }
+
+    /// 拖拽框出有效选区、松开左键的那一刻就完成（[`Step::Confirmed`]），不停留在等待确认的
+    /// `Selected` 状态。没移动就松开仍不算框选。
+    pub fn confirm_on_release(mut self) -> Self {
+        self.confirm_on_release = true;
+        self
     }
 
     /// 选区已锁定（例如开始标注）：此后不再显示手柄和放大镜。锁定后选区由别处接管输入，
@@ -288,6 +301,11 @@ impl RegionSelection {
                 },
             ) => {
                 let current = self.clamp(position);
+                if current != anchor && self.confirm_on_release {
+                    let region = self.dragged(anchor, current);
+                    self.state = State::Selected(region);
+                    return Step::Confirmed(region);
+                }
                 self.state = if current == anchor {
                     previous.map_or(State::Idle, State::Selected)
                 } else {
@@ -531,4 +549,87 @@ pub(crate) fn mask_around(bounds: Rect, region: Rect) -> Vec<OverlayItem> {
             color: MASK,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bps_platform::{DisplayId, Modifiers};
+
+    fn selection() -> RegionSelection {
+        let display = Display {
+            id: DisplayId(1),
+            bounds: Rect::new(0, 0, 200, 150),
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        RegionSelection::new(vec![display], String::new()).unwrap()
+    }
+
+    fn press(x: i32, y: i32, double_click: bool) -> OverlayInput {
+        OverlayInput::PointerPressed {
+            button: PointerButton::Left,
+            position: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+            double_click,
+        }
+    }
+
+    fn release(x: i32, y: i32) -> OverlayInput {
+        OverlayInput::PointerReleased {
+            button: PointerButton::Left,
+            position: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn moved(x: i32, y: i32) -> OverlayInput {
+        OverlayInput::PointerMoved {
+            position: Point::new(x, y),
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn drag(selection: &mut RegionSelection, from: (i32, i32), to: (i32, i32)) -> Step {
+        selection.handle(&press(from.0, from.1, false));
+        selection.handle(&moved(to.0, to.1));
+        selection.handle(&release(to.0, to.1))
+    }
+
+    #[test]
+    fn double_click_inside_selection_completes_it() {
+        let mut selection = selection();
+        assert_eq!(drag(&mut selection, (10, 5), (29, 16)), Step::Continue);
+        assert_eq!(
+            selection.handle(&press(15, 10, true)),
+            Step::Confirmed(Rect::new(10, 5, 20, 12))
+        );
+    }
+
+    #[test]
+    fn dragging_again_outside_selection_replaces_it_and_click_outside_keeps_it() {
+        let mut selection = selection();
+        drag(&mut selection, (10, 5), (29, 16));
+        drag(&mut selection, (40, 30), (49, 39));
+        selection.handle(&press(2, 2, false));
+        selection.handle(&release(2, 2));
+        assert_eq!(selection.selected(), Some(Rect::new(40, 30, 10, 10)));
+    }
+
+    #[test]
+    fn confirm_on_release_completes_when_the_drag_is_released() {
+        let mut selection = selection().confirm_on_release();
+        assert_eq!(
+            drag(&mut selection, (10, 5), (29, 16)),
+            Step::Confirmed(Rect::new(10, 5, 20, 12))
+        );
+    }
+
+    #[test]
+    fn confirm_on_release_ignores_press_and_release_without_moving() {
+        let mut selection = selection().confirm_on_release();
+        selection.handle(&press(10, 5, false));
+        assert_eq!(selection.handle(&release(10, 5)), Step::Continue);
+        assert_eq!(selection.selected(), None);
+    }
 }

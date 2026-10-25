@@ -188,8 +188,8 @@ fn toolbar_is_hidden_while_dragging_and_absent_without_annotate() {
         drag_region(&fake, Rect::new(100, 80, 300, 200)),
     );
     assert!(
-        fake.overlay_scene().unwrap().text_rect("确认").is_none(),
-        "不含标注的捕获没有工具条"
+        !fake.overlay_visible(),
+        "不含标注的复制捕获松开即完成，没有工具条"
     );
 }
 
