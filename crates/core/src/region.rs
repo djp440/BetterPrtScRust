@@ -26,7 +26,8 @@ use crate::selection::{RegionSelection, Step};
 use crate::snap::Snapping;
 use crate::stitch::{DesktopImage, stitch, virtual_desktop_bounds};
 use crate::{
-    CaptureKind, CaptureMode, CaptureRequest, CoreError, PostCaptureAction, Texts, action,
+    CaptureKind, CaptureMode, CaptureRequest, CoreError, DirectFunction, PostCaptureAction, Texts,
+    action,
 };
 
 /// 一次捕获是怎么结束的。
@@ -101,8 +102,13 @@ impl RegionCapture {
         let mut annotator = request
             .awaits_confirmation()
             .then(|| Annotator::new(displays.clone(), texts).with_handoffs());
-        // 复制到剪贴板的截图：框选松开即完成，不等 Enter（直达功能的框选不变）。
-        if request.kind == CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard) {
+        // 复制到剪贴板的截图和直达 OCR：框选松开即完成，不等 Enter（录屏、长截屏仍要确认，
+        // 方便开始前微调选区）。
+        if matches!(
+            request.kind,
+            CaptureKind::Screenshot(PostCaptureAction::CopyToClipboard)
+                | CaptureKind::Function(DirectFunction::Ocr)
+        ) {
             selection = selection.confirm_on_release();
         }
         if let Some(annotator) = annotator.as_mut() {

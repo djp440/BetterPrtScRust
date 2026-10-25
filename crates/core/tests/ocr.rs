@@ -54,6 +54,30 @@ fn default_ocr_hotkey_opens_result_panel_for_selected_region() {
     );
 }
 
+#[test]
+fn releasing_the_drag_starts_ocr_without_confirming() {
+    let fake = single_display();
+    let mut instance = instance_with_ocr_binding(&fake);
+
+    instance
+        .handle(fake.press(hotkey("Ctrl+F9")).unwrap())
+        .unwrap();
+    let region = Rect::new(10, 5, 20, 12);
+    feed(
+        &mut instance,
+        fake.drag(Point::new(10, 5), Point::new(29, 16)),
+    );
+
+    assert!(!fake.overlay_visible(), "松开即开始 OCR，不等 Enter");
+    assert_eq!(
+        fake.opened_windows(),
+        [StandaloneWindow::ResultPanel {
+            screenshot: desktop_pattern(region),
+            translate: false,
+        }]
+    );
+}
+
 /// 只有一条热键绑定（Ctrl+F9 → 区域 OCR）的常驻实例。
 fn instance_with_ocr_binding(fake: &FakePlatform) -> ResidentInstance {
     let binding = HotkeyBinding {
@@ -73,11 +97,10 @@ fn result_panel_that_cannot_be_opened_is_reported() {
     instance
         .handle(fake.press(hotkey("Ctrl+F9")).unwrap())
         .unwrap();
-    let region = Rect::new(3, 4, 30, 9);
-    let mut events = fake.select_region(region);
-    let confirm = events.pop().unwrap();
+    let mut events = fake.drag(Point::new(3, 4), Point::new(32, 12));
+    let release = events.pop().unwrap();
     feed(&mut instance, events);
-    let result = instance.handle(confirm);
+    let result = instance.handle(release);
 
     assert!(result.is_err());
     assert!(fake.clipboard().is_empty(), "OCR 不复制");
