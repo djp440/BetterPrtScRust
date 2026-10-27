@@ -251,18 +251,15 @@ fn arrow_keys_nudge_selection_pixel_by_pixel() {
 fn nudging_stops_at_virtual_desktop_edges_and_at_one_pixel() {
     let fake = single_display();
     let mut instance = capture(&fake, PostCaptureAction::AwaitConfirmation);
-    select(&fake, &mut instance, Rect::new(0, 0, 2, 2));
+    // 拖动要超过拖拽阈值（4 像素）才算框选，先框 6 像素宽再收窄。
+    select(&fake, &mut instance, Rect::new(0, 0, 6, 2));
 
-    feed(
-        &mut instance,
-        vec![
-            key(&fake, OverlayKey::Left, Modifiers::NONE),
-            key(&fake, OverlayKey::Up, CTRL),
-            key(&fake, OverlayKey::Left, SHIFT),
-            key(&fake, OverlayKey::Left, SHIFT),
-            key(&fake, OverlayKey::Left, SHIFT),
-        ],
-    );
+    let mut keys = vec![
+        key(&fake, OverlayKey::Left, Modifiers::NONE),
+        key(&fake, OverlayKey::Up, CTRL),
+    ];
+    keys.extend((0..6).map(|_| key(&fake, OverlayKey::Left, SHIFT)));
+    feed(&mut instance, keys);
 
     confirm_and_assert_captured(&fake, &mut instance, Rect::new(0, 0, 1, 2));
 }

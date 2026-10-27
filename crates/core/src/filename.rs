@@ -66,7 +66,7 @@ pub struct FilenameFields<'a> {
     /// 捕获发生时的本地时间。
     pub captured_at: LocalDateTime,
     pub mode: CaptureMode,
-    /// 被捕获窗口的标题；不是窗口模式时为 `None`。
+    /// 被捕获窗口的标题；不是单击选中的窗口时为 `None`。
     pub window_title: Option<&'a str>,
 }
 

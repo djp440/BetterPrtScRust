@@ -68,7 +68,6 @@ notification-autostart-disable-failed-title = Cannot turn off start with Windows
 mode-display = Display
 mode-virtual-desktop = Virtual desktop
 mode-region = Region
-mode-window = Window
 action-copy-to-clipboard = Copy to clipboard
 action-await-confirmation = Wait for confirmation
 action-record = Record
@@ -104,6 +103,8 @@ config-hotkey-typing-key = Hotkey “{ $hotkey }” would swallow normal typing:
 config-unknown-format = Unknown output format “{ $format }”: screenshots can use png, jpg, webp, avif; recordings can use mp4, gif
 config-image-format-for-recording = The output_format of a recording can only be mp4 or gif
 config-legacy-actions = The old actions = [...] form is no longer supported: screenshot bindings now use after = "copy_to_clipboard" or "await_confirmation" (auto-save is auto_save = true), direct functions use function = "record", "long_screenshot" or "ocr"
+config-unknown-mode = Unknown capture mode “{ $mode }”: use display, virtual_desktop or region
+config-window-mode-merged = The window mode is now part of the region mode: change mode = "window" to mode = "region", then click a window on the overlay to capture it, or drag to select a region
 config-unknown-after = Unknown post-capture action "{ $after }"; choose copy_to_clipboard or await_confirmation
 config-unknown-function = Unknown direct function "{ $function }"; choose record, long_screenshot or ocr
 config-after-with-function = Write either after or function, not both: after for screenshot bindings, function for direct functions

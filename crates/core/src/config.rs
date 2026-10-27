@@ -53,7 +53,8 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 # 每个 [[bindings]] 是一条热键绑定：
 #   hotkey   热键：Ctrl、Alt、Shift、Win 与一个主键用 + 连接，
 #            主键可以是 PrintScreen、F1–F24、A–Z、0–9（字母和数字需搭配 Ctrl、Alt 或 Win）
-#   mode     捕获模式：display（显示器）、virtual_desktop（虚拟桌面）、region（区域）、window（窗口）
+#   mode     捕获模式：display（显示器）、virtual_desktop（虚拟桌面）、region（区域：拖拽框选，
+#            或单击直接选中窗口）
 #   after    截图完成后做什么（截图类绑定，缺省为 copy_to_clipboard）：
 #              copy_to_clipboard   直接复制到剪贴板并退出截图界面
 #              await_confirmation  停留在截图界面，选区上有工具条：标注、录屏、长截屏、OCR、翻译、
@@ -89,8 +90,8 @@ auto_save = true
 
 [[bindings]]
 hotkey = "Ctrl+PrintScreen"
-mode = "window"
-after = "await_confirmation"
+mode = "region"
+after = "copy_to_clipboard"
 
 [[bindings]]
 hotkey = "Alt+PrintScreen"
@@ -245,6 +246,9 @@ enum ConfigProblem {
     TypingKeyWithoutModifier(String),
     /// 旧版的 `actions = [...]` 写法已不再支持。
     LegacyActions,
+    UnknownMode(String),
+    /// `mode = "window"` 已并入 `region`（ADR 0008）。
+    WindowModeMerged,
     UnknownAfter(String),
     UnknownFunction(String),
     /// 同一条绑定同时写了 `after` 和 `function`。
@@ -322,6 +326,10 @@ impl ConfigProblem {
                 texts.format("config-hotkey-typing-key", &[("hotkey", hotkey)])
             }
             ConfigProblem::LegacyActions => texts.get("config-legacy-actions"),
+            ConfigProblem::UnknownMode(name) => {
+                texts.format("config-unknown-mode", &[("mode", name)])
+            }
+            ConfigProblem::WindowModeMerged => texts.get("config-window-mode-merged"),
             ConfigProblem::UnknownAfter(name) => {
                 texts.format("config-unknown-after", &[("after", name)])
             }
@@ -473,7 +481,7 @@ impl RawTranslation {
 #[serde(deny_unknown_fields)]
 struct RawBinding {
     hotkey: Spanned<String>,
-    mode: CaptureMode,
+    mode: Spanned<String>,
     after: Option<Spanned<String>>,
     function: Option<Spanned<String>>,
     auto_save: Option<Spanned<bool>>,
@@ -565,6 +573,15 @@ impl RawBinding {
         if let Some(actions) = &self.actions {
             return Err(at(actions.span(), ConfigProblem::LegacyActions));
         }
+        let mode = match self.mode.get_ref().as_str() {
+            "window" => return Err(at(self.mode.span(), ConfigProblem::WindowModeMerged)),
+            name => CaptureMode::from_config_name(name).ok_or_else(|| {
+                at(
+                    self.mode.span(),
+                    ConfigProblem::UnknownMode(name.to_owned()),
+                )
+            })?,
+        };
         let kind = match (&self.after, &self.function) {
             (Some(_), Some(function)) => {
                 return Err(at(function.span(), ConfigProblem::AfterWithFunction));
@@ -633,7 +650,7 @@ impl RawBinding {
         Ok(HotkeyBinding {
             hotkey,
             capture: CaptureRequest {
-                mode: self.mode,
+                mode,
                 kind,
                 auto_save,
                 output,

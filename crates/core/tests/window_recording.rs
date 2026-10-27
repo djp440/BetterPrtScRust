@@ -1,4 +1,4 @@
-//! 窗口录屏：在实时画面上选中一个顶层窗口后持续录制它；录的是窗口自己的内容（被遮挡的部分
+//! 窗口录屏：区域录屏的遮罩上单击一个顶层窗口、按 Enter 确认后持续录制它（ADR 0008）；录的是窗口自己的内容（被遮挡的部分
 //! 也完整），窗口关闭时自动停止并保存已录下的内容，窗口改变大小时画布尺寸不变。
 //!
 //! 窗口由假平台描述（`FakeWindow`，后添加的在上层）；窗口内容是 `window_pattern`，与桌面画面
@@ -7,9 +7,11 @@
 use std::time::Duration;
 
 use bps_core::{Config, CoreError, ResidentInstance};
-use bps_platform::{Backdrop, Hotkey, Key, Modifiers, PlatformEvent, Point, PointerButton, Rect};
+use bps_platform::{
+    Backdrop, Hotkey, Key, Modifiers, OverlayKey, PlatformEvent, Point, PointerButton, Rect,
+};
 use bps_platform_fake::decode::{self, FakeVideo};
-use bps_platform_fake::{FakeDisplay, FakePlatform, FakeWindow, window_pattern};
+use bps_platform_fake::{FakeDisplay, FakePlatform, FakeWindow, desktop_pattern, window_pattern};
 
 const ALT_PRINT_SCREEN: Hotkey = Hotkey::new(
     Modifiers {
@@ -32,15 +34,22 @@ fn desktop() -> FakePlatform {
         .with_window(FakeWindow::new("遮挡", Rect::new(50, 0, 100, 100)))
 }
 
-/// 只有一条 Alt+PrtSc“窗口录屏”绑定的常驻实例。
+/// 只有一条 Alt+PrtSc 区域录屏绑定的常驻实例。
 fn resident(fake: &FakePlatform) -> ResidentInstance {
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"region\"\nfunction = \"record\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
     assert!(instance.register_hotkeys().is_empty());
     instance
+}
+
+/// 单击目标窗口露出的部分，再按 Enter 确认。
+fn pick_target(fake: &FakePlatform) -> Vec<PlatformEvent> {
+    let mut events = fake.click(PointerButton::Left, Point::new(20, 20));
+    events.push(fake.press_key(OverlayKey::Enter));
+    events
 }
 
 fn feed(instance: &mut ResidentInstance, events: Vec<PlatformEvent>) {
@@ -60,8 +69,11 @@ fn recording(fake: &FakePlatform) -> ResidentInstance {
         &mut instance,
         fake.click(PointerButton::Left, Point::new(20, 20)),
     );
-    assert!(!fake.overlay_visible(), "选中窗口后遮罩应关闭");
-    assert!(fake.capturing_video(), "选中窗口后应开始录制");
+    assert!(fake.overlay_visible(), "单击窗口后仍要确认才开始录制");
+    assert!(!fake.capturing_video());
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
+    assert!(!fake.overlay_visible(), "确认后遮罩应关闭");
+    assert!(fake.capturing_video(), "确认后应开始录制");
     instance
 }
 
@@ -102,6 +114,35 @@ fn occluded_window_is_recorded_complete() {
     assert!(
         video.frames.iter().all(|f| f.image == expected),
         "被遮挡的右半边也是窗口自己的内容，不是屏幕上的遮挡窗口"
+    );
+}
+
+#[test]
+fn dragging_over_a_window_records_the_region_instead() {
+    let fake = desktop();
+    let mut instance = resident(&fake);
+    instance
+        .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
+        .unwrap();
+    feed(
+        &mut instance,
+        fake.drag(Point::new(20, 20), Point::new(59, 59)),
+    );
+    assert!(!fake.capturing_video(), "框选后仍要确认才开始录制");
+    feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
+    assert!(fake.capturing_video());
+
+    record_for(&fake, &mut instance, Duration::from_millis(200));
+    let video = stop_and_read_video(&fake, &mut instance);
+
+    let region = Rect::new(20, 20, 40, 40);
+    assert_eq!((video.width, video.height), (40, 40));
+    assert!(
+        video
+            .frames
+            .iter()
+            .all(|f| f.image == desktop_pattern(region)),
+        "录的是屏幕上这块区域的画面，不是窗口自己的内容"
     );
 }
 
@@ -185,7 +226,7 @@ fn resizing_window_keeps_video_size_and_crops_or_pads_with_black() {
 #[test]
 fn file_name_uses_window_title() {
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\nfilename_template = \"{window_title}\"\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"region\"\nfunction = \"record\"\nfilename_template = \"{window_title}\"\n",
     )
     .unwrap();
     let fake = desktop();
@@ -194,10 +235,7 @@ fn file_name_uses_window_title() {
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
-    feed(
-        &mut instance,
-        fake.click(PointerButton::Left, Point::new(20, 20)),
-    );
+    feed(&mut instance, pick_target(&fake));
     record_for(&fake, &mut instance, Duration::from_millis(100));
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
@@ -215,9 +253,7 @@ fn escape_cancels_window_selection_without_recording() {
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
     assert!(fake.overlay_visible());
-    instance
-        .handle(fake.press_key(bps_platform::OverlayKey::Escape))
-        .unwrap();
+    instance.handle(fake.press_key(OverlayKey::Escape)).unwrap();
     assert!(!fake.overlay_visible());
     assert!(!fake.capturing_video());
     assert!(fake.files().is_empty());
@@ -233,8 +269,7 @@ fn window_too_small_for_mp4_is_rejected_without_leaving_files() {
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
-    let results: Vec<_> = fake
-        .click(PointerButton::Left, Point::new(20, 20))
+    let results: Vec<_> = pick_target(&fake)
         .into_iter()
         .map(|event| instance.handle(event))
         .collect();
@@ -254,7 +289,7 @@ fn window_too_small_for_mp4_is_rejected_without_leaving_files() {
 fn window_recording_supports_gif_output() {
     let fake = desktop();
     let config = Config::parse(
-        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"window\"\nfunction = \"record\"\noutput_format = \"gif\"\n",
+        "[[bindings]]\nhotkey = \"Alt+PrintScreen\"\nmode = \"region\"\nfunction = \"record\"\noutput_format = \"gif\"\n",
     )
     .unwrap();
     let mut instance = ResidentInstance::new(fake.platform(), config.bindings);
@@ -262,10 +297,7 @@ fn window_recording_supports_gif_output() {
     instance
         .handle(fake.press(ALT_PRINT_SCREEN).unwrap())
         .unwrap();
-    feed(
-        &mut instance,
-        fake.click(PointerButton::Left, Point::new(20, 20)),
-    );
+    feed(&mut instance, pick_target(&fake));
     assert!(fake.capturing_video());
 
     record_for(&fake, &mut instance, Duration::from_secs(1));

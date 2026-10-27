@@ -326,7 +326,7 @@ fn next_region_capture_can_start_after_previous_one_ends() {
     feed(&mut instance, vec![fake.press_key(OverlayKey::Escape)]);
 
     instance.execute(copy_region_capture()).unwrap();
-    let region = Rect::new(1, 2, 3, 4);
+    let region = Rect::new(1, 2, 13, 14);
     feed(&mut instance, fake.select_region(region));
 
     assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(region));

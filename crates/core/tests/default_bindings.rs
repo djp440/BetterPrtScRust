@@ -24,7 +24,7 @@ fn every_default_binding_starts_its_capture() {
                 .unwrap();
         }
         assert_eq!(result, Ok(Flow::Continue), "{hotkey}");
-        // 需要在选区遮罩上操作的捕获（如 Ctrl+PrtSc 的窗口）已经开始：取消它，再试下一个热键。
+        // 需要在选区遮罩上操作的捕获（如 Ctrl+PrtSc 的区域）已经开始：取消它，再试下一个热键。
         if fake.overlay_visible() {
             let escape = fake.press_key(bps_platform::OverlayKey::Escape);
             assert_eq!(instance.handle(escape), Ok(Flow::Continue), "{hotkey}");

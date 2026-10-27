@@ -1,5 +1,4 @@
 use bps_platform::VideoCodec;
-use serde::Deserialize;
 
 use crate::{Locale, OutputOptions, Texts};
 
@@ -185,29 +184,28 @@ pub fn codec_from_config_name(name: &str) -> Option<VideoCodec> {
 
 /// 捕获模式：决定捕获屏幕上哪一部分内容。
 ///
-/// 配置文件里写作 `display`、`virtual_desktop`、`region`、`window`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// 配置文件里写作 `display`、`virtual_desktop`、`region`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CaptureMode {
     /// 鼠标所在的那块显示器，按物理像素输出。
     Display,
     /// 所有显示器拼合成的整个虚拟桌面：各显示器按物理像素截取后按位置拼接，
     /// 显示器之间没有覆盖的空隙是透明像素。
     VirtualDesktop,
-    /// 用户在选区遮罩上框选的区域：先拍冻结帧再显示遮罩，框选结果从冻结帧裁剪拼接，可以跨显示器。
+    /// 用户在选区遮罩上框选的区域，或单击选中的顶层窗口（ADR 0008）。
+    ///
+    /// 框选：先拍冻结帧再显示遮罩，框选结果从冻结帧裁剪拼接，可以跨显示器。
+    /// 单击窗口：截取它的完整内容（被遮挡的部分也在内），不含阴影，圆角以外透明；
+    /// 命名模板的 `{window_title}` 是它的标题。
     Region,
-    /// 用户在选区遮罩上单击选中的顶层窗口：截取它的完整内容（被遮挡的部分也在内），
-    /// 不含阴影，圆角以外透明；命名模板的 `{window_title}` 是它的标题。
-    Window,
 }
 
 impl CaptureMode {
     /// 全部捕获模式，按术语表的顺序排列。
-    pub const ALL: [CaptureMode; 4] = [
+    pub const ALL: [CaptureMode; 3] = [
         CaptureMode::Display,
         CaptureMode::VirtualDesktop,
         CaptureMode::Region,
-        CaptureMode::Window,
     ];
 
     /// 术语表里的中文名称，用于 CLI 和日志。
@@ -221,7 +219,6 @@ impl CaptureMode {
             CaptureMode::Display => "mode-display",
             CaptureMode::VirtualDesktop => "mode-virtual-desktop",
             CaptureMode::Region => "mode-region",
-            CaptureMode::Window => "mode-window",
         })
     }
 
@@ -231,8 +228,12 @@ impl CaptureMode {
             CaptureMode::Display => "display",
             CaptureMode::VirtualDesktop => "virtual_desktop",
             CaptureMode::Region => "region",
-            CaptureMode::Window => "window",
         }
+    }
+
+    /// 按配置文件里的写法查找。
+    pub fn from_config_name(name: &str) -> Option<CaptureMode> {
+        Self::ALL.into_iter().find(|m| m.config_name() == name)
     }
 }
 

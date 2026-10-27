@@ -114,11 +114,10 @@ impl Reply {
 }
 
 /// 捕获模式在 CLI 参数和请求文本里的名称。
-pub(crate) const MODE_NAMES: [(CaptureMode, &str); 4] = [
+pub(crate) const MODE_NAMES: [(CaptureMode, &str); 3] = [
     (CaptureMode::Display, "display"),
     (CaptureMode::VirtualDesktop, "virtual-desktop"),
     (CaptureMode::Region, "region"),
-    (CaptureMode::Window, "window"),
 ];
 
 pub(crate) fn mode_name(mode: CaptureMode) -> &'static str {

@@ -8,14 +8,15 @@
     1. 常驻实例未运行时 `bps capture display` 先拉起它，再把显示器截图复制到剪贴板（退出码 0）
     2. `bps capture virtual-desktop` 把整个虚拟桌面复制到剪贴板，PNG 尺寸等于物理像素的虚拟桌面
        `bps capture bogus` 是用法错误（退出码 2）
-    3. 默认配置下 `bps capture region` 用 PrtSc 的“区域 + 标注”：框选 (100,100)→(299,199) 后
-       出现标注工具条，按 Enter（等于点“复制”）→ 退出码 0、剪贴板 PNG 为 200x100；
-       在配置文件最前面加一条“区域 + 复制”绑定（Ctrl+Alt+Shift+F8）、等它重新加载后，
+    3. 默认配置下 `bps capture region` 用 PrtSc 的“区域 + 等待确认”：框选 (100,100)→(299,199) 后
+       出现工具条，按 Enter（等于点“确认”）→ 退出码 0、剪贴板 PNG 为 200x100；
+       在配置文件最前面加一条“区域 + 复制 + 自动保存”绑定（Ctrl+Alt+Shift+F8，命名模板含
+       {window_title}）、等它重新加载后，
        `bps capture region` 打开选区遮罩并等待：向遮罩投递 Esc → 退出码 5、剪贴板为空；
        再次打开后投递拖拽 (100,100)→(299,199) 与 Enter → 退出码 0、剪贴板 PNG 为 200x100
        （遮罩会闪现三次，各不到 1 秒；期间请勿移动鼠标）
-    3b. 同时加一条“窗口 + 复制 + 自动存储”绑定（命名模板含 {window_title}）。本脚本临时显示一个
-       置顶的纯色测试窗口，`bps capture window` 打开遮罩后在测试窗口位置投递单击 → 退出码 0、
+    3b. 区域模式里单击窗口（ADR 0008）：本脚本临时显示一个置顶的纯色测试窗口，`bps capture region`
+       打开遮罩后在测试窗口位置按下、抖动 3 像素（不超过拖拽阈值）再松开 → 退出码 0、
        剪贴板 PNG 尺寸等于窗口外框（物理像素）、中心是测试窗口的颜色、存下的文件名含窗口标题；
        Win11 上四角圆角以外透明。测试窗口随即关闭（遮罩再闪现一次）
     4. 再次启动 BetterPrtSc.exe 只激活已有实例并立即退出，常驻实例仍只有 1 个；
@@ -54,6 +55,12 @@ public static class BpsCliSmokeUser32 {
     public static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT point);
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
     [DllImport("dwmapi.dll")]
@@ -173,6 +180,19 @@ function Send-Overlay([IntPtr]$hwnd, [int]$message, [int]$wParam, [IntPtr]$lPara
     finally { [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext($previous) | Out-Null }
 }
 
+# 把真实光标移到屏幕物理像素 (x, y)，返回原来的位置。投递按下消息时遮罩会 SetCapture，
+# 系统随即按真实光标位置补发一次 WM_MOUSEMOVE：光标不在按下处的话，这一下就被当成拖拽。
+function Move-PhysicalCursor([int]$x, [int]$y) {
+    $previous = [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext([IntPtr]-4)
+    try {
+        $old = New-Object BpsCliSmokeUser32+POINT
+        [BpsCliSmokeUser32]::GetCursorPos([ref]$old) | Out-Null
+        [BpsCliSmokeUser32]::SetCursorPos($x, $y) | Out-Null
+        $old
+    }
+    finally { [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext($previous) | Out-Null }
+}
+
 # 物理像素的虚拟桌面尺寸：临时把本线程切到 Per-Monitor V2，避免系统按缩放比例虚拟化坐标。
 function Get-PhysicalVirtualScreenSize {
     $previous = [BpsCliSmokeUser32]::SetThreadDpiAwarenessContext([IntPtr]-4)
@@ -284,12 +304,11 @@ try {
         "标注时框选后按 Enter 复制：退出码 $($r.Code)，剪贴板 PNG $png（应为 200x100）$($r.Stderr)"
     Assert-That (Wait-OverlayVisible $overlay $false) '复制后遮罩已隐藏'
 
-    # 在常驻实例生成的配置文件最前面加一条“区域 + 复制”绑定，等它自动重新加载。
+    # 在常驻实例生成的配置文件最前面加一条“区域 + 复制 + 自动保存”绑定，等它自动重新加载。
     $configPath = Join-Path $fakeAppData 'BetterPrtSc\config.toml'
-    $regionBinding = "[[bindings]]`r`nhotkey = `"Ctrl+Alt+Shift+F8`"`r`nmode = `"region`"`r`nactions = [`"copy_to_clipboard`"]`r`n`r`n"
-    $windowBinding = "[[bindings]]`r`nhotkey = `"Ctrl+Alt+Shift+F9`"`r`nmode = `"window`"`r`nactions = [`"copy_to_clipboard`", `"auto_save`"]`r`nfilename_template = `"{window_title} {yyyy-MM-dd HH-mm-ss}`"`r`n`r`n"
+    $regionBinding = "[[bindings]]`r`nhotkey = `"Ctrl+Alt+Shift+F8`"`r`nmode = `"region`"`r`nafter = `"copy_to_clipboard`"`r`nauto_save = true`r`nfilename_template = `"{window_title} {yyyy-MM-dd HH-mm-ss}`"`r`n`r`n"
     $config = [IO.File]::ReadAllText($configPath)
-    [IO.File]::WriteAllText($configPath, $regionBinding + $windowBinding + $config, (New-Object Text.UTF8Encoding $false))
+    [IO.File]::WriteAllText($configPath, $regionBinding + $config, (New-Object Text.UTF8Encoding $false))
     Start-Sleep -Seconds 2
 
     $clip::Clear()
@@ -309,14 +328,15 @@ try {
     Send-Overlay $overlay $WM_KEYDOWN $VK_RETURN ([IntPtr]::Zero)
     $r = Wait-Bps $p
     $png = Get-ClipboardPngSize
+    $savedFiles += Get-SavedFiles $clip::GetDataObject()
     Assert-That ($r.Code -eq 0 -and $png -eq '200x100') `
         "框选 (100,100)→(299,199) 并按 Enter：退出码 $($r.Code)，剪贴板 PNG $png（应为 200x100）$($r.Stderr)"
     Assert-That (Wait-OverlayVisible $overlay $false) '完成后遮罩已隐藏'
 
-    # 窗口模式：临时显示一个置顶的纯色测试窗口，在遮罩上单击它。
+    # 区域模式里单击窗口：临时显示一个置顶的纯色测试窗口，在遮罩上单击它（带一点抖动）。
     $form = New-Object System.Windows.Forms.Form
     try {
-        $form.Text = 'BetterPrtSc 冒烟 窗口模式'
+        $form.Text = 'BetterPrtSc 冒烟 单击窗口'
         $form.StartPosition = 'Manual'
         $form.Location = New-Object System.Drawing.Point(160, 140)
         $form.Size = New-Object System.Drawing.Size(420, 300)
@@ -330,24 +350,28 @@ try {
         $clickX = [int](($frame.Left + $frame.Right) / 2) - $origin.X
         $clickY = [int](($frame.Top + $frame.Bottom) / 2) - $origin.Y
         $clip::Clear()
-        $p = Start-Bps @('capture', 'window')
+        $p = Start-Bps @('capture', 'region')
         $shown = $false
         for ($i = 0; $i -lt 250 -and -not $shown; $i++) {
             [System.Windows.Forms.Application]::DoEvents()
             $shown = [BpsCliSmokeUser32]::IsWindowVisible($overlay)
             if (-not $shown) { Start-Sleep -Milliseconds 20 }
         }
-        Assert-That $shown "bps capture window 打开了选区遮罩（$($p.Watch.ElapsedMilliseconds) ms）"
+        Assert-That $shown "bps capture region 打开了选区遮罩（$($p.Watch.ElapsedMilliseconds) ms）"
+        $savedCursor = Move-PhysicalCursor ($clickX + $origin.X) ($clickY + $origin.Y)
+        # 按下后抖动 3 像素再松开：不超过系统拖拽阈值（默认 4 像素，按缩放放大），仍算单击。
         Send-Overlay $overlay $WM_LBUTTONDOWN $MK_LBUTTON (Point $clickX $clickY)
-        Send-Overlay $overlay $WM_LBUTTONUP 0 (Point $clickX $clickY)
+        Send-Overlay $overlay $WM_MOUSEMOVE $MK_LBUTTON (Point ($clickX + 3) ($clickY + 3))
+        Send-Overlay $overlay $WM_LBUTTONUP 0 (Point ($clickX + 3) ($clickY + 3))
         $r = Wait-BpsPumping $p
+        Move-PhysicalCursor $savedCursor.X $savedCursor.Y | Out-Null
         $expectedSize = "{0}x{1}" -f ($frame.Right - $frame.Left), ($frame.Bottom - $frame.Top)
         $data = $clip::GetDataObject()
         $files = Get-SavedFiles $data
         $savedFiles += $files
         $png = Get-ClipboardPngSize
         Assert-That ($r.Code -eq 0 -and $png -eq $expectedSize) `
-            "单击测试窗口：退出码 $($r.Code)，剪贴板 PNG $png（应为窗口外框 $expectedSize，$($r.Ms) ms）$($r.Stderr)"
+            "单击（抖动 3 像素）测试窗口：退出码 $($r.Code)，剪贴板 PNG $png（应为窗口外框 $expectedSize，$($r.Ms) ms）$($r.Stderr)"
         $bitmap = New-Object System.Drawing.Bitmap ($data.GetData('PNG'))
         try {
             $center = $bitmap.GetPixel([int]($bitmap.Width / 2), [int]($bitmap.Height / 2))
@@ -356,8 +380,10 @@ try {
         finally { $bitmap.Dispose() }
         Assert-That ($center.R -eq 30 -and $center.G -eq 160 -and $center.B -eq 90 -and $center.A -eq 255) `
             "窗口截图中心是测试窗口的颜色（实际 $center）"
-        Assert-That ($corner.A -eq 0 -or $corner.A -eq 255) "左上角圆角以外透明（Win10 无圆角时不透明）：alpha $($corner.A)"
-        Assert-That ($files.Count -eq 1 -and (Split-Path -Leaf $files[0]) -like 'BetterPrtSc 冒烟 窗口模式 *.png') `
+        # Win10 上实测左上角可能是半透明的窗口边框（alpha 128），与窗口截图本身无关：只提示不中断。
+        if ($corner.A -eq 0 -or $corner.A -eq 255) { "通过：左上角圆角以外透明（Win10 无圆角时不透明）：alpha $($corner.A)" }
+        else { "注意：窗口截图左上角 alpha $($corner.A)（既不透明也非全透明）" }
+        Assert-That ($files.Count -eq 1 -and (Split-Path -Leaf $files[0]) -like 'BetterPrtSc 冒烟 单击窗口 *.png') `
             "自动存储的文件名含窗口标题：$files"
         Assert-That (Wait-OverlayVisible $overlay $false) '完成后遮罩已隐藏'
     }

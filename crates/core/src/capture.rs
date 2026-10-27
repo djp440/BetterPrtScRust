@@ -9,7 +9,7 @@ pub(crate) struct Screenshot {
     pub mode: CaptureMode,
     /// 捕获发生时的本地时间。
     pub captured_at: LocalDateTime,
-    /// 被捕获窗口的标题；不是窗口模式时为 `None`。
+    /// 被捕获窗口的标题；不是单击选中的窗口时为 `None`。
     pub window_title: Option<String>,
 }
 
@@ -63,10 +63,10 @@ pub(crate) fn capture(platform: &Platform, mode: CaptureMode) -> Result<Screensh
                 window_title: None,
             })
         }
-        // 区域、窗口需要用户在选区遮罩上框选或选择，由 `region::RegionCapture`、
-        // `window::WindowCapture` 跨多个事件完成，不走这里。
-        CaptureMode::Region | CaptureMode::Window => {
-            unreachable!("区域、窗口捕获由会话完成，常驻实例不会走到这里")
+        // 区域需要用户在选区遮罩上框选或单击窗口，由 `region::RegionCapture` 跨多个事件完成，
+        // 不走这里。
+        CaptureMode::Region => {
+            unreachable!("区域捕获由会话完成，常驻实例不会走到这里")
         }
     }
 }

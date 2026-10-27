@@ -307,6 +307,19 @@ impl SelectionOverlay for D2dSelectionOverlay {
         // 关闭前已经排进队列的输入（如拖动中的鼠标移动）不再递交。
         self.queue.discard_overlay_input();
     }
+
+    fn drag_threshold(&self) -> (u32, u32) {
+        use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
+        use windows::Win32::UI::WindowsAndMessaging::{SM_CXDRAG, SM_CYDRAG};
+        // 按 96 DPI（100% 缩放）取值，core 再按按下处显示器的缩放比例放大。
+        let metric = |index| unsafe { GetSystemMetricsForDpi(index, 96) };
+        let (x, y) = (metric(SM_CXDRAG), metric(SM_CYDRAG));
+        if x > 0 && y > 0 {
+            (x as u32, y as u32)
+        } else {
+            (4, 4)
+        }
+    }
 }
 
 /// 冻结帧覆盖的范围（各显示器的外接矩形）。

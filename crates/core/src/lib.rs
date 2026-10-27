@@ -66,8 +66,6 @@ mod status;
 mod stitch;
 mod translation;
 mod update;
-mod window;
-mod window_selection;
 
 pub use annotation::{Annotation, AnnotationDocument, Stroke};
 pub use autostart::remove_autostart;

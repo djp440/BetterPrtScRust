@@ -68,7 +68,6 @@ notification-autostart-disable-failed-title = 无法关闭开机自启
 mode-display = 显示器
 mode-virtual-desktop = 虚拟桌面
 mode-region = 区域
-mode-window = 窗口
 action-copy-to-clipboard = 复制到剪贴板
 action-await-confirmation = 等待确认
 action-record = 录屏
@@ -104,6 +103,8 @@ config-hotkey-typing-key = 热键“{ $hotkey }”会吞掉正常输入：字母
 config-unknown-format = 未知的输出格式“{ $format }”：截图可用 png、jpg、webp、avif，录屏可用 mp4、gif
 config-image-format-for-recording = 录屏的 output_format 只能是 mp4 或 gif
 config-legacy-actions = 旧的 actions = [...] 写法已不再支持：截图类绑定改写 after = "copy_to_clipboard" 或 "await_confirmation"（自动存储改为 auto_save = true），直达功能改写 function = "record"、"long_screenshot" 或 "ocr"
+config-unknown-mode = 未知的捕获模式“{ $mode }”：可用 display（显示器）、virtual_desktop（虚拟桌面）、region（区域）
+config-window-mode-merged = 窗口模式已并入区域模式：把 mode = "window" 改成 mode = "region"，在遮罩上单击窗口即可截取它，拖拽则框选区域
 config-unknown-after = 未知的截后动作“{ $after }”，可选 copy_to_clipboard、await_confirmation
 config-unknown-function = 未知的直达功能“{ $function }”，可选 record、long_screenshot、ocr
 config-after-with-function = after 与 function 只能写一个：截图类绑定写 after，直达功能写 function

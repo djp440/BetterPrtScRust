@@ -67,8 +67,8 @@ fn first_run_writes_config_file_with_six_default_bindings() {
             ),
             (
                 hotkeys[2],
-                Window,
-                CaptureKind::Screenshot(AwaitConfirmation),
+                Region,
+                CaptureKind::Screenshot(CopyToClipboard),
                 false
             ),
             (hotkeys[3], Region, CaptureKind::Function(Record), false),

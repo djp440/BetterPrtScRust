@@ -67,6 +67,11 @@ impl Snapping {
         }
     }
 
+    /// 拍冻结帧那一刻的顶层窗口布局。
+    pub fn layout(&self) -> &WindowLayout {
+        &self.layout
+    }
+
     /// `input` 的指针位置在某个窗口上、还没取过它的控件时，向 `windows` 取来；取不到就当没有控件。
     pub fn load_controls(&mut self, input: &OverlayInput, windows: &dyn WindowSource) {
         let position = match *input {

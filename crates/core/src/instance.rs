@@ -9,7 +9,6 @@ use crate::capture::CaptureFailure;
 use crate::long_screenshot::LongScreenshotCapture;
 use crate::recording::Recording;
 use crate::region::{Ending, Handoff, HandoffTo, RegionCapture};
-use crate::window::WindowCapture;
 use crate::{
     BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG,
     DirectFunction, Flow, HotkeyBinding, HotkeyRegistrationFailure, Locale, OcrCopy,
@@ -542,13 +541,6 @@ impl ResidentInstance {
             let capture = LongScreenshotCapture::start(&mut self.platform, request.clone(), texts)
                 .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::LongScreenshot(capture));
-            return Ok(Progress::AwaitingUser);
-        }
-        // 窗口模式先悬停高亮、单击选窗，标注（如果有）在窗口截图上进行。
-        if request.mode == CaptureMode::Window {
-            let capture = WindowCapture::start(&mut self.platform, request.clone(), texts)
-                .map_err(CaptureFailure::before_actions)?;
-            self.active = Some(ActiveCapture::Window(capture));
             return Ok(Progress::AwaitingUser);
         }
         if request.mode == CaptureMode::Region || request.awaits_confirmation() {

@@ -149,7 +149,7 @@ fn copy_to_clipboard_exits_right_away_for_display_capture() {
 fn copy_to_clipboard_exits_after_clicking_window() {
     let window = FakeWindow::new("记事本", Rect::new(60, 40, 300, 200));
     let fake = desk().with_window(window.clone());
-    let mut instance = start(&fake, copy(CaptureMode::Window));
+    let mut instance = start(&fake, copy(CaptureMode::Region));
 
     feed(
         &mut instance,
@@ -331,7 +331,7 @@ fn display_mode_enters_await_confirmation_with_whole_display_selected() {
 fn window_mode_enters_await_confirmation_after_clicking_window() {
     let window = FakeWindow::new("记事本", Rect::new(60, 40, 300, 200));
     let fake = desk().with_window(window.clone());
-    let mut instance = start(&fake, await_confirmation(CaptureMode::Window));
+    let mut instance = start(&fake, await_confirmation(CaptureMode::Region));
     assert!(fake.clipboard().is_empty());
 
     feed(
@@ -368,7 +368,7 @@ fn escape_cancels_window_await_confirmation_without_copying() {
     let fake = desk().with_window(FakeWindow::new("记事本", Rect::new(60, 40, 300, 200)));
     let mut instance = start(
         &fake,
-        await_confirmation(CaptureMode::Window).with_auto_save(),
+        await_confirmation(CaptureMode::Region).with_auto_save(),
     );
     feed(
         &mut instance,
@@ -499,7 +499,7 @@ fn translate_button_opens_result_panel_that_translates_after_recognition() {
 fn ocr_of_window_await_confirmation_uses_the_window_content() {
     let window = FakeWindow::new("记事本", Rect::new(60, 40, 300, 200));
     let fake = desk().with_window(window.clone());
-    let mut instance = start(&fake, await_confirmation(CaptureMode::Window));
+    let mut instance = start(&fake, await_confirmation(CaptureMode::Region));
     feed(
         &mut instance,
         fake.click(PointerButton::Left, Point::new(100, 80)),
@@ -547,7 +547,7 @@ fn record_button_starts_recording_the_selection_and_same_hotkey_press_stops_it()
 fn record_button_in_window_mode_records_that_window() {
     let window = FakeWindow::new("记事本", Rect::new(60, 40, 300, 200));
     let fake = desk().with_window(window);
-    let mut instance = start(&fake, await_confirmation(CaptureMode::Window));
+    let mut instance = start(&fake, await_confirmation(CaptureMode::Region));
     feed(
         &mut instance,
         fake.click(PointerButton::Left, Point::new(100, 80)),
@@ -670,7 +670,7 @@ auto_save = true
 
 [[bindings]]
 hotkey = "F10"
-mode = "window"
+mode = "region"
 after = "copy_to_clipboard"
 
 [[bindings]]
@@ -691,7 +691,7 @@ mode = "display"
         requests[0],
         await_confirmation(CaptureMode::Region).with_auto_save()
     );
-    assert_eq!(requests[1], copy(CaptureMode::Window));
+    assert_eq!(requests[1], copy(CaptureMode::Region));
     assert_eq!(
         requests[2],
         CaptureRequest::function(CaptureMode::Region, DirectFunction::LongScreenshot)
@@ -737,8 +737,8 @@ fn default_bindings_follow_the_new_model() {
             ),
             (
                 "Ctrl+PrintScreen".to_owned(),
-                CaptureMode::Window,
-                Screenshot(AwaitConfirmation),
+                CaptureMode::Region,
+                Screenshot(CopyToClipboard),
                 false
             ),
             (
@@ -795,6 +795,57 @@ fn legacy_actions_in_config_file_notify_and_fall_back_to_defaults() {
         fake.registered_hotkeys()
             .contains(&"PrintScreen".parse().unwrap()),
         "应回退到默认配置"
+    );
+}
+
+#[test]
+fn window_mode_is_rejected_with_a_clear_error_pointing_to_region() {
+    let error = Config::parse(
+        "[[bindings]]\nhotkey = \"F9\"\nmode = \"window\"\nafter = \"copy_to_clipboard\"\n",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.line(), Some(3));
+    let message = error.message();
+    assert!(message.contains("window"), "{message}");
+    assert!(message.contains("region"), "应指出新写法：{message}");
+}
+
+#[test]
+fn window_mode_in_config_file_notifies_and_falls_back_to_defaults() {
+    let fake = desk().with_config_file(
+        "[[bindings]]\nhotkey = \"F9\"\nmode = \"window\"\nafter = \"copy_to_clipboard\"\n",
+    );
+
+    let _instance = ResidentInstance::start(fake.platform());
+
+    let notifications = fake.notifications();
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert!(
+        notifications[0].body.contains("region"),
+        "{notifications:?}"
+    );
+    assert!(
+        fake.registered_hotkeys()
+            .contains(&"PrintScreen".parse().unwrap()),
+        "应回退到默认配置"
+    );
+    assert!(
+        !fake.registered_hotkeys().contains(&"F9".parse().unwrap()),
+        "不应注册出错配置里的热键"
+    );
+}
+
+#[test]
+fn unknown_mode_is_rejected_with_its_line() {
+    let error =
+        Config::parse("[[bindings]]\nhotkey = \"F9\"\nmode = \"fullscreen\"\n").unwrap_err();
+
+    assert_eq!(error.line(), Some(3));
+    assert!(
+        error.message().contains("fullscreen"),
+        "{}",
+        error.message()
     );
 }
 

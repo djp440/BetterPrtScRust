@@ -1,5 +1,10 @@
 //! 区域捕获：拍冻结帧 → 显示选区遮罩 → 用户框选 → 从冻结帧裁剪拼接 → 截后动作。
 //!
+//! 区域模式下遮罩上也能单击选中顶层窗口（ADR 0008）：截取这个窗口的完整内容
+//! （`WindowSource::capture_window`，被遮挡的部分也在内，不从冻结帧裁剪）。截后动作为复制到
+//! 剪贴板（以及直达 OCR）时单击即完成；等待确认时窗口截图（太大时缩小）显示在遮罩上供标注，
+//! 工具条转入录屏时录这个窗口。
+//!
 //! 一次区域捕获跨越多个平台事件（用户的每次输入都是一个事件），所以它是常驻实例持有的
 //! 一个进行中的会话，而不是一次函数调用：[`RegionCapture::start`] 打开遮罩后立即返回，
 //! 之后每个 [`OverlayInput`] 交给 [`RegionCapture::handle`]，直到用户确定或取消。
@@ -14,12 +19,13 @@
 
 use bps_platform::{
     Backdrop, Display, Image, IncomingRequest, LocalDateTime, OverlayInput, OverlayScene, Platform,
-    PlatformError, Point, Rect,
+    PlatformError, Point, Rect, TopLevelWindow,
 };
 
 use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Finish, Response, Switch};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
+use crate::long_screenshot::annotation_view;
 use crate::magnifier::Magnifier;
 use crate::recording::Target as RecordTarget;
 use crate::selection::{RegionSelection, Step};
@@ -69,6 +75,8 @@ pub(crate) struct RegionCapture {
     selection: RegionSelection,
     /// 截后动作为等待确认时的标注界面；否则为 `None`。
     annotator: Option<Annotator>,
+    /// 单击选中、正在标注的窗口：命名模板用它的标题，转入录屏、长截屏时用它。
+    window: Option<TopLevelWindow>,
     /// 框选时光标旁的放大镜。
     magnifier: Magnifier,
     /// 遮罩上当前画着的场景；场景没变时不重画。
@@ -87,9 +95,10 @@ impl RegionCapture {
         texts: &'static Texts,
     ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
-        // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘。
-        let user_frames = matches!(request.mode, CaptureMode::Region | CaptureMode::Window);
+        // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘，也能单击选中窗口。
+        let user_frames = request.mode == CaptureMode::Region;
         let snapping = user_frames.then(|| Snapping::of_desktop(platform.window_source.as_ref()));
+        let cursor = platform.frame_source.cursor_position().ok();
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
         let hint = texts.get("overlay-selected-hint");
         let Some(mut selection) = RegionSelection::new(displays.clone(), hint) else {
@@ -97,7 +106,9 @@ impl RegionCapture {
             return Err(CoreError::NoDisplay);
         };
         if let Some(snapping) = snapping {
-            selection = selection.with_snapping(snapping);
+            selection = selection
+                .with_snapping(snapping)
+                .pick_windows(cursor, platform.overlay.drag_threshold());
         }
         let mut annotator = request
             .awaits_confirmation()
@@ -123,7 +134,7 @@ impl RegionCapture {
                         .map(|d| d.bounds)
                 }
                 CaptureMode::VirtualDesktop => virtual_desktop_bounds(&displays),
-                CaptureMode::Region | CaptureMode::Window => None,
+                CaptureMode::Region => None,
             };
             if let Some(region) = preset {
                 selection = selection.with_selected(region);
@@ -140,6 +151,7 @@ impl RegionCapture {
             displays,
             selection,
             annotator,
+            window: None,
             drawn: None,
             texts,
             requester: None,
@@ -186,6 +198,17 @@ impl RegionCapture {
             Step::Confirmed(region) => {
                 Some(self.finish(platform, region).map(|()| Ending::Delivered))
             }
+            Step::PickedWindow => {
+                let window = self.selection.picked_window()?.clone();
+                if self.annotator.is_some() {
+                    self.annotate_window(platform, window)
+                } else {
+                    Some(
+                        self.finish_window(platform, &window)
+                            .map(|()| Ending::Delivered),
+                    )
+                }
+            }
             Step::Cancelled => {
                 platform.overlay.close();
                 Some(Ok(Ending::Cancelled))
@@ -200,6 +223,46 @@ impl RegionCapture {
         }
     }
 
+    /// 等待确认时单击选中了 `window`：截取它的完整内容，显示在遮罩上开始标注。
+    fn annotate_window(
+        &mut self,
+        platform: &mut Platform,
+        window: TopLevelWindow,
+    ) -> Option<Result<Ending, CaptureFailure>> {
+        let image = match platform.window_source.capture_window(window.id) {
+            Ok(image) => image,
+            Err(e) => {
+                platform.overlay.close();
+                return Some(Err(CaptureFailure::before_actions(e)));
+            }
+        };
+        let view = annotation_view(window.bounds, &image, &self.displays);
+        self.annotator.as_mut()?.lock_image(view, image);
+        self.selection.set_selected(view);
+        self.window = Some(window);
+        self.keep_going(platform)
+    }
+
+    /// 关闭遮罩，截取 `window` 的完整内容，再执行截后动作。
+    fn finish_window(
+        &mut self,
+        platform: &mut Platform,
+        window: &TopLevelWindow,
+    ) -> Result<(), CaptureFailure> {
+        platform.overlay.close();
+        let image = platform
+            .window_source
+            .capture_window(window.id)
+            .map_err(CaptureFailure::before_actions)?;
+        let screenshot = Screenshot {
+            image,
+            mode: CaptureMode::Region,
+            captured_at: self.captured_at,
+            window_title: Some(window.title.clone()),
+        };
+        action::run(platform, &screenshot, &self.request, self.texts)
+    }
+
     /// 捕获还在进行：重画遮罩。重画失败时关闭遮罩，捕获失败。
     fn keep_going(&mut self, platform: &mut Platform) -> Option<Result<Ending, CaptureFailure>> {
         match self.redraw(platform) {
@@ -212,7 +275,8 @@ impl RegionCapture {
     }
 
     /// 用户在工具条上转入了另一个功能。OCR、翻译把（含标注的）截图交给结果面板；录屏、长截屏
-    /// 关闭遮罩，由常驻实例以当前选区开始新的会话（已画的标注不带过去）。
+    /// 关闭遮罩，由常驻实例以当前选区开始新的会话（已画的标注不带过去）。标注的是单击选中的
+    /// 窗口时，录屏录这个窗口，长截屏取它当前在屏幕上的范围。
     fn switch(
         &mut self,
         platform: &mut Platform,
@@ -235,8 +299,18 @@ impl RegionCapture {
                 );
                 return Some(done.map(|()| Ending::Delivered));
             }
-            Switch::Record => HandoffTo::Recording(RecordTarget::Region(region)),
-            Switch::LongScreenshot => HandoffTo::LongScreenshot(region),
+            Switch::Record => HandoffTo::Recording(match &self.window {
+                Some(window) => RecordTarget::Window(window.clone()),
+                None => RecordTarget::Region(region),
+            }),
+            Switch::LongScreenshot => HandoffTo::LongScreenshot(
+                self.window
+                    .as_ref()
+                    .and_then(|window| {
+                        virtual_desktop_bounds(&self.displays)?.intersection(window.bounds)
+                    })
+                    .unwrap_or(region),
+            ),
         };
         platform.overlay.close();
         Some(Ok(Ending::Switch(Handoff {
@@ -263,7 +337,7 @@ impl RegionCapture {
             &self.request,
             &Origin {
                 captured_at: self.captured_at,
-                window_title: None,
+                window_title: self.window.as_ref().map(|w| w.title.clone()),
             },
             finish,
             self.texts,

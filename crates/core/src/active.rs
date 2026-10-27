@@ -1,4 +1,4 @@
-//! 常驻实例当前进行中的捕获：同一时刻最多一个，四种会话共用一套推进和收尾的入口。
+//! 常驻实例当前进行中的捕获：同一时刻最多一个，三种会话共用一套推进和收尾的入口。
 
 use bps_platform::{IncomingRequest, OverlayInput, Platform};
 
@@ -6,14 +6,11 @@ use crate::capture::CaptureFailure;
 use crate::long_screenshot::LongScreenshotCapture;
 use crate::recording::{self, Recording};
 use crate::region::{Ending, RegionCapture};
-use crate::window::WindowCapture;
 
-/// 进行中的、需要用户在遮罩上操作的捕获（区域、窗口、长截屏、录屏）。
+/// 进行中的、需要用户在遮罩上操作的捕获（区域、长截屏、录屏）。
 pub(crate) enum ActiveCapture {
-    /// 区域捕获，以及其他要在选区遮罩上标注的捕获。
+    /// 区域捕获（框选或单击窗口），以及其他要在选区遮罩上标注的捕获。
     Region(Box<RegionCapture>),
-    /// 窗口捕获。
-    Window(WindowCapture),
     /// 长截屏。
     LongScreenshot(LongScreenshotCapture),
     /// 录屏（框选区域或正在录制）。
@@ -25,7 +22,6 @@ impl ActiveCapture {
     pub fn set_requester(&mut self, requester: IncomingRequest) {
         let slot = match self {
             ActiveCapture::Region(capture) => &mut capture.requester,
-            ActiveCapture::Window(capture) => &mut capture.requester,
             ActiveCapture::LongScreenshot(capture) => &mut capture.requester,
             ActiveCapture::Recording(recording) => &mut recording.requester,
         };
@@ -36,7 +32,6 @@ impl ActiveCapture {
     pub fn into_requester(self) -> Option<IncomingRequest> {
         match self {
             ActiveCapture::Region(capture) => capture.requester,
-            ActiveCapture::Window(capture) => capture.requester,
             ActiveCapture::LongScreenshot(capture) => capture.requester,
             ActiveCapture::Recording(recording) => recording.requester,
         }
@@ -50,7 +45,6 @@ impl ActiveCapture {
     ) -> Option<Result<Ending, CaptureFailure>> {
         match self {
             ActiveCapture::Region(capture) => capture.handle(platform, input),
-            ActiveCapture::Window(capture) => capture.handle(platform, input),
             ActiveCapture::LongScreenshot(capture) => capture.handle(platform, input),
             ActiveCapture::Recording(recording) => {
                 recording.on_overlay_input(platform, input).map(to_ending)
@@ -63,7 +57,7 @@ impl ActiveCapture {
         match self {
             ActiveCapture::Recording(recording) => recording.on_tick(platform).map(to_ending),
             ActiveCapture::LongScreenshot(capture) => capture.on_sample(platform),
-            ActiveCapture::Region(_) | ActiveCapture::Window(_) => None,
+            ActiveCapture::Region(_) => None,
         }
     }
 
@@ -93,9 +87,7 @@ impl ActiveCapture {
     pub fn abandon(&mut self, platform: &mut Platform) {
         match self {
             ActiveCapture::LongScreenshot(capture) => capture.abandon(platform),
-            ActiveCapture::Region(_) | ActiveCapture::Window(_) | ActiveCapture::Recording(_) => {
-                platform.overlay.close()
-            }
+            ActiveCapture::Region(_) | ActiveCapture::Recording(_) => platform.overlay.close(),
         }
     }
 }

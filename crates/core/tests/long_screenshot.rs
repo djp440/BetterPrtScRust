@@ -14,7 +14,9 @@ use bps_platform::{
     Hotkey, Image, Key, Modifiers, OverlayItem, OverlayKey, PlatformEvent, Point, PointerButton,
     Rect,
 };
-use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel, decode, desktop_pattern};
+use bps_platform_fake::{
+    FakeDisplay, FakePlatform, FakeResidentChannel, FakeWindow, decode, desktop_pattern,
+};
 
 /// 显示器。
 const SCREEN: Rect = Rect::new(0, 0, 640, 400);
@@ -204,6 +206,27 @@ fn start_and_cancel_buttons_appear_beside_selected_region() {
         assert!(contains(SCREEN, button));
     }
     assert_eq!(fake.sampling_region(), None, "按“开始”之前不采样");
+}
+
+#[test]
+fn clicking_a_window_selects_its_area_and_still_waits_for_start() {
+    let window = desktop_with_window(document(1000), VIEWPORT);
+    let fake = window
+        .fake
+        .clone()
+        .with_window(FakeWindow::new("文档", VIEWPORT));
+    let mut instance = start(&fake, long_screenshot());
+
+    feed(
+        &mut instance,
+        fake.click(PointerButton::Left, Point::new(150, 100)),
+    );
+    assert!(fake.overlay_visible(), "单击窗口后仍要确认才开始");
+    assert!(has_text(&fake, "开始"));
+    assert_eq!(fake.sampling_region(), None, "按“开始”之前不采样");
+
+    feed(&mut instance, fake.click_text("开始"));
+    assert_eq!(fake.sampling_region(), Some(VIEWPORT), "应采样窗口的范围");
 }
 
 #[test]

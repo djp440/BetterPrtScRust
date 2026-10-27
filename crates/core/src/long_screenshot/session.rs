@@ -27,6 +27,7 @@ use crate::selection::{
     ACCENT, FONT_SIZE, LABEL_BACKGROUND, LABEL_GAP, LABEL_PADDING, LABEL_TEXT, RegionSelection,
     Step, mask_around,
 };
+use crate::snap::Snapping;
 use crate::stitch::virtual_desktop_bounds;
 use crate::{CaptureMode, CaptureRequest, CoreError, Texts, action};
 
@@ -65,7 +66,7 @@ const SAMPLING_BAR: [Entry<Control>; 2] = [
 /// 长截屏进行到哪一步。
 enum Phase {
     /// 在冻结帧上框选区域。
-    Selecting(RegionSelection),
+    Selecting(Box<RegionSelection>),
     /// 区域透过遮罩，用户滚动内容，持续采样拼接。
     Sampling(Box<Sampling>),
     /// 在遮罩上标注拼好的长截屏；`view` 是它（可能缩小后）显示的范围。
@@ -142,6 +143,13 @@ impl LongScreenshotCapture {
         texts: &'static Texts,
     ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
+        // 区域模式下选区吸附到窗口边缘，也能单击选中窗口、取它的范围（ADR 0008）。
+        let windows = (request.mode == CaptureMode::Region).then(|| {
+            (
+                Snapping::of_desktop(platform.window_source.as_ref()),
+                platform.frame_source.cursor_position().ok(),
+            )
+        });
         let displays = platform.overlay.open(Backdrop::FrozenFrame)?;
         let (Some(selection), Some(bounds)) = (
             RegionSelection::new(displays.clone(), String::new()),
@@ -151,6 +159,11 @@ impl LongScreenshotCapture {
             return Err(CoreError::NoDisplay);
         };
         let mut selection = selection.without_selected_hint();
+        if let Some((snapping, cursor)) = windows {
+            selection = selection
+                .with_snapping(snapping)
+                .pick_windows(cursor, platform.overlay.drag_threshold());
+        }
         let preset = match request.mode {
             CaptureMode::Display => platform
                 .frame_source
@@ -159,7 +172,7 @@ impl LongScreenshotCapture {
                 .and_then(|c| display_at(&displays, c))
                 .map(|d| d.bounds),
             CaptureMode::VirtualDesktop => Some(bounds),
-            CaptureMode::Region | CaptureMode::Window => None,
+            CaptureMode::Region => None,
         };
         if let Some(region) = preset {
             selection = selection.with_selected(region);
@@ -170,7 +183,7 @@ impl LongScreenshotCapture {
             magnifier: Magnifier::new(displays.clone(), texts),
             displays,
             bounds,
-            phase: Phase::Selecting(selection),
+            phase: Phase::Selecting(Box::new(selection)),
             hovered: None,
             pressed: None,
             pointer: None,
@@ -253,7 +266,8 @@ impl LongScreenshotCapture {
             return None;
         };
         match selection.handle(input) {
-            Step::Continue => self.keep_going(platform),
+            // 单击选中窗口后仍要点“开始”（或 Enter、双击）才开始。
+            Step::Continue | Step::PickedWindow => self.keep_going(platform),
             // Enter 或双击选区等于点“开始”。
             Step::Confirmed(region) => self.begin_sampling(platform, region),
             Step::Cancelled => self.cancel(platform),

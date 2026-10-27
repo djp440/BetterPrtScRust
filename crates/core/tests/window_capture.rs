@@ -1,5 +1,6 @@
-//! 窗口捕获：先拍冻结帧、显示选区遮罩，悬停时高亮光标下的顶层窗口，单击后截取这个窗口的
-//! 完整内容（被遮挡的部分也在内）。
+//! 区域模式里的窗口捕获（ADR 0008）：先拍冻结帧、显示选区遮罩，悬停时高亮光标下的顶层窗口，
+//! 单击（按下后拖动不超过拖拽阈值就松开）截取这个窗口的完整内容（被遮挡的部分也在内）；
+//! 拖过拖拽阈值则是框选，从冻结帧裁剪。
 //!
 //! 桌面上的窗口由假平台描述（`FakeWindow`，后添加的在上层）；窗口截图来自假平台为每个窗口
 //! 准备的画面，与冻结帧（`desktop_pattern`）不同，所以能区分“截的是窗口”还是“从冻结帧裁剪”。
@@ -11,13 +12,15 @@ use bps_core::{
     PostCaptureAction, ResidentInstance,
 };
 use bps_platform::{
-    Hotkey, Image, Key, Modifiers, OverlayInput, OverlayItem, OverlayKey, OverlayScene,
+    Color, Hotkey, Image, Key, Modifiers, OverlayInput, OverlayItem, OverlayKey, OverlayScene,
     PlatformEvent, Point, PointerButton, Rect,
 };
-use bps_platform_fake::{DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, FakeWindow, decode};
+use bps_platform_fake::{
+    DEFAULT_PICTURES_DIR, FakeDisplay, FakePlatform, FakeWindow, decode, desktop_pattern,
+};
 
 fn window_capture(after: PostCaptureAction) -> Command {
-    Command::Capture(CaptureRequest::new(CaptureMode::Window, after))
+    Command::Capture(CaptureRequest::new(CaptureMode::Region, after))
 }
 
 fn copy_window_capture() -> Command {
@@ -53,13 +56,37 @@ fn move_pointer(fake: &FakePlatform, to: Point) -> Vec<PlatformEvent> {
     })]
 }
 
+/// 在 `from` 按下左键，经过 `path` 各点后在最后一点松开。
+fn press_move_release(fake: &FakePlatform, from: Point, path: &[Point]) -> Vec<PlatformEvent> {
+    let mut events = vec![fake.overlay_input(OverlayInput::PointerPressed {
+        button: PointerButton::Left,
+        position: from,
+        modifiers: Modifiers::NONE,
+        double_click: false,
+    })];
+    for &position in path {
+        events.extend(move_pointer(fake, position));
+    }
+    events.push(fake.overlay_input(OverlayInput::PointerReleased {
+        button: PointerButton::Left,
+        position: *path.last().unwrap_or(&from),
+        modifiers: Modifiers::NONE,
+    }));
+    events
+}
+
+/// 让画面变暗的半透明黑色遮挡；放大镜等其他填充不算。
+fn is_mask(color: Color) -> bool {
+    (color.r, color.g, color.b) == (0, 0, 0) && color.a > 0 && color.a < 255
+}
+
 /// 遮罩上没有变暗的部分：虚拟桌面里不被任何遮挡覆盖的矩形。断言它恰好是 `expected`。
 fn assert_only_undimmed(scene: &OverlayScene, expected: Rect) {
     let dimmed: Vec<Rect> = scene
         .items
         .iter()
         .filter_map(|item| match item {
-            OverlayItem::Fill { rect, color } if color.a > 0 => Some(*rect),
+            OverlayItem::Fill { rect, color } if is_mask(*color) => Some(*rect),
             _ => None,
         })
         .collect();
@@ -83,7 +110,7 @@ fn assert_nothing_highlighted(scene: &OverlayScene) {
         .items
         .iter()
         .filter_map(|item| match item {
-            OverlayItem::Fill { rect, color } if color.a > 0 => Some(*rect),
+            OverlayItem::Fill { rect, color } if is_mask(*color) => Some(*rect),
             _ => None,
         })
         .collect();
@@ -99,7 +126,7 @@ fn assert_no_product(fake: &FakePlatform) {
 
 fn copy_and_save_window_capture() -> Command {
     Command::Capture(
-        CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+        CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
             .with_auto_save(),
     )
 }
@@ -260,7 +287,7 @@ fn clicking_where_there_is_no_window_keeps_overlay_open() {
 }
 
 #[test]
-fn pressing_on_one_window_and_releasing_on_another_selects_nothing() {
+fn pressing_on_one_window_and_releasing_on_another_within_threshold_selects_nothing() {
     let fake = desktop()
         .with_window(FakeWindow::new("左", Rect::new(0, 0, 100, 150)))
         .with_window(FakeWindow::new("右", Rect::new(100, 0, 100, 150)));
@@ -268,11 +295,90 @@ fn pressing_on_one_window_and_releasing_on_another_selects_nothing() {
 
     feed(
         &mut instance,
-        fake.drag(Point::new(50, 50), Point::new(150, 50)),
+        press_move_release(&fake, Point::new(98, 50), &[Point::new(101, 50)]),
     );
 
     assert!(fake.overlay_visible());
     assert!(fake.clipboard().is_empty());
+}
+
+#[test]
+fn slight_jitter_within_drag_threshold_still_clicks_the_window() {
+    let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
+    let fake = desktop().with_window(window.clone());
+    let mut instance = picking(&fake, copy_window_capture());
+
+    // 默认拖拽阈值是 4 × 4：水平、垂直各移动 4 像素仍算单击。
+    feed(
+        &mut instance,
+        press_move_release(
+            &fake,
+            Point::new(50, 40),
+            &[Point::new(52, 43), Point::new(54, 44)],
+        ),
+    );
+
+    assert!(!fake.overlay_visible());
+    assert!(fake.clipboard().png_image().unwrap() == *window.image());
+}
+
+#[test]
+fn moving_beyond_drag_threshold_selects_region_from_frozen_frame() {
+    let fake = desktop().with_window(FakeWindow::new("记事本", Rect::new(20, 10, 80, 60)));
+    let mut instance = picking(&fake, copy_window_capture());
+
+    feed(
+        &mut instance,
+        press_move_release(&fake, Point::new(50, 40), &[Point::new(55, 40)]),
+    );
+
+    assert!(!fake.overlay_visible());
+    let region = Rect::new(50, 40, 6, 1);
+    assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(region));
+}
+
+#[test]
+fn dragging_across_windows_selects_region_instead_of_window() {
+    let fake = desktop()
+        .with_window(FakeWindow::new("左", Rect::new(0, 0, 100, 150)))
+        .with_window(FakeWindow::new("右", Rect::new(100, 0, 100, 150)));
+    let mut instance = picking(&fake, copy_window_capture());
+
+    feed(
+        &mut instance,
+        fake.drag(Point::new(60, 40), Point::new(140, 90)),
+    );
+
+    assert!(!fake.overlay_visible());
+    let region = Rect::new(60, 40, 81, 51);
+    assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(region));
+}
+
+#[test]
+fn drag_threshold_scales_with_display_where_pointer_was_pressed() {
+    // 150% 缩放：阈值 4 × 1.5 = 6 像素。
+    let scaled = || {
+        FakePlatform::new()
+            .with_display(FakeDisplay::new(DESKTOP).primary().scale_factor(1.5))
+            .with_cursor_at(Point::new(190, 140))
+    };
+    let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
+
+    let fake = scaled().with_window(window.clone());
+    let mut instance = picking(&fake, copy_window_capture());
+    feed(
+        &mut instance,
+        press_move_release(&fake, Point::new(50, 40), &[Point::new(56, 40)]),
+    );
+    assert!(fake.clipboard().png_image().unwrap() == *window.image());
+
+    let fake = scaled().with_window(window);
+    let mut instance = picking(&fake, copy_window_capture());
+    feed(
+        &mut instance,
+        press_move_release(&fake, Point::new(50, 40), &[Point::new(57, 40)]),
+    );
+    assert!(fake.clipboard().png_image().unwrap() == desktop_pattern(Rect::new(50, 40, 8, 1)));
 }
 
 #[test]
@@ -296,7 +402,7 @@ fn window_title_fills_filename_template_with_illegal_characters_replaced() {
         "报告: 第1版 / 草稿",
         Rect::new(20, 10, 80, 60),
     ));
-    let mut request = CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+    let mut request = CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
         .with_auto_save();
     request.output.filename_template = FilenameTemplate::parse("{window_title} {mode}").unwrap();
     let mut instance = picking(&fake, Command::Capture(request));
@@ -308,7 +414,7 @@ fn window_title_fills_filename_template_with_illegal_characters_replaced() {
 
     let expected = Path::new(DEFAULT_PICTURES_DIR)
         .join("BetterPrtSc")
-        .join("报告_ 第1版 _ 草稿 window.png");
+        .join("报告_ 第1版 _ 草稿 region.png");
     assert_eq!(fake.files(), [expected]);
 }
 
@@ -350,7 +456,7 @@ fn pixels_outside_rounded_corners_become_white_in_jpg() {
     let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60))
         .with_image(rounded_window_image(80, 60));
     let fake = desktop().with_window(window);
-    let mut request = CaptureRequest::new(CaptureMode::Window, PostCaptureAction::CopyToClipboard)
+    let mut request = CaptureRequest::new(CaptureMode::Region, PostCaptureAction::CopyToClipboard)
         .with_auto_save();
     request.output.output_format = OutputFormat::Jpeg;
     let mut instance = picking(&fake, Command::Capture(request));
@@ -372,7 +478,7 @@ fn pixels_outside_rounded_corners_become_white_in_jpg() {
 }
 
 #[test]
-fn ctrl_print_screen_default_binding_waits_for_confirmation_after_clicking_window() {
+fn ctrl_print_screen_default_binding_copies_clicked_window_immediately() {
     let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
     let fake = desktop().with_window(window.clone());
     let mut instance = ResidentInstance::start(fake.platform());
@@ -382,14 +488,11 @@ fn ctrl_print_screen_default_binding_waits_for_confirmation_after_clicking_windo
         .expect("默认绑定应注册 Ctrl+PrtSc");
     assert_eq!(instance.handle(pressed), Ok(Flow::Continue));
     assert!(fake.overlay_visible(), "Ctrl+PrtSc 应显示选区遮罩");
+    // 默认的 Ctrl+PrtSc 是“区域 + 复制到剪贴板”（ADR 0008）：单击窗口即完成。
     feed(
         &mut instance,
         fake.click(PointerButton::Left, Point::new(50, 40)),
     );
-    assert!(fake.overlay_visible(), "单击窗口后应等待确认");
-    assert!(fake.clipboard().is_empty());
-
-    feed(&mut instance, vec![fake.press_key(OverlayKey::Enter)]);
 
     assert!(!fake.overlay_visible());
     assert!(fake.clipboard().png_image().unwrap() == *window.image());
@@ -400,7 +503,7 @@ fn ctrl_print_screen_default_binding_waits_for_confirmation_after_clicking_windo
 fn window_binding_with_copy_and_auto_save_copies_and_saves_clicked_window() {
     let window = FakeWindow::new("记事本", Rect::new(20, 10, 80, 60));
     let fake = desktop().with_window(window.clone()).with_config_file(
-        "[[bindings]]\nhotkey = \"Ctrl+PrintScreen\"\nmode = \"window\"\nafter = \"copy_to_clipboard\"\nauto_save = true\n",
+        "[[bindings]]\nhotkey = \"Ctrl+PrintScreen\"\nmode = \"region\"\nafter = \"copy_to_clipboard\"\nauto_save = true\n",
     );
     let mut instance = ResidentInstance::start(fake.platform());
 
@@ -528,7 +631,7 @@ fn cancelling_annotation_of_a_picked_window_leaves_no_product() {
     let mut instance = picking(
         &fake,
         Command::Capture(
-            CaptureRequest::new(CaptureMode::Window, PostCaptureAction::AwaitConfirmation)
+            CaptureRequest::new(CaptureMode::Region, PostCaptureAction::AwaitConfirmation)
                 .with_auto_save(),
         ),
     );

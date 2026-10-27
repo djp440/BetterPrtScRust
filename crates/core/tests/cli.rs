@@ -216,10 +216,10 @@ fn bps_capture_fails_while_previous_capture_is_still_selecting() {
 }
 
 #[test]
-fn bps_capture_window_replies_after_user_clicks_window_like_ctrl_print_screen() {
+fn bps_capture_region_annotates_clicked_window_like_print_screen() {
     let window = FakeWindow::new("记事本", Rect::new(70, 0, 60, 30));
     let fake = two_displays_cursor_on_second().with_window(window.clone());
-    // 默认的 Ctrl+PrtSc 是“窗口 + 等待确认”：单击窗口后还要点“确认”。
+    // 第一条区域绑定是默认的 PrtSc（等待确认）：单击窗口后标注它，还要点“确认”（ADR 0008）。
     let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, {
         let mut clicked = false;
         move |fake| {
@@ -231,30 +231,14 @@ fn bps_capture_window_replies_after_user_clicks_window_like_ctrl_print_screen() 
         }
     }));
 
-    let outcome = run_cli(["capture", "window"], &mut channel, Locale::ZhCn);
+    let outcome = run_cli(["capture", "region"], &mut channel, Locale::ZhCn);
 
     assert_eq!(outcome.status, CliStatus::Success, "{outcome:?}");
     assert!(!fake.overlay_visible());
-    // 与 Ctrl+PrtSc 的默认绑定一致：确认后复制，默认不自动保存。
+    // 与 PrtSc 的默认绑定一致：确认后复制，默认不自动保存；截的是窗口自己的内容。
     let clipboard = fake.clipboard();
     assert_eq!(clipboard.formats(), ["PNG", "DIB"]);
     assert_eq!(clipboard.png_image().unwrap(), *window.image());
-}
-
-#[test]
-fn bps_capture_window_reports_cancelled_when_user_presses_escape() {
-    let fake = two_displays_cursor_on_second()
-        .with_window(FakeWindow::new("记事本", Rect::new(70, 0, 60, 30)));
-    let mut channel = FakeResidentChannel::running(resident_instance_with_user(&fake, |fake| {
-        vec![fake.press_key(OverlayKey::Escape)]
-    }));
-
-    let outcome = run_cli(["capture", "window"], &mut channel, Locale::ZhCn);
-
-    assert_eq!(outcome.status, CliStatus::Cancelled, "{outcome:?}");
-    assert!(!fake.overlay_visible());
-    assert!(fake.clipboard().is_empty());
-    assert!(fake.files().is_empty());
 }
 
 #[test]
@@ -327,6 +311,8 @@ fn bps_rejects_invalid_arguments_with_usage_without_contacting_resident_instance
         &[][..],
         &["capture"][..],
         &["capture", "fullscreen"][..],
+        // 窗口模式已并入区域模式（ADR 0008）。
+        &["capture", "window"][..],
         &["capture", "display", "extra"][..],
         &["record", "region"][..],
     ] {
@@ -355,9 +341,14 @@ fn bps_help_lists_every_capture_mode() {
         let outcome = run_cli([flag], &mut channel, Locale::ZhCn);
 
         assert_eq!(outcome.status, CliStatus::Success, "{flag}");
-        for mode in ["display", "virtual-desktop", "region", "window"] {
+        for mode in ["display", "virtual-desktop", "region"] {
             assert!(outcome.stdout.contains(mode), "{flag}: {}", outcome.stdout);
         }
+        assert!(
+            !outcome.stdout.contains("window"),
+            "{flag}: {}",
+            outcome.stdout
+        );
         assert_eq!(channel.launches(), 0);
     }
 }

@@ -15,7 +15,9 @@ use bps_platform::{
     ClipboardItem, Hotkey, Notification, NotificationClick, PlatformEvent, Point, Rect,
     StandaloneWindow,
 };
-use bps_platform_fake::{FakeDisplay, FakePlatform, FakeResidentChannel, desktop_pattern};
+use bps_platform_fake::{
+    FakeDisplay, FakePlatform, FakeResidentChannel, FakeWindow, desktop_pattern,
+};
 
 fn single_display() -> FakePlatform {
     FakePlatform::new()
@@ -99,6 +101,31 @@ fn instance_with_ocr_binding(fake: &FakePlatform) -> ResidentInstance {
     let mut instance = ResidentInstance::new(fake.platform(), vec![binding]);
     let _ = instance.register_hotkeys();
     instance
+}
+
+#[test]
+fn clicking_a_window_recognizes_its_content_immediately() {
+    let window = FakeWindow::new("记事本", Rect::new(8, 6, 40, 30));
+    let fake = single_display().with_window(window.clone());
+    let mut instance = instance_with_ocr_binding(&fake);
+
+    instance
+        .handle(fake.press(hotkey("Ctrl+F9")).unwrap())
+        .unwrap();
+    feed(
+        &mut instance,
+        fake.click(bps_platform::PointerButton::Left, Point::new(20, 20)),
+    );
+
+    assert!(!fake.overlay_visible(), "单击窗口即开始识别，无需确认");
+    assert_eq!(
+        fake.opened_windows(),
+        [StandaloneWindow::ResultPanel {
+            screenshot: window.image().clone(),
+            translate: false,
+            auto_copy: false,
+        }]
+    );
 }
 
 #[test]

@@ -4,13 +4,17 @@
 //! 和描述遮罩画面的 [`OverlayScene`]。坐标一律是虚拟桌面物理像素。
 //!
 //! 交互规则：
-//! - 按住左键拖拽框选；松开后选区确定下来（`Selected`），可以在选区外重新拖拽替换它。
+//! - 打开了 [`RegionSelection::pick_windows`] 时，没有选区时指针下的顶层窗口高亮（它以外变暗、
+//!   内侧描边、标出窗口尺寸）。单击（按下后拖动不超过拖拽阈值就松开，按下和松开在同一个窗口上）
+//!   或没有选区时按 Enter，选中这个窗口：选区变成窗口在虚拟桌面内的部分，并返回
+//!   [`Step::PickedWindow`]；之后调整选区就不再是“这个窗口”（[`RegionSelection::picked_window`]）。
+//! - 按住左键拖动超过拖拽阈值开始框选；松开后选区确定下来（`Selected`），可以在选区外重新拖拽替换它。
 //! - 选区确定后按 Enter 或双击选区内部，完成框选。例外：打开了
 //!   [`RegionSelection::confirm_on_release`]（截后动作为复制到剪贴板，或直达 OCR）时，拖拽框出有效选区、
 //!   松开左键的那一刻就完成，不显示手柄，也不需要 Enter 或双击；拖拽过程中 Esc、右键取消、
 //!   放大镜、按 C 取色、边缘吸附照常。
 //! - Esc 随时取消整次捕获；右键在有选区（或正在拖拽）时清除选区，没有选区时取消捕获。
-//! - 选区包含拖拽起点和终点两个像素；按下后没有移动就松开不算框选。
+//! - 选区包含拖拽起点和终点两个像素；按下后没有拖过拖拽阈值就松开不算框选。
 //! - 选区框好后边框上有手柄：在边框附近按下拖动改变大小（靠近角时同时改两条边，拖过对边时
 //!   翻转），在选区内按下拖动移动选区；方向键逐像素微调（见 `adjust::nudged`）。都限制在
 //!   虚拟桌面内。
@@ -25,7 +29,7 @@
 
 use bps_platform::{
     Color, Corner, Display, Label, OverlayCursor, OverlayInput, OverlayItem, OverlayKey,
-    OverlayScene, Point, PointerButton, Rect,
+    OverlayScene, Point, PointerButton, Rect, TopLevelWindow,
 };
 
 use crate::snap::{DragEnd, SNAP_DISTANCE, Snapping};
@@ -61,12 +65,19 @@ pub(crate) enum Step {
     Cancelled,
     /// 用户要复制放大镜对准的这个像素的颜色值，框选继续。
     CopyColor(Point),
+    /// 用户单击选中了一个窗口（见 [`RegionSelection::picked_window`]），选区已是这个窗口。
+    PickedWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     /// 还没有选区，等待按下左键开始框选。
     Idle,
+    /// 按下了左键，还没拖过拖拽阈值：松开算单击，拖过阈值转为框选。`previous` 同 `Dragging`。
+    Pressed {
+        anchor: Point,
+        previous: Option<Rect>,
+    },
     /// 按住左键拖拽中。`previous` 是拖拽开始前已有的选区，没拖出区域就松开时恢复它。
     Dragging {
         anchor: Point,
@@ -101,6 +112,14 @@ pub(crate) struct RegionSelection {
     snapping: Snapping,
     /// 拖拽框出有效选区、松开左键时直接完成（复制到剪贴板的区域模式）。
     confirm_on_release: bool,
+    /// 单击选择窗口（窗口来自吸附用的窗口布局）。
+    picks_windows: bool,
+    /// 遮罩出现时的光标位置：指针还没在遮罩上动过时按它高亮窗口（放大镜仍等指针动了再出现）。
+    initial_cursor: Option<Point>,
+    /// 按下后拖动超过多少才算拖拽（100% 缩放下的物理像素，水平、垂直）；没超过就松开算单击。
+    drag_threshold: (u32, u32),
+    /// 单击选中的窗口和当时的选区；选区变了就不再是这个窗口。
+    picked: Option<(Rect, TopLevelWindow)>,
 }
 
 impl RegionSelection {
@@ -116,7 +135,35 @@ impl RegionSelection {
             locked: false,
             snapping: Snapping::default(),
             confirm_on_release: false,
+            picks_windows: false,
+            initial_cursor: None,
+            drag_threshold: (0, 0),
+            picked: None,
         })
+    }
+
+    /// 没有选区时高亮指针下的顶层窗口，单击选中它（窗口布局来自 [`Self::with_snapping`]）。
+    /// `cursor` 是遮罩出现时的光标位置，一开始就按它高亮；`drag_threshold` 见字段说明。
+    pub fn pick_windows(mut self, cursor: Option<Point>, drag_threshold: (u32, u32)) -> Self {
+        self.picks_windows = true;
+        self.drag_threshold = drag_threshold;
+        self.initial_cursor = cursor.map(|c| self.clamp(c));
+        self
+    }
+
+    /// 单击选中、而且选区之后没再改动过的窗口。
+    pub fn picked_window(&self) -> Option<&TopLevelWindow> {
+        match (&self.picked, self.state) {
+            (Some((region, window)), State::Selected(selected)) if *region == selected => {
+                Some(window)
+            }
+            _ => None,
+        }
+    }
+
+    /// 把选区换成 `region`（例如窗口截图缩小后显示的范围）。
+    pub fn set_selected(&mut self, region: Rect) {
+        self.state = State::Selected(region);
     }
 
     /// 拖拽框出有效选区、松开左键的那一刻就完成（[`Step::Confirmed`]），不停留在等待确认的
@@ -199,6 +246,17 @@ impl RegionSelection {
                 },
             ) => return Step::Confirmed(region),
             (
+                State::Idle,
+                KeyPressed {
+                    key: OverlayKey::Enter,
+                    ..
+                },
+            ) => {
+                if let Some(window) = self.hovered_window().cloned() {
+                    return self.pick(window);
+                }
+            }
+            (
                 State::Selected(region),
                 PointerPressed {
                     button: PointerButton::Left,
@@ -271,12 +329,34 @@ impl RegionSelection {
                     ..
                 },
             ) => {
-                let anchor = self.clamp(position);
-                self.state = State::Dragging {
-                    anchor,
-                    current: anchor,
+                self.state = State::Pressed {
+                    anchor: self.clamp(position),
                     previous: self.region(),
                 };
+            }
+            (State::Pressed { anchor, previous }, PointerMoved { position, .. }) => {
+                let current = self.clamp(position);
+                if self.beyond_drag_threshold(anchor, current) {
+                    self.state = State::Dragging {
+                        anchor,
+                        current,
+                        previous,
+                    };
+                }
+            }
+            (
+                State::Pressed { anchor, previous },
+                PointerReleased {
+                    button: PointerButton::Left,
+                    position,
+                    ..
+                },
+            ) => {
+                self.state = previous.map_or(State::Idle, State::Selected);
+                let window = self.clicked_window(anchor, self.clamp(position)).cloned();
+                if let Some(window) = window {
+                    return self.pick(window);
+                }
             }
             (
                 State::Dragging {
@@ -320,7 +400,10 @@ impl RegionSelection {
                 },
             ) => return Step::Cancelled,
             (
-                State::Dragging { .. } | State::Selected(_) | State::Adjusting { .. },
+                State::Pressed { .. }
+                | State::Dragging { .. }
+                | State::Selected(_)
+                | State::Adjusting { .. },
                 PointerReleased {
                     button: PointerButton::Right,
                     ..
@@ -335,6 +418,7 @@ impl RegionSelection {
     pub fn region(&self) -> Option<Rect> {
         match self.state {
             State::Idle => None,
+            State::Pressed { previous, .. } => previous,
             State::Dragging {
                 anchor, current, ..
             } => Some(self.dragged(anchor, current)),
@@ -355,7 +439,7 @@ impl RegionSelection {
             return None;
         }
         match self.state {
-            State::Idle => self.pointer,
+            State::Idle | State::Pressed { .. } => self.pointer,
             State::Dragging { current, .. } => Some(current),
             State::Selected(_) => None,
             State::Adjusting {
@@ -380,19 +464,100 @@ impl RegionSelection {
             _ if self.locked => None,
             State::Adjusting { grip, .. } => Some(grip),
             State::Selected(region) => self.pointer.and_then(|p| self.grip_at(region, p)),
-            State::Idle | State::Dragging { .. } => None,
+            State::Idle | State::Pressed { .. } | State::Dragging { .. } => None,
         };
         grip.map_or(OverlayCursor::Crosshair, Grip::cursor)
+    }
+
+    /// 选中 `window`：选区变成它在虚拟桌面内的部分。窗口完全在虚拟桌面外时什么也不做。
+    fn pick(&mut self, window: TopLevelWindow) -> Step {
+        let Some(region) = window.bounds.intersection(self.bounds) else {
+            return Step::Continue;
+        };
+        self.state = State::Selected(region);
+        self.picked = Some((region, window));
+        Step::PickedWindow
+    }
+
+    /// `point` 处用户看到的顶层窗口；不选择窗口时为 `None`。
+    fn window_at(&self, point: Point) -> Option<&TopLevelWindow> {
+        if !self.picks_windows {
+            return None;
+        }
+        self.snapping.layout().window_at(point)
+    }
+
+    /// 还没有选区时指针下高亮的窗口。
+    fn hovered_window(&self) -> Option<&TopLevelWindow> {
+        match self.state {
+            _ if self.locked => None,
+            State::Idle | State::Pressed { previous: None, .. } => self
+                .pointer
+                .or(self.initial_cursor)
+                .and_then(|p| self.window_at(p)),
+            _ => None,
+        }
+    }
+
+    /// 在 `pressed` 按下、在 `released` 松开（没拖过阈值）时单击中的窗口：两处是同一个窗口才算。
+    fn clicked_window(&self, pressed: Point, released: Point) -> Option<&TopLevelWindow> {
+        let window = self.window_at(pressed)?;
+        (self.window_at(released).map(|w| w.id) == Some(window.id)).then_some(window)
+    }
+
+    /// 从 `anchor` 移到 `current` 是否超过了拖拽阈值（按 `anchor` 所在显示器的缩放比例放大）。
+    fn beyond_drag_threshold(&self, anchor: Point, current: Point) -> bool {
+        let scale = self.scale_at(anchor);
+        let limit = |base: u32| (f64::from(base) * scale).round() as i32;
+        (current.x - anchor.x).abs() > limit(self.drag_threshold.0)
+            || (current.y - anchor.y).abs() > limit(self.drag_threshold.1)
+    }
+
+    /// 高亮 `window`：它以外变暗、内侧描边、左上角标出窗口尺寸。窗口不在虚拟桌面内时返回 `false`。
+    fn window_highlight(&self, window: &TopLevelWindow, items: &mut Vec<OverlayItem>) -> bool {
+        let Some(visible) = window.bounds.intersection(self.bounds) else {
+            return false;
+        };
+        items.extend(mask_around(self.bounds, visible));
+        let corner = Point::new(visible.x, visible.y);
+        let scale = self.scale_at(corner);
+        let border = (scale.round() as u32).max(1);
+        // 描边画在窗口内侧：最大化、全屏的窗口外侧没有地方可画。
+        if let Some(inner) = inset(visible, border) {
+            items.push(OverlayItem::Frame {
+                rect: inner,
+                width: border,
+                color: ACCENT,
+            });
+        }
+        let gap = (LABEL_GAP * scale).round() as i32 + border as i32;
+        items.push(OverlayItem::Label(Label {
+            text: format!("{} × {}", window.bounds.width, window.bounds.height),
+            anchor: Point::new(corner.x + gap, corner.y + gap),
+            corner: Corner::TopLeft,
+            font_size: FONT_SIZE * scale as f32,
+            padding: (LABEL_PADDING * scale).round() as u32,
+            color: LABEL_TEXT,
+            background: LABEL_BACKGROUND,
+        }));
+        true
     }
 
     /// 当前状态下遮罩上要画的内容，从下往上：遮挡、选区边框、标签。
     pub fn scene(&self) -> OverlayScene {
         let mut items = Vec::new();
         match self.region() {
-            None => items.push(OverlayItem::Fill {
-                rect: self.bounds,
-                color: MASK,
-            }),
+            None => {
+                let highlighted = self
+                    .hovered_window()
+                    .is_some_and(|window| self.window_highlight(window, &mut items));
+                if !highlighted {
+                    items.push(OverlayItem::Fill {
+                        rect: self.bounds,
+                        color: MASK,
+                    });
+                }
+            }
             Some(region) => {
                 items.extend(mask_around(self.bounds, region));
                 let scale = self.scale_at(Point::new(region.x, region.y));
@@ -515,6 +680,18 @@ impl RegionSelection {
 enum Side {
     Above,
     Below,
+}
+
+/// 四边各向内收 `by` 像素的矩形；收完没有剩余时返回 `None`。
+fn inset(rect: Rect, by: u32) -> Option<Rect> {
+    let width = rect.width.checked_sub(2 * by).filter(|w| *w > 0)?;
+    let height = rect.height.checked_sub(2 * by).filter(|h| *h > 0)?;
+    Some(Rect::new(
+        rect.x + by as i32,
+        rect.y + by as i32,
+        width,
+        height,
+    ))
 }
 
 /// 以 `a`、`b` 两个像素为对角、同时包含它们的矩形。
