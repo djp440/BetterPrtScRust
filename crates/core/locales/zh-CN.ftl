@@ -215,18 +215,15 @@ settings-config-broken-hint = 请用文本编辑器修正下面这个文件，�
 settings-config-not-utf8 = 配置文件不是 UTF-8 编码
 settings-config-unreadable = 无法读取配置文件：{ $error }
 settings-changed-elsewhere = 配置文件在打开设置后被其他程序修改过，为免覆盖那些修改，没有保存。可以“重新读取”后再改（会丢弃这里的修改）。
-settings-fix-problems = 请先修正标红的问题再保存。
-settings-save = 保存
-settings-revert = 撤销修改
+settings-fix-problems = 标红的修改不合法，没有保存；配置仍是上一次的有效值。
 settings-reload = 重新读取
 settings-open-config-folder = 打开配置文件夹
 settings-saved = 已保存，立即生效。
 settings-saved-not-running = 已保存，下次启动 BetterPrtSc 时生效。
 settings-save-failed = 保存失败：{ $error }
 settings-unsaved-title = 有未保存的修改
-settings-unsaved-body = 关闭前要保存这些修改吗？
-settings-save-and-close = 保存并关闭
-settings-discard-and-close = 不保存
+settings-unsaved-body = 有修改没能保存（不合法或写入失败），关闭后这些修改会丢失。
+settings-discard-and-close = 仍然关闭
 settings-cancel = 取消
 
 ## 选区遮罩

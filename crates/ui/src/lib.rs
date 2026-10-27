@@ -8,6 +8,7 @@
 //! [`UiEnvironment`]，某个窗口特有的放在它自己的环境里（如 [`SettingsEnvironment`]）。
 //! 界面子进程需要常驻实例的数据时，经命名管道发请求查询（`bps_core::Request`）。
 
+mod autosave;
 mod clipboard;
 mod hotkey_recording;
 mod result_panel;

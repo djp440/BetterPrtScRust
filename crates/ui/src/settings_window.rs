@@ -1,4 +1,5 @@
-//! 设置界面：读取 `config.toml` → 在界面上修改 → 写回，常驻实例自动重新加载后立即生效。
+//! 设置界面：读取 `config.toml` → 在界面上修改 → 自动写回，常驻实例自动重新加载后立即生效。
+//! 写回的时机见 [`crate::autosave`]。
 //!
 //! 注册失败的热键绑定与检查更新的结果来自常驻实例：后台线程经命名管道反复发 `status`
 //! 请求。设置界面自己不发任何网络请求。
@@ -7,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bps_core::{
     BindingFailure, BindingSettings, CaptureKind, CaptureMode, FilenameTemplate, Language,
@@ -17,6 +18,7 @@ use bps_core::{
 use bps_platform::{AudioDevice, Hotkey, Key, Modifiers, VideoCodec};
 use eframe::egui::{self, RichText};
 
+use crate::autosave::{AutoSave, Decision};
 use crate::hotkey_recording::{
     Conclusion, PauseHotkeys, Progress, RecordingSession, StartKeyCapture,
 };
@@ -165,8 +167,9 @@ struct Editor {
     custom_dir: String,
     /// 自定义码率输入框的值（千比特每秒）；切到档位再切回来时保留。
     custom_bitrate: u32,
-    /// 保存时发现配置文件已被别人改过。
+    /// 保存时发现配置文件已被别人改过；此后不再自动保存，直到重新读取。
     changed_elsewhere: bool,
+    auto_save: AutoSave,
 }
 
 impl Editor {
@@ -182,6 +185,7 @@ impl Editor {
             _ => DEFAULT_CUSTOM_BITRATE,
         };
         Editor {
+            auto_save: AutoSave::new(&settings),
             document,
             on_disk,
             settings,
@@ -321,10 +325,10 @@ impl SettingsApp {
         self.notice = None;
     }
 
-    /// 写回配置文件；成功时返回 `true`。
-    fn save(&mut self) -> bool {
+    /// 写回配置文件；结果显示在底部的提示里。
+    fn save(&mut self) {
         let Page::Editing(editor) = &mut self.page else {
-            return false;
+            return;
         };
         let texts = self.ui.texts(editor.settings.language);
         let text = match editor.document.render(&editor.settings) {
@@ -332,27 +336,51 @@ impl SettingsApp {
             Err(problems) => {
                 let reasons: Vec<String> = problems.iter().map(|p| p.localized(texts)).collect();
                 self.notice = Some(Notice::SaveFailed(reasons.join("\n")));
-                return false;
+                return;
             }
         };
         match store::save(&self.config_file, editor.on_disk.as_deref(), &text) {
             Ok(()) => {
                 match SettingsDocument::parse(&text) {
-                    Ok(document) => **editor = Editor::new(document, Some(text)),
+                    // 只换掉“已保存”的部分，输入框里切走又切回时要保留的内容不动。
+                    Ok(document) => {
+                        editor.settings = document.settings().clone();
+                        editor.auto_save = AutoSave::new(&editor.settings);
+                        editor.document = document;
+                        editor.on_disk = Some(text);
+                    }
                     // render 已经确认过写回的文本可以解析，不应发生。
                     Err(e) => self.page = Page::Broken(LoadProblem::Invalid(e)),
                 }
                 self.notice = Some(Notice::Saved);
-                true
             }
             Err(SaveError::ChangedOnDisk) => {
                 editor.changed_elsewhere = true;
                 self.notice = None;
-                false
             }
             Err(SaveError::Io(e)) => {
                 self.notice = Some(Notice::SaveFailed(e.to_string()));
-                false
+            }
+        }
+    }
+
+    /// 有待保存的合法改动时写回；`busy` 表示正在输入文字或拖动数值，这时等停下再写。
+    fn auto_save(&mut self, ctx: &egui::Context, busy: bool) {
+        let Page::Editing(editor) = &mut self.page else {
+            return;
+        };
+        if editor.changed_elsewhere {
+            return;
+        }
+        let saved = editor.document.settings();
+        match editor
+            .auto_save
+            .poll(&editor.settings, saved, busy, Instant::now())
+        {
+            Decision::Idle => {}
+            Decision::Wait(delay) => ctx.request_repaint_after(delay),
+            Decision::Save => {
+                self.save();
             }
         }
     }
@@ -471,9 +499,13 @@ impl eframe::App for SettingsApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
-        if ctx.input(|i| i.viewport().close_requested()) && self.is_modified() && !self.may_close {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.asking_to_close = true;
+        if ctx.input(|i| i.viewport().close_requested()) && !self.may_close {
+            // 还在输入中的改动不再等，立即写回；写不了的（不合法、写入失败）才问。
+            self.auto_save(&ctx, false);
+            if self.is_modified() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.asking_to_close = true;
+            }
         }
 
         egui::Panel::bottom("actions")
@@ -497,6 +529,8 @@ impl eframe::App for SettingsApp {
                     Page::Broken(_) => self.broken_page(ui, texts),
                 });
         });
+        let busy = ctx.text_edit_focused() || ctx.egui_is_using_pointer();
+        self.auto_save(&ctx, busy);
 
         if self.asking_to_close {
             self.close_dialog(&ctx, texts);
@@ -1059,8 +1093,6 @@ impl SettingsApp {
     }
 
     fn bottom_bar(&mut self, ui: &mut egui::Ui, texts: &Texts) {
-        let mut save = false;
-        let mut revert = false;
         let mut reload = false;
         let mut open_folder = false;
         match &self.page {
@@ -1068,22 +1100,11 @@ impl SettingsApp {
                 if editor.changed_elsewhere {
                     warning(ui, texts.get("settings-changed-elsewhere"));
                 }
-                let problems = editor.settings.problems();
-                if !problems.is_empty() {
+                if !editor.settings.problems().is_empty() {
                     error(ui, texts.get("settings-fix-problems"));
                 }
                 self.notice_line(ui, texts);
                 ui.horizontal(|ui| {
-                    let modified = editor.is_modified();
-                    save = ui
-                        .add_enabled(
-                            modified && problems.is_empty() && !editor.changed_elsewhere,
-                            egui::Button::new(RichText::new(texts.get("settings-save")).strong()),
-                        )
-                        .clicked();
-                    revert = ui
-                        .add_enabled(modified, egui::Button::new(texts.get("settings-revert")))
-                        .clicked();
                     if editor.changed_elsewhere {
                         reload = ui.button(texts.get("settings-reload")).clicked();
                     }
@@ -1103,15 +1124,6 @@ impl SettingsApp {
                         .clicked();
                 });
             }
-        }
-        if save {
-            self.save();
-        }
-        if revert && let Page::Editing(editor) = &mut self.page {
-            let document = editor.document.clone();
-            let on_disk = editor.on_disk.take();
-            **editor = Editor::new(document, on_disk);
-            self.notice = None;
         }
         if reload {
             self.reload();
@@ -1142,10 +1154,6 @@ impl SettingsApp {
     }
 
     fn close_dialog(&mut self, ctx: &egui::Context, texts: &Texts) {
-        let can_save = matches!(
-            &self.page,
-            Page::Editing(editor) if editor.settings.problems().is_empty() && !editor.changed_elsewhere
-        );
         let mut choice = None;
         let modal = egui::Modal::new(egui::Id::unique("unsaved-changes")).show(ctx, |ui| {
             ui.set_max_width(360.0);
@@ -1154,15 +1162,6 @@ impl SettingsApp {
             ui.label(texts.get("settings-unsaved-body"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        can_save,
-                        egui::Button::new(texts.get("settings-save-and-close")),
-                    )
-                    .clicked()
-                {
-                    choice = Some(CloseChoice::Save);
-                }
                 if ui.button(texts.get("settings-discard-and-close")).clicked() {
                     choice = Some(CloseChoice::Discard);
                 }
@@ -1177,12 +1176,6 @@ impl SettingsApp {
         match choice {
             None => {}
             Some(CloseChoice::Cancel) => self.asking_to_close = false,
-            Some(CloseChoice::Save) => {
-                self.asking_to_close = false;
-                if self.save() {
-                    self.close(ctx);
-                }
-            }
             Some(CloseChoice::Discard) => {
                 self.asking_to_close = false;
                 self.close(ctx);
@@ -1197,7 +1190,6 @@ impl SettingsApp {
 }
 
 enum CloseChoice {
-    Save,
     Discard,
     Cancel,
 }

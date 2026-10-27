@@ -215,18 +215,15 @@ settings-config-broken-hint = Fix the file below in a text editor, then click �
 settings-config-not-utf8 = The configuration file is not UTF-8 encoded
 settings-config-unreadable = Cannot read the configuration file: { $error }
 settings-changed-elsewhere = Another program changed the configuration file after Settings opened, so nothing was saved to avoid overwriting those changes. Reload to continue (this discards the changes made here).
-settings-fix-problems = Fix the problems marked in red before saving.
-settings-save = Save
-settings-revert = Undo changes
+settings-fix-problems = Changes marked in red are invalid and were not saved; the configuration keeps its last valid values.
 settings-reload = Reload
 settings-open-config-folder = Open configuration folder
 settings-saved = Saved. The changes are in effect.
 settings-saved-not-running = Saved. The changes take effect the next time BetterPrtSc starts.
 settings-save-failed = Cannot save: { $error }
 settings-unsaved-title = Unsaved changes
-settings-unsaved-body = Save your changes before closing?
-settings-save-and-close = Save and close
-settings-discard-and-close = Don't save
+settings-unsaved-body = Some changes could not be saved (they are invalid or could not be written) and will be lost if you close.
+settings-discard-and-close = Close anyway
 settings-cancel = Cancel
 
 ## 选区遮罩
