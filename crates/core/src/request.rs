@@ -56,7 +56,10 @@ impl Request {
                 OcrCopy::Copied { characters } => format!("ocr-copied {characters}"),
                 OcrCopy::Empty => "ocr-copied empty".to_owned(),
                 OcrCopy::NoLanguagePack => "ocr-copied no-language-pack".to_owned(),
-                OcrCopy::Failed(reason) => format!("ocr-copied failed {reason}"),
+                // 原因单独占一行发送，里面的换行换成空格。
+                OcrCopy::Failed(reason) => {
+                    format!("ocr-copied failed {}", reason.replace(['\r', '\n'], " "))
+                }
             },
         }
     }

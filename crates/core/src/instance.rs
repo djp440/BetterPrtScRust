@@ -416,7 +416,10 @@ impl ResidentInstance {
             ),
             OcrCopy::Failed(reason) => (
                 texts.get("notification-ocr-failed-title"),
-                reason.clone(),
+                match reason.trim() {
+                    "" => texts.get("notification-ocr-failed-unknown"),
+                    reason => reason.to_owned(),
+                },
                 None,
             ),
         };

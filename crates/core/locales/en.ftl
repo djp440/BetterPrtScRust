@@ -33,6 +33,7 @@ notification-ocr-empty-title = No text recognized
 notification-ocr-empty-body = The clipboard was left unchanged.
 notification-ocr-no-language-pack-title = No OCR language pack is installed
 notification-ocr-no-language-pack-body = The clipboard was left unchanged. Click to open Windows "Language & region" settings and add the language you want to recognize; its OCR component is installed with it.
+notification-ocr-failed-unknown = Unknown reason; try again with the result panel.
 notification-ocr-failed-title = OCR failed
 notification-update-available-title = New version available: { $version }
 notification-update-available-body = You have { $current }. Click to open the release page and download it yourself.

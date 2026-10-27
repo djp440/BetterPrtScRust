@@ -33,6 +33,7 @@ notification-ocr-empty-title = 没有识别到文字
 notification-ocr-empty-body = 剪贴板保持不变。
 notification-ocr-no-language-pack-title = 系统没有可用的 OCR 语言包
 notification-ocr-no-language-pack-body = 剪贴板保持不变。点击打开系统的“语言和区域”设置，添加要识别的语言即可安装 OCR 组件。
+notification-ocr-failed-unknown = 原因不明，请改用结果面板重试。
 notification-ocr-failed-title = OCR 识别失败
 notification-update-available-title = 发现新版本 { $version }
 notification-update-available-body = 当前版本 { $current }。点击打开发布页面，自行下载。

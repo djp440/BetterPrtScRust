@@ -279,3 +279,27 @@ fn toggling_auto_copy_writes_it_back_to_the_config_text() {
     let off = set_ocr_auto_copy(&on, false).unwrap();
     assert!(!Config::parse(&off).unwrap().ocr_auto_copy);
 }
+
+#[test]
+fn failure_reason_with_line_breaks_survives_the_channel() {
+    let notifications = report_raw(OcrCopy::Failed("第一行\r\n第二行".to_owned()));
+    assert_eq!(notifications[0].body, "第一行  第二行");
+    let notifications = report_raw(OcrCopy::Failed(String::new()));
+    assert!(!notifications[0].body.is_empty());
+}
+
+fn report_raw(copy: OcrCopy) -> Vec<Notification> {
+    let fake = single_display();
+    let instance = Rc::new(RefCell::new(ResidentInstance::start(fake.platform())));
+    let inside = instance.clone();
+    let mut channel = FakeResidentChannel::running(move |event| {
+        let _ = inside.borrow_mut().handle(event);
+    });
+    forward(
+        &Request::OcrCopied(copy),
+        &mut channel,
+        WhenNotRunning::GiveUp,
+    )
+    .unwrap();
+    fake.notifications()
+}
