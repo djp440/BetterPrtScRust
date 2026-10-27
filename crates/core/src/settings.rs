@@ -24,7 +24,7 @@ pub struct Settings {
     pub check_for_updates: bool,
     pub autostart: bool,
     pub run_as_admin: bool,
-    /// 直达 OCR 识别后自动复制文字，不弹结果面板。
+    /// OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板。
     pub ocr_auto_copy: bool,
     /// 自动存储目录；`None` 表示默认目录（“图片”文件夹下的 `BetterPrtSc`）。
     pub save_dir: Option<PathBuf>,

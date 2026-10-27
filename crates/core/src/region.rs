@@ -225,7 +225,14 @@ impl RegionCapture {
         let to = match switch {
             Switch::Ocr | Switch::Translate => {
                 let translate = switch == Switch::Translate;
-                let done = finish::recognize(platform, annotator, region, translate, self.texts);
+                let done = finish::recognize(
+                    platform,
+                    annotator,
+                    region,
+                    translate,
+                    self.request.ocr_auto_copy,
+                    self.texts,
+                );
                 return Some(done.map(|()| Ending::Delivered));
             }
             Switch::Record => HandoffTo::Recording(RecordTarget::Region(region)),

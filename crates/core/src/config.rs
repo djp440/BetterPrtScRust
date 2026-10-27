@@ -34,7 +34,7 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   language = "auto"                              界面语言：auto（跟随系统）、zh-CN、en
 #   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
 #   autostart = false                              开机自启：true / false
-#   ocr_auto_copy = false                          直达 OCR 识别后自动复制文字，不弹结果面板：true / false
+#   ocr_auto_copy = false                          OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板：true / false
 #   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
 #                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
 #                                                  登录时不弹 UAC 提示
@@ -117,7 +117,7 @@ pub struct Config {
     /// 翻译服务（OpenAI 兼容接口或 DeepL）；没有配置（或没填 `api_key`）时为 `None`，
     /// 结果面板的翻译按钮禁用。
     pub translation: Option<TranslationConfig>,
-    /// 直达 OCR 识别后自动复制文字、不弹结果面板（默认关闭）。已合并进各热键绑定的
+    /// OCR（直达热键或工具条）识别后自动复制文字、不弹结果面板（默认关闭）。已合并进各热键绑定的
     /// [`CaptureRequest::ocr_auto_copy`]。
     pub ocr_auto_copy: bool,
 }

@@ -30,7 +30,7 @@ pub struct CaptureRequest {
     pub output: OutputOptions,
     /// 录屏选项；录屏（直达功能或等待确认界面上的“录屏”）用到。
     pub recording: RecordingOptions,
-    /// 直达 OCR 识别后自动复制、不弹结果面板（全局设置 `ocr_auto_copy`）。
+    /// OCR（直达热键或工具条）识别后自动复制、不弹结果面板（全局设置 `ocr_auto_copy`）。
     pub ocr_auto_copy: bool,
 }
 

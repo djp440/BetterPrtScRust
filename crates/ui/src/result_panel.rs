@@ -38,7 +38,7 @@ pub struct ResultPanelEnvironment {
     pub http: Arc<dyn HttpTransport + Send + Sync>,
     /// 识别完成后直接翻译（截图界面上的“翻译”；翻译服务没配置时只显示识别结果）。
     pub translate: bool,
-    /// 配置文件里的“直达 OCR 识别后自动复制，不弹面板”。
+    /// 配置文件里的“OCR 识别后自动复制，不弹面板”。
     pub auto_copy: bool,
     /// 用户在面板上切换了上面的开关：立即写回配置文件。
     pub save_auto_copy: Box<dyn Fn(bool) -> Result<(), String>>,

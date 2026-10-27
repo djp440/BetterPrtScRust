@@ -434,7 +434,7 @@ fn ocr_button_opens_result_panel_with_the_selection_and_exits() {
 }
 
 #[test]
-fn toolbar_ocr_still_opens_result_panel_when_auto_copy_is_on() {
+fn toolbar_ocr_copies_without_panel_when_auto_copy_is_on() {
     let fake = desk();
     let mut instance = awaiting(
         &fake,
@@ -443,14 +443,36 @@ fn toolbar_ocr_still_opens_result_panel_when_auto_copy_is_on() {
 
     click_button(&fake, &mut instance, "OCR");
 
+    assert!(!fake.overlay_visible());
     assert_eq!(
         fake.opened_windows(),
         [StandaloneWindow::ResultPanel {
             screenshot: desktop_pattern(REGION),
             translate: false,
+            auto_copy: true,
+        }]
+    );
+    assert!(fake.clipboard().is_empty(), "复制在结果面板子进程里完成");
+}
+
+#[test]
+fn toolbar_translate_still_opens_result_panel_when_auto_copy_is_on() {
+    let fake = desk();
+    let mut instance = awaiting(
+        &fake,
+        await_confirmation(CaptureMode::Region).with_ocr_auto_copy(),
+    );
+
+    click_button(&fake, &mut instance, "翻译");
+
+    assert_eq!(
+        fake.opened_windows(),
+        [StandaloneWindow::ResultPanel {
+            screenshot: desktop_pattern(REGION),
+            translate: true,
             auto_copy: false,
         }],
-        "“识别后自动复制”只影响直达 OCR"
+        "翻译要看译文，总是打开面板"
     );
 }
 

@@ -186,6 +186,7 @@ impl WindowCapture {
                     &annotating.annotator,
                     annotating.view,
                     translate,
+                    self.request.ocr_auto_copy,
                     self.texts,
                 );
                 return Some(done.map(|()| Ending::Delivered));

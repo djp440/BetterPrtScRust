@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use bps_platform::{FileType, LocalDateTime, Notification, Platform, Rect, SaveAsOptions};
 
 use super::session::{Annotator, Finish};
+use crate::action::AfterRecognition;
 use crate::capture::{CaptureFailure, Screenshot};
 use crate::filename::FilenameFields;
 use crate::{CaptureRequest, OutputFormat, Texts, action};
@@ -126,18 +127,25 @@ fn run(
 }
 
 /// 用户在工具条上点了 OCR（`translate` 为假）或翻译：取得合成了标注的截图（`region` 是标注所在的
-/// 区域），关闭遮罩，打开结果面板。
+/// 区域），关闭遮罩，交给结果面板。OCR 在开了“识别后自动复制”（`auto_copy`）时只复制文字、
+/// 不显示面板；翻译总是显示面板。
 pub(crate) fn recognize(
     platform: &mut Platform,
     annotator: &Annotator,
     region: Rect,
     translate: bool,
+    auto_copy: bool,
     texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
     let image = annotator.final_image(platform, region);
     platform.overlay.close();
     let image = image.map_err(CaptureFailure::before_actions)?;
-    action::open_result_panel(platform, image, translate, texts)
+    let then = match (translate, auto_copy) {
+        (true, _) => AfterRecognition::Translate,
+        (false, true) => AfterRecognition::Copy,
+        (false, false) => AfterRecognition::Show,
+    };
+    action::open_result_panel(platform, image, then, texts)
         .map_err(CaptureFailure::already_notified)
 }
 
