@@ -22,6 +22,8 @@ pub const SETTINGS_ARGUMENT: &str = "--settings";
 pub const RESULT_PANEL_ARGUMENT: &str = "--result-panel";
 /// 结果面板子进程的附加参数：识别完成后直接翻译。
 pub const TRANSLATE_ARGUMENT: &str = "--translate";
+/// 结果面板子进程的附加参数：不显示面板，识别后自动复制。
+pub const AUTO_COPY_ARGUMENT: &str = "--auto-copy";
 
 /// 子进程的命令行参数：`BetterPrtSc.exe <参数>` 打开对应的窗口。
 pub fn window_argument(window: &StandaloneWindow) -> &'static str {
@@ -82,8 +84,13 @@ impl WindowLauncher for ChildProcessWindows {
             StandaloneWindow::ResultPanel {
                 screenshot,
                 translate,
+                auto_copy,
             } => {
-                let extra = translate.then_some(TRANSLATE_ARGUMENT);
+                let extra = if auto_copy {
+                    Some(AUTO_COPY_ARGUMENT)
+                } else {
+                    translate.then_some(TRANSLATE_ARGUMENT)
+                };
                 let mut child = self.spawn(RESULT_PANEL_ARGUMENT, extra, Stdio::piped())?;
                 let mut stdin = child.stdin.take().expect("标准输入是管道");
                 // 截图可能有几十 MB，另开线程写，不阻塞常驻实例的事件循环；写完关闭管道。

@@ -38,6 +38,10 @@ pub struct ResultPanelEnvironment {
     pub http: Arc<dyn HttpTransport + Send + Sync>,
     /// 识别完成后直接翻译（截图界面上的“翻译”；翻译服务没配置时只显示识别结果）。
     pub translate: bool,
+    /// 配置文件里的“直达 OCR 识别后自动复制，不弹面板”。
+    pub auto_copy: bool,
+    /// 用户在面板上切换了上面的开关：立即写回配置文件。
+    pub save_auto_copy: Box<dyn Fn(bool) -> Result<(), String>>,
 }
 
 /// 打开结果面板、开始识别，运行到用户关闭它。
@@ -70,6 +74,8 @@ struct ResultPanelApp {
     /// 识别完成后还要自动翻译一次。
     translate_when_recognized: bool,
     notice: Option<Notice>,
+    auto_copy: bool,
+    save_auto_copy: Box<dyn Fn(bool) -> Result<(), String>>,
 }
 
 /// 操作按钮旁边的提示。
@@ -108,6 +114,8 @@ impl ResultPanelApp {
             focus_text: false,
             translate_when_recognized: environment.translate,
             notice: None,
+            auto_copy: environment.auto_copy,
+            save_auto_copy: environment.save_auto_copy,
         };
         app.start(recognition);
         app
@@ -373,6 +381,10 @@ impl ResultPanelApp {
         let mut translate = false;
         let mut retry = false;
         let mut close = false;
+        let mut auto_copy = self.auto_copy;
+        let auto_copy_toggled = ui
+            .checkbox(&mut auto_copy, texts.get("result-panel-auto-copy"))
+            .changed();
         ui.horizontal(|ui| {
             let has_text = !self.panel.text().is_empty();
             copy = ui
@@ -427,6 +439,16 @@ impl ResultPanelApp {
                 close = ui.button(texts.get("result-panel-close")).clicked();
             });
         });
+        if auto_copy_toggled {
+            match (self.save_auto_copy)(auto_copy) {
+                Ok(()) => self.auto_copy = auto_copy,
+                Err(e) => {
+                    self.notice = Some(Notice::Failed(
+                        texts.format("result-panel-auto-copy-failed", &[("error", &e)]),
+                    ));
+                }
+            }
+        }
         if copy {
             self.copy(CopyTarget::Recognized);
         }

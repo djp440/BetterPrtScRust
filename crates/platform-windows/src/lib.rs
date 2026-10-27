@@ -74,8 +74,8 @@ mod window_source;
 pub use autostart::WindowsAutostart;
 pub use background::ThreadBackground;
 pub use child_windows::{
-    ChildProcessWindows, RESULT_PANEL_ARGUMENT, SETTINGS_ARGUMENT, TRANSLATE_ARGUMENT,
-    read_screenshot, window_argument,
+    AUTO_COPY_ARGUMENT, ChildProcessWindows, RESULT_PANEL_ARGUMENT, SETTINGS_ARGUMENT,
+    TRANSLATE_ARGUMENT, read_screenshot, window_argument,
 };
 pub use clipboard::{WindowsClipboard, read_clipboard_text, write_clipboard_text};
 pub use clock::WindowsClock;

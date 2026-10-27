@@ -17,7 +17,7 @@ use crate::{
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 
-/// 交付截图：直达 OCR 时交给结果面板；否则复制到剪贴板，`auto_save` 时同时按命名模板存进保存目录
+/// 交付截图：直达 OCR 时交给结果面板（开了“识别后自动复制”时面板不显示，只复制文字）；否则复制到剪贴板，`auto_save` 时同时按命名模板存进保存目录
 /// （复制并退出、等待确认里的确认都走这里；取消不会走到这里）。
 ///
 /// 通知文字用 `texts` 的语言。
@@ -28,8 +28,12 @@ pub(crate) fn run(
     texts: &'static Texts,
 ) -> Result<(), CaptureFailure> {
     if request.is_function(DirectFunction::Ocr) {
-        return open_result_panel(platform, screenshot.image.clone(), false, texts)
-            .map_err(CaptureFailure::already_notified);
+        let opened = if request.ocr_auto_copy {
+            open_auto_copy(platform, screenshot.image.clone(), texts)
+        } else {
+            open_result_panel(platform, screenshot.image.clone(), false, texts)
+        };
+        return opened.map_err(CaptureFailure::already_notified);
     }
     copy_and_save(platform, screenshot, request, texts)
 }
@@ -44,9 +48,30 @@ pub(crate) fn open_result_panel(
     translate: bool,
     texts: &Texts,
 ) -> Result<(), CoreError> {
+    open_panel(platform, screenshot, translate, false, texts)
+}
+
+/// 直达 OCR 的“识别后自动复制”：结果面板子进程不显示界面，识别后把文字复制到剪贴板，
+/// 再把结果（[`crate::OcrCopy`]）转交回常驻实例，由常驻实例通知用户。
+fn open_auto_copy(
+    platform: &mut Platform,
+    screenshot: Image,
+    texts: &Texts,
+) -> Result<(), CoreError> {
+    open_panel(platform, screenshot, false, true, texts)
+}
+
+fn open_panel(
+    platform: &mut Platform,
+    screenshot: Image,
+    translate: bool,
+    auto_copy: bool,
+    texts: &Texts,
+) -> Result<(), CoreError> {
     let opened = platform.windows.open(StandaloneWindow::ResultPanel {
         screenshot,
         translate,
+        auto_copy,
     });
     if let Err(e) = &opened {
         platform.notifier.notify(Notification {

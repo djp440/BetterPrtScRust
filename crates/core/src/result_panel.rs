@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use bps_platform::{
-    HttpTransport, Image, PlatformError, RecognitionLanguage, RecognizedLine, TextRecognizer,
+    Clipboard, ClipboardItem, HttpTransport, Image, PlatformError, RecognitionLanguage,
+    RecognizedLine, TextRecognizer,
 };
 
 use crate::translation::{self, TranslationConfig, TranslationError};
@@ -258,6 +259,46 @@ impl ResultPanel {
             screenshot: self.screenshot.clone(),
             language,
         })
+    }
+}
+
+/// “识别后自动复制”的结果：结果面板子进程不显示界面，识别后复制文字，
+/// 再把它转交回常驻实例（[`crate::Request::OcrCopied`]）去通知用户。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OcrCopy {
+    /// 识别出的文字已复制到剪贴板；`characters` 是不计空白的字数。
+    Copied { characters: usize },
+    /// 没有识别出文字，剪贴板没动。
+    Empty,
+    /// 系统没有安装 OCR 语言包，剪贴板没动。
+    NoLanguagePack,
+    /// 识别或写剪贴板失败，附带原因；剪贴板没动。
+    Failed(String),
+}
+
+/// 用跟随系统的默认识别语言识别 `screenshot`，把识别出的文字（与结果面板显示的一样）
+/// 复制到剪贴板。没有识别出文字或识别失败时不动剪贴板。会阻塞到识别完成。
+pub fn copy_recognized_text(
+    screenshot: Image,
+    recognizer: &dyn TextRecognizer,
+    clipboard: &mut dyn Clipboard,
+) -> OcrCopy {
+    let (mut panel, recognition) = ResultPanel::open(screenshot, recognizer);
+    if let Some(recognition) = recognition {
+        panel.finish(recognition.run(recognizer));
+    }
+    match panel.status() {
+        RecognitionStatus::Recognized if panel.text().trim().is_empty() => OcrCopy::Empty,
+        RecognitionStatus::Recognized => {
+            let characters = panel.text().chars().filter(|c| !c.is_whitespace()).count();
+            match clipboard.write(vec![ClipboardItem::Text(panel.text().to_owned())]) {
+                Ok(()) => OcrCopy::Copied { characters },
+                Err(e) => OcrCopy::Failed(e.message().to_owned()),
+            }
+        }
+        RecognitionStatus::NoLanguagePack => OcrCopy::NoLanguagePack,
+        RecognitionStatus::Failed(reason) => OcrCopy::Failed(reason.clone()),
+        RecognitionStatus::Recognizing => OcrCopy::Failed(String::new()),
     }
 }
 

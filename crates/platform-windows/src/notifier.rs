@@ -60,6 +60,9 @@ impl Notifier for TrayNotifier {
 /// “设置”应用里含“使用 Print Screen 键打开屏幕截图”开关的“键盘”页（Win10 / Win11 相同）。
 const PRINT_SCREEN_KEY_SETTINGS_URI: &str = "ms-settings:easeofaccess-keyboard";
 
+/// “设置”应用里添加语言、安装 OCR 组件的“语言和区域”页。
+const OCR_LANGUAGE_SETTINGS_URI: &str = "ms-settings:regionlanguage";
+
 /// 执行通知的点击操作：用默认程序打开文件或网址，在资源管理器中打开文件夹，或打开系统设置页面。
 pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
     let (verb, target) = match click {
@@ -67,6 +70,9 @@ pub(crate) fn open_click_target(hwnd: HWND, click: &NotificationClick) {
         NotificationClick::OpenFolder(path) => (w!("explore"), path.as_os_str()),
         NotificationClick::OpenPrintScreenKeySettings => {
             (w!("open"), OsStr::new(PRINT_SCREEN_KEY_SETTINGS_URI))
+        }
+        NotificationClick::OpenOcrLanguageSettings => {
+            (w!("open"), OsStr::new(OCR_LANGUAGE_SETTINGS_URI))
         }
         // 只是让浏览器打开发布页面，本程序不下载任何东西。
         NotificationClick::OpenUrl(url) => (w!("open"), OsStr::new(url.as_str())),

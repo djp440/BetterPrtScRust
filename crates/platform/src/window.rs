@@ -12,6 +12,9 @@ pub enum StandaloneWindow {
         screenshot: Image,
         /// 识别完成后直接翻译（已配置翻译服务时；等待确认界面上的“翻译”）。
         translate: bool,
+        /// 不显示面板：识别完成后把文字复制到剪贴板，结果交回常驻实例去通知用户
+        /// （直达 OCR 且开了“识别后自动复制”时）。
+        auto_copy: bool,
     },
 }
 

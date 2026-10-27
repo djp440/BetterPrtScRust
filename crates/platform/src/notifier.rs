@@ -21,6 +21,8 @@ pub enum NotificationClick {
     /// 打开系统设置中控制“PrtSc 键交给系统截图工具”的页面
     /// （Windows：“键盘”设置页里的“使用 Print Screen 键打开屏幕截图”）。
     OpenPrintScreenKeySettings,
+    /// 打开系统设置里安装 OCR 语言包的页面（Windows：“语言和区域”）。
+    OpenOcrLanguageSettings,
 }
 
 /// 通知能力（Windows 上是托盘气泡）。

@@ -30,6 +30,8 @@ pub struct CaptureRequest {
     pub output: OutputOptions,
     /// 录屏选项；录屏（直达功能或等待确认界面上的“录屏”）用到。
     pub recording: RecordingOptions,
+    /// 直达 OCR 识别后自动复制、不弹结果面板（全局设置 `ocr_auto_copy`）。
+    pub ocr_auto_copy: bool,
 }
 
 impl CaptureRequest {
@@ -51,12 +53,19 @@ impl CaptureRequest {
             auto_save: false,
             output: OutputOptions::default(),
             recording: RecordingOptions::default(),
+            ocr_auto_copy: false,
         }
     }
 
     /// 同时打开自动保存。
     pub fn with_auto_save(mut self) -> Self {
         self.auto_save = true;
+        self
+    }
+
+    /// 同时打开“识别后自动复制，不弹面板”。
+    pub fn with_ocr_auto_copy(mut self) -> Self {
+        self.ocr_auto_copy = true;
         self
     }
 

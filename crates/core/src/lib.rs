@@ -92,10 +92,12 @@ pub use long_screenshot::{LongScreenshot, Stitched};
 pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{HOTKEY_PAUSE_LEASE, Reply, Request};
 pub use result_panel::{
-    Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel, Translation,
-    TranslationOutcome, TranslationStatus,
+    OcrCopy, Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel, Translation,
+    TranslationOutcome, TranslationStatus, copy_recognized_text,
 };
-pub use settings::{BindingSettings, Settings, SettingsDocument, SettingsProblem};
+pub use settings::{
+    BindingSettings, Settings, SettingsDocument, SettingsProblem, set_ocr_auto_copy,
+};
 pub use status::{BindingFailure, ResidentStatus, UpdateStatus};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};
 pub use translation::{TargetLanguage, TranslationConfig, TranslationError, TranslationProvider};

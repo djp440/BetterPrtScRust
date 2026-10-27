@@ -127,6 +127,11 @@ fn main() {
     };
     let result = run_result_panel(ResultPanelEnvironment {
         translate: false,
+        auto_copy: false,
+        save_auto_copy: Box::new(|on| {
+            println!("[预览] 识别后自动复制：{on}");
+            Ok(())
+        }),
         ui,
         language,
         screenshot: Image::from_rgba(1, 1, vec![255; 4]),

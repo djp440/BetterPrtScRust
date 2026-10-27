@@ -562,6 +562,15 @@ impl SettingsApp {
                 ),
             }
         }
+
+        ui.add_space(12.0);
+        ui.heading(texts.get("settings-section-ocr"));
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut settings.ocr_auto_copy,
+            texts.get("settings-ocr-auto-copy"),
+        );
+        hint(ui, texts.get("settings-ocr-auto-copy-hint"));
         if let Some(url) = open_page {
             self.open(url.as_ref());
         }

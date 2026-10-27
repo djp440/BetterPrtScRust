@@ -426,10 +426,32 @@ fn ocr_button_opens_result_panel_with_the_selection_and_exits() {
         [StandaloneWindow::ResultPanel {
             screenshot: desktop_pattern(REGION),
             translate: false,
+            auto_copy: false,
         }]
     );
     assert!(fake.clipboard().is_empty(), "OCR 不复制");
     assert!(saved_files(&fake).is_empty(), "OCR 不自动保存");
+}
+
+#[test]
+fn toolbar_ocr_still_opens_result_panel_when_auto_copy_is_on() {
+    let fake = desk();
+    let mut instance = awaiting(
+        &fake,
+        await_confirmation(CaptureMode::Region).with_ocr_auto_copy(),
+    );
+
+    click_button(&fake, &mut instance, "OCR");
+
+    assert_eq!(
+        fake.opened_windows(),
+        [StandaloneWindow::ResultPanel {
+            screenshot: desktop_pattern(REGION),
+            translate: false,
+            auto_copy: false,
+        }],
+        "“识别后自动复制”只影响直达 OCR"
+    );
 }
 
 #[test]
@@ -445,6 +467,7 @@ fn translate_button_opens_result_panel_that_translates_after_recognition() {
         [StandaloneWindow::ResultPanel {
             screenshot: desktop_pattern(REGION),
             translate: true,
+            auto_copy: false,
         }]
     );
     assert!(fake.http_requests().is_empty(), "打开面板时不联网");
@@ -468,6 +491,7 @@ fn ocr_of_window_await_confirmation_uses_the_window_content() {
         [StandaloneWindow::ResultPanel {
             screenshot: window.image().clone(),
             translate: false,
+            auto_copy: false,
         }]
     );
 }
@@ -574,6 +598,7 @@ fn direct_functions_still_go_straight_into_their_feature() {
         [StandaloneWindow::ResultPanel {
             screenshot: desktop_pattern(REGION),
             translate: false,
+            auto_copy: false,
         }]
     );
     assert!(fake.clipboard().is_empty());

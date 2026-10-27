@@ -24,6 +24,8 @@ pub struct Settings {
     pub check_for_updates: bool,
     pub autostart: bool,
     pub run_as_admin: bool,
+    /// 直达 OCR 识别后自动复制文字，不弹结果面板。
+    pub ocr_auto_copy: bool,
     /// 自动存储目录；`None` 表示默认目录（“图片”文件夹下的 `BetterPrtSc`）。
     pub save_dir: Option<PathBuf>,
     /// 命名模板的原文。
@@ -257,6 +259,7 @@ impl SettingsDocument {
             ),
             ("autostart", settings.autostart, old.autostart),
             ("run_as_admin", settings.run_as_admin, old.run_as_admin),
+            ("ocr_auto_copy", settings.ocr_auto_copy, old.ocr_auto_copy),
         ] {
             if new != old {
                 set_value(root, key, new.into());
@@ -342,6 +345,15 @@ impl SettingsDocument {
     }
 }
 
+/// 把配置文件全文 `text` 里的 `ocr_auto_copy` 改成 `on`（结果面板上的开关），其余内容原样保留。
+/// 配置文件有错误、无法写回时返回 `None`。
+pub fn set_ocr_auto_copy(text: &str, on: bool) -> Option<String> {
+    let document = SettingsDocument::parse(text).ok()?;
+    let mut settings = document.settings().clone();
+    settings.ocr_auto_copy = on;
+    document.render(&settings).ok()
+}
+
 /// 从解析好的配置得到设置。
 fn settings_of(config: &Config) -> Settings {
     Settings {
@@ -349,6 +361,7 @@ fn settings_of(config: &Config) -> Settings {
         check_for_updates: config.check_for_updates,
         autostart: config.autostart,
         run_as_admin: config.run_as_admin,
+        ocr_auto_copy: config.ocr_auto_copy,
         save_dir: match &config.output.save_dir {
             SaveDir::Default => None,
             SaveDir::Custom(dir) => Some(dir.clone()),

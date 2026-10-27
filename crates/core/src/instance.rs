@@ -12,9 +12,9 @@ use crate::region::{Ending, Handoff, HandoffTo, RegionCapture};
 use crate::window::WindowCapture;
 use crate::{
     BindingFailure, CaptureMode, CaptureRequest, Command, Config, CoreError, DEFAULT_CONFIG,
-    DirectFunction, Flow, HotkeyBinding, HotkeyRegistrationFailure, Locale, PostCaptureAction,
-    RegistrationError, Reply, Request, ResidentStatus, Texts, UpdateStatus, VERSION, action,
-    capture, update,
+    DirectFunction, Flow, HotkeyBinding, HotkeyRegistrationFailure, Locale, OcrCopy,
+    PostCaptureAction, RegistrationError, Reply, Request, ResidentStatus, Texts, UpdateStatus,
+    VERSION, action, capture, update,
 };
 
 /// 托盘菜单“设置”。
@@ -395,6 +395,38 @@ impl ResidentInstance {
         });
     }
 
+    /// 告诉用户“识别后自动复制”的结果（复制在结果面板子进程里完成）。
+    fn notify_ocr_copy(&self, copy: &OcrCopy) {
+        let texts = self.texts();
+        let (title, body, on_click) = match copy {
+            OcrCopy::Copied { characters } => (
+                texts.format("notification-ocr-copied-title", &[("count", characters)]),
+                texts.get("notification-ocr-copied-body"),
+                None,
+            ),
+            OcrCopy::Empty => (
+                texts.get("notification-ocr-empty-title"),
+                texts.get("notification-ocr-empty-body"),
+                None,
+            ),
+            OcrCopy::NoLanguagePack => (
+                texts.get("notification-ocr-no-language-pack-title"),
+                texts.get("notification-ocr-no-language-pack-body"),
+                Some(NotificationClick::OpenOcrLanguageSettings),
+            ),
+            OcrCopy::Failed(reason) => (
+                texts.get("notification-ocr-failed-title"),
+                reason.clone(),
+                None,
+            ),
+        };
+        self.platform.notifier.notify(Notification {
+            title,
+            body,
+            on_click,
+        });
+    }
+
     /// 执行转交来的请求，并把结果回复给发起方；需要用户操作的捕获等捕获结束再回复。
     /// 状态查询只读取、不执行命令。
     fn serve(&mut self, incoming: IncomingRequest) -> Result<Flow, CoreError> {
@@ -413,6 +445,11 @@ impl ResidentInstance {
             }
             Some((Request::ResumeHotkeys, None)) => {
                 self.hotkeys_paused_until = None;
+                incoming.reply(Reply::Done.encode());
+                return Ok(Flow::Continue);
+            }
+            Some((Request::OcrCopied(copy), None)) => {
+                self.notify_ocr_copy(copy);
                 incoming.reply(Reply::Done.encode());
                 return Ok(Flow::Continue);
             }
@@ -452,7 +489,10 @@ impl ResidentInstance {
                     }),
             ),
             Request::Activate => Command::Activate,
-            Request::Status | Request::PauseHotkeys | Request::ResumeHotkeys => return None,
+            Request::Status
+            | Request::PauseHotkeys
+            | Request::ResumeHotkeys
+            | Request::OcrCopied(_) => return None,
         })
     }
 
