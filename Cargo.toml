@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/platform",
+    "crates/platform-fake",
+    "crates/platform-windows",
+    "crates/ui",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+license = "GPL-3.0-only"
+
+# 依赖版本统一在此声明；成员 crate 用 `xxx.workspace = true` 引用。
+# 轻量指标是硬约束：新增依赖尽量 default-features = false，只开需要的 feature。
+[workspace.dependencies]
+bps-core = { path = "crates/core" }
+bps-platform = { path = "crates/platform" }
+bps-platform-fake = { path = "crates/platform-fake" }
+bps-platform-windows = { path = "crates/platform-windows" }
+bps-ui = { path = "crates/ui" }
+
+png = { version = "0.18", default-features = false }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+windows = { version = "0.62", default-features = false }
+# Direct2D 的 DrawTextLayout 要它的 Vector2；windows 本身已经依赖它，不增加体积。
+windows-numerics = { version = "0.3", default-features = false }
+
+# 输出格式编码器（bps-core）。
+jpeg-encoder = { version = "0.6", default-features = false, features = ["std"] }
+# 纯 Rust，编码器只支持无损 WebP。
+image-webp = { version = "0.2", default-features = false }
+# 纯 Rust（rav1e）；不开 asm（需要 nasm），开 threading 用多线程编码。
+ravif = { version = "0.13", default-features = false, features = ["threading"] }
+
+# 录屏 GIF 编码（bps-platform-windows）；color_quant 提供调色板量化。
+gif = { version = "0.14", default-features = false, features = ["std", "color_quant"] }
+
+# 界面文本（Fluent）。concurrent 版的 FluentBundle 可以放进 static 缓存。
+fluent-bundle = { version = "0.16", default-features = false }
+fluent-syntax = { version = "0.12", default-features = false }
+unic-langid = { version = "0.9", default-features = false }
+# 设置界面写回 config.toml 时保留用户的注释和格式。
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
+# 独立窗口界面（设置界面）。只在按需启动的子进程里加载，常驻实例不碰它（ADR 0005）。
+eframe = { version = "0.37", default-features = false, features = ["glow"] }
+
+# 只给 bps-platform-fake 用的解码器，测试里读回编码结果。
+zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
+avif-parse = { version = "2", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# debug 构建也优化第三方依赖：未优化的 PNG 编码处理一张 4K 截图要数秒。
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,17 @@
+[package]
+name = "bps-ui"
+description = "BetterPrtSc 的独立窗口界面（egui）：设置界面；只在按需启动的子进程里加载"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+bps-core.workspace = true
+bps-platform.workspace = true
+eframe.workspace = true
+
+# 只给 examples/result_panel_preview.rs 用：映射系统字体、读系统界面语言。
+[target.'cfg(windows)'.dev-dependencies]
+bps-platform-windows.workspace = true

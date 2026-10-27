@@ -1,0 +1,70 @@
+# 发布流水线：推送 v* tag 时构建便携 zip、Inno Setup 安装包与 Scoop manifest，
+# 检查安装包体积（< 15 MB，超标即失败），记录常驻内存（私有工作集，目标 < 30 MB），
+# 然后上传到 GitHub Releases。手动触发（workflow_dispatch）时只构建和检查，产物作为 artifact 上传。
+# 每一步都只调用 scripts/release 下的脚本，本地可以按同样的顺序运行。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 打包、检查轻量指标并发布
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: 安装 Inno Setup
+        run: choco upgrade innosetup --yes --no-progress
+
+      - name: 发布脚本自测
+        run: ./scripts/release/test-release.ps1
+
+      - name: 测试
+        run: cargo test --workspace --locked
+
+      - name: 打包（便携 zip、安装包、Scoop manifest）
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: ./scripts/release/package.ps1 -Tag "$env:RELEASE_TAG"
+
+      - name: 安装包体积检查（< 15 MB）
+        run: ./scripts/release/check-size.ps1 -Path dist/*-setup.exe, dist/*-portable.zip
+
+      - name: 记录常驻内存（私有工作集，目标 < 30 MB）
+        run: ./scripts/release/measure-memory.ps1 -Exe target/release/BetterPrtSc.exe -OutFile dist/memory.json
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: BetterPrtSc-dist
+          path: dist/
+          if-no-files-found: error
+
+      - name: 发布到 GitHub Releases
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release/publish.ps1 -Tag "$env:GITHUB_REF_NAME"

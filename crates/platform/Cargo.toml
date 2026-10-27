@@ -1,0 +1,10 @@
+[package]
+name = "bps-platform"
+description = "BetterPrtSc 的平台能力 trait（只定义接口，不含实现）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
