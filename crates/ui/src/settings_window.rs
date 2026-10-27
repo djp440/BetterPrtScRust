@@ -12,9 +12,9 @@ use std::time::Duration;
 use bps_core::{
     BindingFailure, BindingSettings, CaptureKind, CaptureMode, FilenameTemplate, Language,
     OutputFormat, PostCaptureAction, ResidentStatus, Settings, SettingsDocument, SettingsProblem,
-    Texts, UpdateStatus, VERSION,
+    Texts, UpdateStatus, VERSION, VideoQuality,
 };
-use bps_platform::{Hotkey, Key, Modifiers};
+use bps_platform::{AudioDevice, Hotkey, Key, Modifiers, VideoCodec};
 use eframe::egui::{self, RichText};
 
 use crate::hotkey_recording::{
@@ -28,6 +28,26 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// 弹出“选择文件夹”对话框（标题、起始目录），取消时返回 `None`。
 pub type PickFolder = Arc<dyn Fn(&str, Option<&Path>) -> Option<PathBuf> + Send + Sync>;
+
+/// 探测这台电脑的录屏能力（要试着建编码器，约需一秒）。在后台线程里调用。
+pub type ProbeRecording = Arc<dyn Fn() -> RecordingCapabilities + Send + Sync>;
+
+/// 这台电脑的录屏能力。
+#[derive(Debug, Clone)]
+pub struct RecordingCapabilities {
+    /// 不能用的视频编码和原因。
+    pub unsupported_codecs: Vec<(VideoCodec, String)>,
+    /// 系统里没有解码器的视频编码：能录，但系统播放器放不了。
+    pub undecodable_codecs: Vec<VideoCodec>,
+    /// 可用的麦克风；列不出来时是原因。
+    pub microphones: Result<Vec<AudioDevice>, String>,
+}
+
+/// 自定义码率的默认值和范围（千比特每秒）。
+const DEFAULT_CUSTOM_BITRATE: u32 = 8_000;
+const CUSTOM_BITRATE_RANGE: std::ops::RangeInclusive<u32> = 300..=100_000;
+/// 帧率下拉框里的常用值。
+const FRAME_RATES: [u32; 4] = [15, 24, 30, 60];
 
 /// 设置界面需要的环境。
 pub struct SettingsEnvironment {
@@ -45,6 +65,8 @@ pub struct SettingsEnvironment {
     /// 普通权限的程序能改写本程序（例如装在用户自己的目录里）。
     /// 这时开启“以管理员身份运行”有提权风险，界面上给出提示。
     pub program_writable_by_standard_users: bool,
+    /// 探测录屏能力（可用的视频编码、麦克风）。
+    pub probe_recording: ProbeRecording,
 }
 
 /// 打开设置界面，运行到用户关闭它。
@@ -72,6 +94,7 @@ struct SettingsApp {
     key_capture: StartKeyCapture,
     pause_hotkeys: PauseHotkeys,
     program_writable_by_standard_users: bool,
+    probe_recording: ProbeRecording,
 
     page: Page,
     group: Group,
@@ -84,6 +107,9 @@ struct SettingsApp {
     resident: Resident,
     statuses: Receiver<Option<ResidentStatus>>,
     picked_folder: Option<Receiver<Option<PathBuf>>>,
+    /// 录屏能力；第一次打开录屏分组时才探测。
+    capabilities: Option<RecordingCapabilities>,
+    probing: Option<Receiver<RecordingCapabilities>>,
     notice: Option<Notice>,
     asking_to_close: bool,
     may_close: bool,
@@ -97,17 +123,25 @@ enum Group {
     General,
     Hotkeys,
     Saving,
+    Recording,
     About,
 }
 
 impl Group {
-    const ALL: [Group; 4] = [Group::General, Group::Hotkeys, Group::Saving, Group::About];
+    const ALL: [Group; 5] = [
+        Group::General,
+        Group::Hotkeys,
+        Group::Saving,
+        Group::Recording,
+        Group::About,
+    ];
 
     fn label(self, texts: &Texts) -> String {
         texts.get(match self {
             Group::General => "settings-group-general",
             Group::Hotkeys => "settings-group-hotkeys",
             Group::Saving => "settings-group-saving",
+            Group::Recording => "settings-group-recording",
             Group::About => "settings-group-about",
         })
     }
@@ -129,6 +163,8 @@ struct Editor {
     settings: Settings,
     /// 自定义存储目录输入框的内容；切到默认目录再切回来时保留。
     custom_dir: String,
+    /// 自定义码率输入框的值（千比特每秒）；切到档位再切回来时保留。
+    custom_bitrate: u32,
     /// 保存时发现配置文件已被别人改过。
     changed_elsewhere: bool,
 }
@@ -141,11 +177,16 @@ impl Editor {
             .as_ref()
             .map(|dir| dir.display().to_string())
             .unwrap_or_default();
+        let custom_bitrate = match settings.recording.quality {
+            VideoQuality::Custom(kbps) => kbps,
+            _ => DEFAULT_CUSTOM_BITRATE,
+        };
         Editor {
             document,
             on_disk,
             settings,
             custom_dir,
+            custom_bitrate,
             changed_elsewhere: false,
         }
     }
@@ -180,6 +221,7 @@ impl SettingsApp {
             key_capture,
             pause_hotkeys,
             program_writable_by_standard_users,
+            probe_recording,
         } = environment;
         let page = match loaded {
             Loaded::Editable { document, on_disk } => {
@@ -194,6 +236,7 @@ impl SettingsApp {
             key_capture,
             pause_hotkeys,
             program_writable_by_standard_users,
+            probe_recording,
             page,
             group: Group::General,
             recording: None,
@@ -202,6 +245,8 @@ impl SettingsApp {
             resident: Resident::Unknown,
             statuses: poll_status(query_status, ctx),
             picked_folder: None,
+            capabilities: None,
+            probing: None,
             notice: None,
             asking_to_close: false,
             may_close: false,
@@ -342,6 +387,31 @@ impl SettingsApp {
                 editor.settings.save_dir = Some(dir);
             }
         }
+        if let Some(receiver) = &self.probing
+            && let Ok(capabilities) = receiver.try_recv()
+        {
+            self.probing = None;
+            self.capabilities = Some(capabilities);
+        }
+    }
+
+    /// 在后台线程里探测录屏能力，探测完刷新界面。
+    fn start_probing(&mut self, ctx: &egui::Context) {
+        if self.probing.is_some() {
+            return;
+        }
+        let probe = self.probe_recording.clone();
+        let ctx = ctx.clone();
+        let (sender, receiver) = mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("bps-probe-recording".to_owned())
+            .spawn(move || {
+                let _ = sender.send(probe());
+                ctx.request_repaint();
+            });
+        if spawned.is_ok() {
+            self.probing = Some(receiver);
+        }
     }
 
     fn start_picking_folder(&mut self, ctx: &egui::Context, title: String) {
@@ -454,6 +524,7 @@ impl SettingsApp {
             Group::General => self.general_section(ui, texts),
             Group::Hotkeys => self.bindings_section(ui, texts),
             Group::Saving => self.saving_section(ui, texts),
+            Group::Recording => self.recording_section(ui, texts),
             Group::About => self.about_section(ui, texts),
         }
         ui.add_space(8.0);
@@ -473,6 +544,232 @@ impl SettingsApp {
             self.group = chosen;
             // 离开热键页就结束录制。
             self.recording = None;
+            if chosen == Group::Recording && self.capabilities.is_none() {
+                let ctx = ui.ctx().clone();
+                self.start_probing(&ctx);
+            }
+        }
+    }
+
+    fn recording_section(&mut self, ui: &mut egui::Ui, texts: &Texts) {
+        let probing = self.probing.is_some();
+        let mut refresh = false;
+        let capabilities = self.capabilities.clone();
+        let Page::Editing(editor) = &mut self.page else {
+            return;
+        };
+        let settings = &mut editor.settings.recording;
+        ui.heading(texts.get("settings-section-recording"));
+        hint(ui, texts.get("settings-recording-hint"));
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label(texts.get("settings-recording-frame-rate"));
+            let label = |rate: Option<u32>| match rate {
+                Some(rate) => texts.format("settings-recording-fps", &[("fps", &rate)]),
+                None => texts.get("settings-recording-frame-rate-default"),
+            };
+            egui::ComboBox::from_id_salt("frame-rate")
+                .selected_text(label(settings.frame_rate))
+                .show_ui(ui, |ui| {
+                    let mut choices: Vec<Option<u32>> = vec![None];
+                    choices.extend(FRAME_RATES.map(Some));
+                    // 配置文件里手写的其他帧率也列出来，免得打开下拉框就丢了。
+                    if !choices.contains(&settings.frame_rate) {
+                        choices.push(settings.frame_rate);
+                    }
+                    for rate in choices {
+                        ui.selectable_value(&mut settings.frame_rate, rate, label(rate));
+                    }
+                });
+        });
+        ui.checkbox(
+            &mut settings.show_cursor,
+            texts.get("settings-recording-show-cursor"),
+        );
+
+        ui.add_space(10.0);
+        ui.label(RichText::new(texts.get("settings-recording-mp4")).strong());
+        hint(ui, texts.get("settings-recording-mp4-hint"));
+        let unsupported = |codec: VideoCodec| -> Option<String> {
+            match &capabilities {
+                Some(capabilities) => capabilities
+                    .unsupported_codecs
+                    .iter()
+                    .find(|(c, _)| *c == codec)
+                    .map(|(_, reason)| reason.clone()),
+                // 没探测完之前只能选 H.264。
+                None if codec != VideoCodec::H264 => Some(texts.get("settings-recording-probing")),
+                None => None,
+            }
+        };
+        ui.horizontal(|ui| {
+            ui.label(texts.get("settings-recording-codec"));
+            egui::ComboBox::from_id_salt("video-codec")
+                .selected_text(settings.codec.label())
+                .show_ui(ui, |ui| {
+                    for codec in VideoCodec::ALL {
+                        let reason = unsupported(codec);
+                        let item = ui.add_enabled(
+                            reason.is_none() || settings.codec == codec,
+                            egui::Button::selectable(settings.codec == codec, codec.label()),
+                        );
+                        if item.clicked() {
+                            settings.codec = codec;
+                        }
+                        if let Some(reason) = reason {
+                            item.on_disabled_hover_text(&reason).on_hover_text(reason);
+                        }
+                    }
+                });
+            if probing {
+                ui.spinner();
+            }
+        });
+        if capabilities.is_some()
+            && let Some(reason) = unsupported(settings.codec)
+        {
+            warning(
+                ui,
+                texts.format(
+                    "settings-recording-codec-unsupported",
+                    &[("codec", &settings.codec.label()), ("reason", &reason)],
+                ),
+            );
+        }
+        if let Some(capabilities) = &capabilities
+            && unsupported(settings.codec).is_none()
+            && capabilities.undecodable_codecs.contains(&settings.codec)
+        {
+            warning(
+                ui,
+                texts.format(
+                    "settings-recording-codec-no-decoder",
+                    &[("codec", &settings.codec.label())],
+                ),
+            );
+        }
+        if let Some(capabilities) = &capabilities {
+            for (codec, reason) in &capabilities.unsupported_codecs {
+                hint(
+                    ui,
+                    texts.format(
+                        "settings-recording-codec-unavailable",
+                        &[("codec", &codec.label()), ("reason", reason)],
+                    ),
+                );
+            }
+        }
+
+        ui.add_space(4.0);
+        ui.label(texts.get("settings-recording-quality"));
+        let mut quality = settings.quality;
+        ui.horizontal_wrapped(|ui| {
+            for (preset, key) in [
+                (VideoQuality::Low, "settings-recording-quality-low"),
+                (
+                    VideoQuality::Standard,
+                    "settings-recording-quality-standard",
+                ),
+                (VideoQuality::High, "settings-recording-quality-high"),
+            ] {
+                ui.radio_value(&mut quality, preset, texts.get(key));
+            }
+        });
+        ui.horizontal(|ui| {
+            let custom = matches!(quality, VideoQuality::Custom(_));
+            if ui
+                .radio(custom, texts.get("settings-recording-quality-custom"))
+                .clicked()
+            {
+                quality = VideoQuality::Custom(editor.custom_bitrate);
+            }
+            let field = ui.add_enabled(
+                custom,
+                egui::DragValue::new(&mut editor.custom_bitrate)
+                    .range(CUSTOM_BITRATE_RANGE)
+                    .speed(50.0)
+                    .suffix(" kbps"),
+            );
+            if field.changed() && custom {
+                quality = VideoQuality::Custom(editor.custom_bitrate);
+            }
+        });
+        settings.quality = quality;
+        hint(ui, texts.get("settings-recording-quality-hint"));
+
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut settings.system_audio,
+            texts.get("settings-recording-system-audio"),
+        );
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut settings.microphone,
+                texts.get("settings-recording-microphone"),
+            );
+            let devices: &[AudioDevice] = match capabilities.as_ref().map(|c| &c.microphones) {
+                Some(Ok(devices)) => devices,
+                _ => &[],
+            };
+            let device_label = |id: &Option<String>| match id {
+                None => texts.get("settings-recording-microphone-default"),
+                Some(id) => devices
+                    .iter()
+                    .find(|d| &d.id == id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| {
+                        texts.format("settings-recording-microphone-missing", &[("id", id)])
+                    }),
+            };
+            ui.add_enabled_ui(settings.microphone, |ui| {
+                egui::ComboBox::from_id_salt("microphone")
+                    .selected_text(device_label(&settings.microphone_device))
+                    .width(260.0)
+                    .show_ui(ui, |ui| {
+                        let mut choices: Vec<Option<String>> = vec![None];
+                        choices.extend(devices.iter().map(|d| Some(d.id.clone())));
+                        if !choices.contains(&settings.microphone_device) {
+                            choices.push(settings.microphone_device.clone());
+                        }
+                        for id in choices {
+                            let label = device_label(&id);
+                            ui.selectable_value(&mut settings.microphone_device, id, label);
+                        }
+                    });
+            });
+            if ui
+                .add_enabled(
+                    !probing,
+                    egui::Button::new(texts.get("settings-recording-refresh")),
+                )
+                .clicked()
+            {
+                refresh = true;
+            }
+        });
+        match capabilities.as_ref().map(|c| &c.microphones) {
+            Some(Err(reason)) => warning(
+                ui,
+                texts.format(
+                    "settings-recording-microphones-failed",
+                    &[("error", reason)],
+                ),
+            ),
+            Some(Ok(devices)) => {
+                if let Some(id) = &settings.microphone_device
+                    && !devices.iter().any(|d| &d.id == id)
+                {
+                    warning(ui, texts.get("settings-recording-microphone-fallback"));
+                }
+            }
+            None => {}
+        }
+        hint(ui, texts.get("settings-recording-audio-hint"));
+
+        if refresh {
+            let ctx = ui.ctx().clone();
+            self.start_probing(&ctx);
         }
     }
 

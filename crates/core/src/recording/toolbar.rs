@@ -1,6 +1,7 @@
 //! 录屏控制条：布局、命中测试和每一刻要显示的内容（[`RecordingToolbarView`]）。
 //!
-//! 控制条从左到右是：录制指示点、已录时长 | 暂停 / 继续、停止。它贴在区域边框外侧：优先在
+//! 控制条从左到右是：录制指示点、已录时长 | 系统声音、麦克风 | 暂停 / 继续、停止（没有音轨时
+//! 没有中间两个开关；开着的开关是白字，关着的是灰字加删除线）。它贴在区域边框外侧：优先在
 //! 下方（与区域右边对齐，可以左右挪动），下方放不下时放到上方，上下都放不下时放到右侧、左侧
 //! （与区域下边对齐，可以上下挪动）；四周都放不下（例如录制整块显示器）时放在区域内的右下角——
 //! 平台保证控制条不会被录进视频，只是挡住了这一小块。控制条总是整个落在某一块显示器以内，
@@ -19,14 +20,24 @@ use bps_platform::{
     RecordingToolbarView, Rect, RegionBorder,
 };
 
+use super::AudioInput;
 use crate::Texts;
 
 /// 控制条上的按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Button {
+    /// 系统声音或麦克风的开关。
+    Audio(AudioInput),
     /// 暂停（录制中）或继续（已暂停）。
     PauseResume,
     Stop,
+}
+
+/// 两个声音开关此刻的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AudioSwitches {
+    pub system: bool,
+    pub microphone: bool,
 }
 
 /// 以下尺寸是 100% 缩放下的值（物理像素），与标注工具条一致。
@@ -55,13 +66,17 @@ const TEXT: Color = Color::rgba(255, 255, 255, 255);
 const RECORDING: Color = Color::rgba(240, 40, 40, 255);
 /// 已暂停：指示点和区域边框是琥珀色。
 const PAUSED: Color = Color::rgba(255, 176, 0, 255);
+/// 关着的声音开关的文字和删除线。
+const SWITCHED_OFF: Color = Color::rgba(255, 255, 255, 110);
 
 /// 一次布局好的控制条。
 pub(crate) struct Toolbar {
     bounds: Rect,
     indicator: Rect,
     time: Rect,
-    separator: Rect,
+    separators: Vec<Rect>,
+    /// 声音开关（按钮范围、文字宽度、文字）；没有音轨时为空。
+    switches: Vec<(AudioInput, Rect, i32, String)>,
     pause: Rect,
     stop: Rect,
     font_size: f32,
@@ -81,11 +96,13 @@ pub(crate) struct ToolbarState {
     pub paused: bool,
     /// 鼠标指针所在的按钮。
     pub hovered: Option<Button>,
+    /// 声音开关；没有音轨时为 `None`。
+    pub audio: Option<AudioSwitches>,
 }
 
 impl Toolbar {
-    /// 贴着录制范围 `region` 的控制条，文字用 `texts` 的语言。
-    pub fn beside(region: Rect, displays: &[Display], texts: &Texts) -> Self {
+    /// 贴着录制范围 `region` 的控制条，文字用 `texts` 的语言；`audio` 表示有音轨（显示声音开关）。
+    pub fn beside(region: Rect, displays: &[Display], texts: &Texts, audio: bool) -> Self {
         let corner = Point::new(right(region) - 1, bottom(region) - 1);
         let scale = displays
             .iter()
@@ -113,14 +130,33 @@ impl Toolbar {
         let time = cell(right(indicator), text(WIDEST_TIME) + button_padding);
         let margin = px(SEPARATOR_MARGIN);
         let line = px(1.0).max(1);
-        let separator = Rect::new(
-            right(time) + margin,
-            padding + margin,
-            line as u32,
-            (height - 2 * margin).max(1) as u32,
-        );
+        let separator_at = |x: i32| {
+            Rect::new(
+                x + margin,
+                padding + margin,
+                line as u32,
+                (height - 2 * margin).max(1) as u32,
+            )
+        };
+        let mut separators = vec![separator_at(right(time))];
+        let mut switches = Vec::new();
+        if audio {
+            let mut x = right(separators[0]) + margin;
+            for (input, key) in [
+                (AudioInput::System, "recording-toolbar-system-audio"),
+                (AudioInput::Microphone, "recording-toolbar-microphone"),
+            ] {
+                let label = texts.get(key);
+                let width = text(&label);
+                let rect = cell(x, (width + 2 * button_padding).max(height));
+                x = right(rect) + px(BUTTON_GAP);
+                switches.push((input, rect, width, label));
+            }
+            separators.push(separator_at(x - px(BUTTON_GAP)));
+        }
+        let last_separator = *separators.last().expect("至少有一条分隔线");
         let pause_width = text(&pause_label).max(text(&resume_label)) + 2 * button_padding;
-        let pause = cell(right(separator) + margin, pause_width.max(height));
+        let pause = cell(right(last_separator) + margin, pause_width.max(height));
         let stop = cell(
             right(pause) + px(BUTTON_GAP),
             (text(&stop_label) + 2 * button_padding).max(height),
@@ -140,7 +176,11 @@ impl Toolbar {
             bounds: Rect::new(left, top, size.0 as u32, size.1 as u32),
             indicator: shift(indicator),
             time: shift(time),
-            separator: shift(separator),
+            separators: separators.into_iter().map(shift).collect(),
+            switches: switches
+                .into_iter()
+                .map(|(input, rect, width, label)| (input, shift(rect), width, label))
+                .collect(),
             pause: shift(pause),
             stop: shift(stop),
             font_size,
@@ -154,7 +194,9 @@ impl Toolbar {
 
     /// `point` 处的按钮。
     pub fn button_at(&self, point: Point) -> Option<Button> {
-        if self.pause.contains(point) {
+        if let Some((input, ..)) = self.switches.iter().find(|s| s.1.contains(point)) {
+            Some(Button::Audio(*input))
+        } else if self.pause.contains(point) {
             Some(Button::PauseResume)
         } else if self.stop.contains(point) {
             Some(Button::Stop)
@@ -184,11 +226,42 @@ impl Toolbar {
             },
             text(self.indicator, INDICATOR, accent),
             text(self.time, &format_time(state.recorded), TEXT),
-            OverlayItem::Fill {
-                rect: self.separator,
-                color: SEPARATOR,
-            },
         ];
+        items.extend(self.separators.iter().map(|&rect| OverlayItem::Fill {
+            rect,
+            color: SEPARATOR,
+        }));
+        let switches = state.audio.unwrap_or(AudioSwitches {
+            system: false,
+            microphone: false,
+        });
+        for (input, rect, width, label) in &self.switches {
+            let button = Button::Audio(*input);
+            if state.hovered == Some(button) {
+                items.push(OverlayItem::Fill {
+                    rect: *rect,
+                    color: HOVER,
+                });
+            }
+            let on = match input {
+                AudioInput::System => switches.system,
+                AudioInput::Microphone => switches.microphone,
+            };
+            items.push(text(*rect, label, if on { TEXT } else { SWITCHED_OFF }));
+            if !on {
+                // 删除线：横穿文字中间。
+                let center = rect.x + rect.width as i32 / 2;
+                items.push(OverlayItem::Fill {
+                    rect: Rect::new(
+                        center - width / 2,
+                        rect.y + rect.height as i32 / 2,
+                        (*width).max(1) as u32,
+                        self.outline,
+                    ),
+                    color: SWITCHED_OFF,
+                });
+            }
+        }
         let pause_label = if state.paused {
             &self.resume_label
         } else {
@@ -268,7 +341,13 @@ impl Controls {
 
     /// 按此刻的状态显示控制条；与正显示着的样子相同时什么也不做。显示失败时隐藏控制条，
     /// 不影响录制。
-    pub fn refresh(&mut self, platform: &mut Platform, recorded: Duration, paused: bool) {
+    pub fn refresh(
+        &mut self,
+        platform: &mut Platform,
+        recorded: Duration,
+        paused: bool,
+        audio: Option<AudioSwitches>,
+    ) {
         if self.broken {
             return;
         }
@@ -276,6 +355,7 @@ impl Controls {
             recorded,
             paused,
             hovered: self.hovered,
+            audio,
         });
         if self.shown.as_ref() == Some(&view) {
             return;

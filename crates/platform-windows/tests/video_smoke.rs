@@ -14,10 +14,12 @@ use std::time::{Duration, Instant};
 use bps_platform::{
     Backdrop, Color, Display, FileSystem, FrameSource, Image, NewFile, OverlayInput, OverlayItem,
     OverlayKey, OverlayScene, PlatformEvent, Rect, SelectionOverlay, StreamFrame, StreamOptions,
-    Ticker, VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoTarget,
+    Ticker, VideoCodec, VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource,
+    VideoTarget,
 };
 use bps_platform_windows::{
     DxgiFrameSource, EventLoop, MfVideoEncoder, WgcVideoSource, WindowsFileSystem, dpi,
+    undecodable_video_codecs, unsupported_video_codecs,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Media::MediaFoundation::{
@@ -25,7 +27,8 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION,
     MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL, MFMediaType_Video,
-    MFSTARTUP_LITE, MFShutdown, MFStartup, MFVideoFormat_H264, MFVideoFormat_RGB32,
+    MFSTARTUP_LITE, MFShutdown, MFStartup, MFVideoFormat_AV1, MFVideoFormat_H264,
+    MFVideoFormat_HEVC, MFVideoFormat_RGB32,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -34,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetWindowDisplayAffinity, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
     PostMessageW, WDA_EXCLUDEFROMCAPTURE, WM_KEYDOWN,
 };
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{GUID, HSTRING, PCWSTR, w};
 
 const MAGENTA: [u8; 4] = [255, 0, 255, 255];
 
@@ -149,6 +152,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
             show_cursor: false,
             fps: 30,
             duration: Duration::from_secs(1),
+            codec: VideoCodec::H264,
         },
     );
     let capture_diff = mean_difference(&recorded.first_image, &recorded.screenshot);
@@ -170,6 +174,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
         video.timestamps.last()
     );
     assert_eq!((video.width, video.height), (384, 256));
+    assert_eq!(video.subtype, MFVideoFormat_H264);
     assert_eq!(video.frame_rate, (30, 1));
     assert_eq!(video.timestamps.len() as u64, recorded.written);
     for (k, t) in video.timestamps.iter().enumerate() {
@@ -198,6 +203,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
             show_cursor: true,
             fps: 10,
             duration: Duration::from_millis(500),
+            codec: VideoCodec::H264,
         },
     );
     let video = decode(&recorded.path);
@@ -216,6 +222,73 @@ fn records_region_to_mp4_with_constant_frame_rate() {
     assert!(!dir.exists(), "应已删除录出的文件");
 }
 
+#[test]
+#[ignore = "真机冒烟：用这台电脑支持的每种编码录约 1 秒的视频"]
+fn records_with_every_supported_codec() {
+    assert!(dpi::ensure_per_monitor_v2());
+    let event_loop = EventLoop::new().unwrap();
+    let primary = DxgiFrameSource::new()
+        .displays()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.is_primary)
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("bps-codec-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = RemoveDirOnDrop(dir.clone());
+
+    let unsupported = unsupported_video_codecs();
+    let undecodable = undecodable_video_codecs();
+    eprintln!("不支持的编码：{unsupported:?}；系统不能解码：{undecodable:?}");
+    assert!(
+        !undecodable.contains(&VideoCodec::H264),
+        "H.264 系统总能解码"
+    );
+    for codec in VideoCodec::ALL {
+        if unsupported.iter().any(|(c, _)| *c == codec) {
+            continue;
+        }
+        let region = Rect::new(primary.bounds.x + 64, primary.bounds.y + 64, 384, 256);
+        let recorded = record(
+            &event_loop,
+            &primary,
+            &dir,
+            &format!("{codec:?}"),
+            Take {
+                region,
+                show_cursor: false,
+                fps: 30,
+                duration: Duration::from_secs(1),
+                codec,
+            },
+        );
+        let size = std::fs::metadata(&recorded.path).unwrap().len();
+        let expected = match codec {
+            VideoCodec::H264 => MFVideoFormat_H264,
+            VideoCodec::H265 => MFVideoFormat_HEVC,
+            VideoCodec::Av1 => MFVideoFormat_AV1,
+        };
+        if undecodable.contains(&codec) {
+            // 没有解码器时只能确认文件里是这种编码（Source Reader 读容器不需要解码器）。
+            assert_eq!(native_subtype(&recorded.path), expected, "{codec:?}");
+            eprintln!("{}：{size} 字节；系统没有解码器，不检查画面", codec.label());
+            continue;
+        }
+        let video = decode(&recorded.path);
+        let diff = mean_difference(&video.first_image, &recorded.first_image);
+        eprintln!(
+            "{}：{} 字节，解码 {} 帧，首帧平均差 {diff:.2}",
+            codec.label(),
+            size,
+            video.timestamps.len()
+        );
+        assert_eq!(video.subtype, expected, "{codec:?}");
+        assert_eq!((video.width, video.height), (384, 256));
+        assert_eq!(video.timestamps.len() as u64, recorded.written, "{codec:?}");
+        assert!(diff < 16.0, "{codec:?} 解码出的画面应与编码前一致");
+    }
+}
+
 struct Recorded {
     path: PathBuf,
     written: u64,
@@ -231,6 +304,7 @@ struct Take {
     show_cursor: bool,
     fps: u32,
     duration: Duration,
+    codec: VideoCodec,
 }
 
 /// 像 `core` 一样录一段视频：节拍到时按单调时间补齐帧，写进 `.part` 临时文件，最后改名。
@@ -246,6 +320,7 @@ fn record(
         show_cursor,
         fps,
         duration,
+        codec,
     } = take;
     let mut file_system = WindowsFileSystem::new();
     let temp = dir.join(format!("{name}.mp4.part"));
@@ -264,6 +339,8 @@ fn record(
                 width: region.width,
                 height: region.height,
                 frame_rate: fps,
+                codec,
+                bitrate: 4_000_000,
                 audio: None,
             },
         )
@@ -324,12 +401,32 @@ fn record(
 }
 
 struct Decoded {
+    /// 视频流的编码（`MFVideoFormat_*`）。
+    subtype: GUID,
     width: u32,
     height: u32,
     frame_rate: (u32, u32),
     /// 各帧的时间戳（100 纳秒）。
     timestamps: Vec<i64>,
     first_image: Image,
+}
+
+/// MP4 里视频流的编码（`MFVideoFormat_*`），不解码。
+fn native_subtype(path: &Path) -> GUID {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).unwrap();
+        let reader =
+            MFCreateSourceReaderFromURL(&HSTRING::from(path.to_str().unwrap()), None).unwrap();
+        let subtype = reader
+            .GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, 0)
+            .unwrap()
+            .GetGUID(&MF_MT_SUBTYPE)
+            .unwrap();
+        drop(reader);
+        MFShutdown().unwrap();
+        subtype
+    }
 }
 
 /// 用 Media Foundation 的 Source Reader 解码 MP4，输出 RGB32。
@@ -348,7 +445,7 @@ fn decode(path: &Path) -> Decoded {
                 .unwrap();
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         let native = reader.GetNativeMediaType(stream, 0).unwrap();
-        assert_eq!(native.GetGUID(&MF_MT_SUBTYPE).unwrap(), MFVideoFormat_H264);
+        let subtype = native.GetGUID(&MF_MT_SUBTYPE).unwrap();
         let size = native.GetUINT64(&MF_MT_FRAME_SIZE).unwrap();
         let rate = native.GetUINT64(&MF_MT_FRAME_RATE).unwrap();
         let output = MFCreateMediaType().unwrap();
@@ -358,7 +455,9 @@ fn decode(path: &Path) -> Decoded {
         output
             .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
             .unwrap();
-        reader.SetCurrentMediaType(stream, None, &output).unwrap();
+        reader
+            .SetCurrentMediaType(stream, None, &output)
+            .expect("系统应能解码这种视频（系统播放器同样用它）");
         // RGB 的行跨度为负表示自下而上；没有这个属性时按 RGB 的默认（自下而上）处理。
         let stride = reader
             .GetCurrentMediaType(stream)
@@ -397,6 +496,7 @@ fn decode(path: &Path) -> Decoded {
         drop(reader);
         MFShutdown().unwrap();
         Decoded {
+            subtype,
             width,
             height,
             frame_rate: ((rate >> 32) as u32, rate as u32),

@@ -1,19 +1,23 @@
-//! 用 Media Foundation 的 Sink Writer 把纹理编码成 MP4（H.264 High profile），可以带一条 AAC 音轨
-//! （系统自带的 AAC 编码器：输入 16 位 PCM，44.1 / 48 kHz、单声道或双声道）。
+//! 用 Media Foundation 的 Sink Writer 把纹理编码成 MP4（H.264 High profile、H.265 Main profile 或
+//! AV1），可以带一条 AAC 音轨（系统自带的 AAC 编码器：输入 16 位 PCM，44.1 / 48 kHz、单声道或双声道）。
+//! 码率由 `core` 算好放在 [`VideoSettings::bitrate`] 里。
 //!
 //! Sink Writer 拿到录屏设备的 DXGI 设备管理器，并允许使用硬件 MFT：BGRA → NV12 的颜色转换和
-//! H.264 编码都优先在 GPU 上完成，没有硬件编码器时自动退回系统自带的软件编码器。
+//! 视频编码都优先在 GPU 上完成，没有硬件编码器时自动退回系统的软件编码器（H.264 系统自带；
+//! H.265 要装“HEVC 视频扩展”；AV1 通常只有显卡的硬件编码器）。
 //! 输入样本直接引用视频源给出的纹理（[`TextureFrame`]），不拷贝。
 
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use bps_platform::{AudioFormat, PlatformError, VideoFrame, VideoSettings, VideoWriter};
+use bps_platform::{
+    AudioFormat, PlatformError, VideoCodec, VideoFrame, VideoSettings, VideoWriter,
+};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize, IMF2DBuffer, IMFAttributes,
-    IMFByteStream, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter,
+    CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize, IMF2DBuffer, IMFActivate,
+    IMFAttributes, IMFByteStream, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
@@ -22,9 +26,10 @@ use windows::Win32::Media::MediaFoundation::{
     MF_TRANSCODE_CONTAINERTYPE, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_PCM,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
     MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Audio,
-    MFMediaType_Video, MFSTARTUP_LITE, MFShutdown, MFStartup, MFTranscodeContainerType_MPEG4,
-    MFVideoFormat_ARGB32, MFVideoFormat_H264, MFVideoInterlace_Progressive,
-    eAVEncH264VProfile_High,
+    MFMediaType_Video, MFSTARTUP_LITE, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
+    MFT_ENUM_FLAG_ALL, MFT_REGISTER_TYPE_INFO, MFTEnumEx, MFTranscodeContainerType_MPEG4,
+    MFVideoFormat_ARGB32, MFVideoFormat_AV1, MFVideoFormat_H264, MFVideoFormat_HEVC,
+    MFVideoInterlace_Progressive, eAVEncH264VProfile_High, eAVEncH265VProfile_Main_420_8,
 };
 use windows::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::core::{GUID, Interface, w};
@@ -33,13 +38,8 @@ use super::{TextureFrame, VideoDevice};
 use crate::autostart::ComApartment;
 use crate::error::{wide_path, win_error};
 
-/// 每像素每帧的目标码率（比特）：1080p 30 fps 约 7.5 Mbps，录屏的文字和界面足够清晰。
-const BITS_PER_PIXEL_PER_FRAME: f64 = 0.12;
 /// 宽和高都不小于它时才用硬件编码器。
 const MIN_HARDWARE_SIZE: u32 = 256;
-/// 码率的上下限（比特每秒）。
-const MIN_BITRATE: f64 = 1_000_000.0;
-const MAX_BITRATE: f64 = 60_000_000.0;
 /// AAC 音轨的码率（字节每秒）：24000 即 192 kbps，编码器支持的最高档。
 const AAC_BYTES_PER_SECOND: u32 = 24_000;
 /// 一个 AAC 帧的采样帧数：音轨一个样本也没有时写入这么多静音，免得写完文件时出错。
@@ -217,7 +217,48 @@ impl AudioStreamState {
     }
 }
 
-/// 建好写 `path` 的 Sink Writer（H.264 输出、BGRA 输入；有声音时再加一条 AAC 音轨）并开始写入，
+/// `codec` 的 Media Foundation 输出格式。
+fn subtype(codec: VideoCodec) -> GUID {
+    match codec {
+        VideoCodec::H264 => MFVideoFormat_H264,
+        VideoCodec::H265 => MFVideoFormat_HEVC,
+        VideoCodec::Av1 => MFVideoFormat_AV1,
+    }
+}
+
+/// 系统里有没有 `codec` 的解码器（系统播放器靠它播放录好的视频）。
+/// Windows 10 的 H.265 解码器要从 Microsoft Store 装“HEVC 视频扩展”，AV1 要装“AV1 视频扩展”。
+pub(super) fn has_decoder(codec: VideoCodec) -> Result<bool, PlatformError> {
+    let _com = ComApartment::enter()?;
+    let _media_foundation = MediaFoundation::start()?;
+    let input = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: subtype(codec),
+    };
+    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+    let mut count = 0;
+    unsafe {
+        MFTEnumEx(
+            MFT_CATEGORY_VIDEO_DECODER,
+            MFT_ENUM_FLAG_ALL,
+            Some(&input),
+            None,
+            &mut activates,
+            &mut count,
+        )
+        .map_err(|e| win_error("无法列出视频解码器", e))?;
+        if !activates.is_null() {
+            // 释放每个 IMFActivate，再释放数组本身。
+            for activate in std::slice::from_raw_parts_mut(activates, count as usize) {
+                drop(activate.take());
+            }
+            windows::Win32::System::Com::CoTaskMemFree(Some(activates.cast()));
+        }
+    }
+    Ok(count > 0)
+}
+
+/// 建好写 `path` 的 Sink Writer（按 `settings.codec` 编码、BGRA 输入；有声音时再加一条 AAC 音轨）并开始写入，
 /// 返回它、视频流的序号和音频流的序号。
 /// 给了 `manager` 时允许硬件 MFT、在 GPU 上转换和编码；否则只用软件编码器。
 unsafe fn create_sink_writer(
@@ -244,14 +285,23 @@ unsafe fn create_sink_writer(
             MFCreateSinkWriterFromURL(&wide_path(path), None::<&IMFByteStream>, &attributes)
                 .map_err(|e| win_error(&format!("创建视频文件 {} 失败", path.display()), e))?;
 
-        let output = video_type(&MFVideoFormat_H264, settings)?;
+        let codec = settings.codec.label();
+        let profile = match settings.codec {
+            VideoCodec::H264 => Some(eAVEncH264VProfile_High.0 as u32),
+            VideoCodec::H265 => Some(eAVEncH265VProfile_Main_420_8.0 as u32),
+            VideoCodec::Av1 => None,
+        };
+        let output = video_type(&subtype(settings.codec), settings)?;
         output
-            .SetUINT32(&MF_MT_AVG_BITRATE, bitrate(settings))
-            .and_then(|()| output.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32))
-            .map_err(|e| win_error("设置 H.264 参数失败", e))?;
+            .SetUINT32(&MF_MT_AVG_BITRATE, settings.bitrate)
+            .and_then(|()| match profile {
+                Some(profile) => output.SetUINT32(&MF_MT_MPEG2_PROFILE, profile),
+                None => Ok(()),
+            })
+            .map_err(|e| win_error(&format!("设置 {codec} 参数失败"), e))?;
         let stream = writer
             .AddStream(&output)
-            .map_err(|e| win_error("添加 H.264 视频流失败", e))?;
+            .map_err(|e| win_error(&format!("添加 {codec} 视频流失败"), e))?;
         let input = video_type(&MFVideoFormat_ARGB32, settings)?;
         // 正的行跨度 = 自上而下的行序（RGB 默认是自下而上）。
         input
@@ -272,7 +322,7 @@ unsafe fn create_sink_writer(
             .map_err(|e| {
                 win_error(
                     &format!(
-                        "没有可用的 H.264 编码器支持 {} × {} 的画面",
+                        "没有可用的 {codec} 编码器支持 {} × {} 的画面",
                         settings.width, settings.height
                     ),
                     e,
@@ -365,13 +415,6 @@ fn video_type(subtype: &GUID, settings: &VideoSettings) -> Result<IMFMediaType, 
             .map_err(|e| win_error("设置媒体类型失败", e))?;
         Ok(media_type)
     }
-}
-
-/// 目标码率（比特每秒）。
-fn bitrate(settings: &VideoSettings) -> u32 {
-    let pixels = f64::from(settings.width) * f64::from(settings.height);
-    (pixels * f64::from(settings.frame_rate) * BITS_PER_PIXEL_PER_FRAME)
-        .clamp(MIN_BITRATE, MAX_BITRATE) as u32
 }
 
 /// Media Foundation 把两个 32 位数打包成一个 64 位属性（高位在前）。

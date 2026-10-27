@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use bps_core::{
     CaptureKind, CaptureMode, Config, DEFAULT_FILENAME_TEMPLATE, DirectFunction, OutputFormat,
-    OutputOptions, RecordingFormat, RecordingOptions, SaveDir,
+    OutputOptions, RecordingFormat, RecordingOptions, SaveDir, VideoQuality,
 };
-use bps_platform::{Hotkey, Key, Modifiers};
+use bps_platform::{Hotkey, Key, Modifiers, VideoCodec};
 
 /// 一条录屏绑定（第 1–4 行），`extra` 从第 5 行开始。
 fn binding_with(extra: &str) -> String {
@@ -47,7 +47,7 @@ show_cursor = false
             format: Some(RecordingFormat::Gif),
             frame_rate: Some(12),
             show_cursor: Some(false),
-            system_audio: None,
+            ..RecordingOptions::default()
         }
     );
 }
@@ -222,6 +222,18 @@ fn invalid_overrides_are_rejected_with_line_and_reason() {
             screenshot_binding_with("output_format = \"mp4\"\n"),
             "mp4、gif 只用于录屏",
         ),
+        (
+            binding_with("video_codec = \"vp9\"\n"),
+            "未知的视频编码“vp9”",
+        ),
+        (
+            binding_with("video_quality = \"best\"\n"),
+            "未知的画质“best”",
+        ),
+        (
+            binding_with("video_bitrate = 0\n"),
+            "video_bitrate 必须大于 0",
+        ),
     ];
     for (text, reason) in cases {
         let (line, message) = parse_error(&text);
@@ -238,6 +250,10 @@ fn invalid_global_settings_are_rejected_with_line_and_reason() {
             "录屏格式（mp4、gif）写在 function = \"record\" 的绑定里",
         ),
         ("filename_template = \"{yyyy\"\n", "没有对应的 }"),
+        ("frame_rate = 0\n", "frame_rate 必须大于 0"),
+        ("video_codec = \"mpeg2\"\n", "未知的视频编码“mpeg2”"),
+        ("video_quality = \"ultra\"\n", "未知的画质“ultra”"),
+        ("video_bitrate = 0\n", "video_bitrate 必须大于 0"),
     ];
     for (global, reason) in cases {
         let (line, message) = parse_error(&format!("# 全局设置\n{global}"));
@@ -283,4 +299,64 @@ fn autostart_must_be_true_or_false() {
     let (line, message) = parse_error("# 全局设置\nautostart = \"yes\"\n");
 
     assert_eq!(line, Some(2), "{message}");
+}
+
+#[test]
+fn global_recording_parameters_apply_to_bindings_that_do_not_override_them() {
+    let text = r#"
+frame_rate = 24
+show_cursor = false
+video_codec = "hevc"
+video_quality = "high"
+record_system_audio = false
+record_microphone = true
+microphone = "  mic-1  "
+
+[[bindings]]
+hotkey = "Alt+PrintScreen"
+mode = "region"
+function = "record"
+
+[[bindings]]
+hotkey = "Ctrl+Alt+PrintScreen"
+mode = "region"
+function = "record"
+frame_rate = 60
+video_codec = "av1"
+video_bitrate = 9000
+record_microphone = false
+microphone = "mic-2"
+"#;
+
+    let config = Config::parse(text).unwrap();
+
+    let expected_global = RecordingOptions {
+        format: None,
+        frame_rate: Some(24),
+        show_cursor: Some(false),
+        system_audio: Some(false),
+        codec: Some(VideoCodec::H265),
+        quality: Some(VideoQuality::High),
+        microphone: Some(true),
+        microphone_device: Some("mic-1".to_owned()),
+    };
+    assert_eq!(
+        config.recording, expected_global,
+        "hevc 是 h265 的别名，设备标识去掉首尾空白"
+    );
+    assert_eq!(config.bindings[0].capture.recording, expected_global);
+    assert_eq!(
+        config.bindings[1].capture.recording,
+        RecordingOptions {
+            format: None,
+            frame_rate: Some(60),
+            show_cursor: Some(false),
+            system_audio: Some(false),
+            codec: Some(VideoCodec::Av1),
+            quality: Some(VideoQuality::Custom(9000)),
+            microphone: Some(false),
+            microphone_device: Some("mic-2".to_owned()),
+        },
+        "绑定写了的项优先"
+    );
 }

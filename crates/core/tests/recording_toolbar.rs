@@ -288,7 +288,7 @@ fn toolbar_moves_above_region_touching_bottom_of_display() {
 fn toolbar_moves_beside_region_filling_display_height_and_stays_on_display() {
     let fake = desktop();
     // 上下都贴着显示器边缘、右边也贴边：只能放到左侧。
-    let region = Rect::new(300, 0, 340, 480);
+    let region = Rect::new(420, 0, 220, 480);
     let mut instance = recording(&fake, region);
     record_for(&fake, &mut instance, Duration::from_millis(100));
 

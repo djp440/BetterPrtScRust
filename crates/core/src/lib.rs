@@ -75,7 +75,7 @@ pub use binding::{HotkeyBinding, HotkeyRegistrationFailure, RegistrationError, d
 pub use cli::{CliOutcome, CliStatus, cli_locale, run_cli};
 pub use command::{
     CaptureKind, CaptureMode, CaptureRequest, Command, DirectFunction, Flow, PostCaptureAction,
-    RecordingFormat, RecordingOptions,
+    RecordingFormat, RecordingOptions, VideoQuality,
 };
 pub use config::{Config, ConfigError, DEFAULT_CONFIG};
 pub use error::CoreError;
@@ -96,7 +96,8 @@ pub use result_panel::{
     TranslationOutcome, TranslationStatus, copy_recognized_text,
 };
 pub use settings::{
-    BindingSettings, Settings, SettingsDocument, SettingsProblem, set_ocr_auto_copy,
+    BindingSettings, RecordingSettings, Settings, SettingsDocument, SettingsProblem,
+    set_ocr_auto_copy,
 };
 pub use status::{BindingFailure, ResidentStatus, UpdateStatus};
 pub use stitch::{DesktopImage, capture_rect, stitch, virtual_desktop_bounds};

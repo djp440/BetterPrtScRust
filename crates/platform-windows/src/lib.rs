@@ -72,7 +72,7 @@ mod video;
 mod window_capture;
 mod window_source;
 
-pub use audio::WasapiAudioSource;
+pub use audio::{WasapiAudioSource, microphones};
 pub use autostart::WindowsAutostart;
 pub use background::ThreadBackground;
 pub use child_windows::{
@@ -110,7 +110,9 @@ pub use token::{
     run_self_as_administrator_and_wait,
 };
 pub use update::{GitHubReleases, latest_release};
-pub use video::{MfVideoEncoder, WgcVideoSource};
+pub use video::{
+    MfVideoEncoder, WgcVideoSource, undecodable_video_codecs, unsupported_video_codecs,
+};
 pub use window_source::WgcWindowSource;
 
 use std::path::PathBuf;

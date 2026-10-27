@@ -26,7 +26,8 @@
 //!
 //! 录屏：单调时间只在测试调用 [`FakePlatform::advance_clock`] 时前进；节拍开始后，
 //! [`FakePlatform::tick`] 生成平台事件循环会递交的节拍事件。假视频源的帧是此刻假显示器画面的
-//! 副本，假编码器写出的视频用 [`decode::video`] 读回。系统声音用 [`FakePlatform::play_audio`] 播放。
+//! 副本，假编码器写出的视频用 [`decode::video`] 读回。系统声音用 [`FakePlatform::play_audio`] 播放，
+//! 麦克风用 [`FakePlatform::speak`] 说话。
 //!
 //! ```
 //! use bps_platform::{Point, Rect};
@@ -69,14 +70,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bps_platform::{
-    AudioChunk, AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest,
+    AudioChunk, AudioDevice, AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest,
     HttpResponse, HttpTransport, Image, Key, LatestRelease, LocalDateTime, Modifiers, Notification,
     OverlayInput, OverlayKey, OverlayScene, Platform, PlatformError, PlatformEvent, Point,
     PointerButton, RecognitionLanguage, RecordingToolbarView, Rect, SaveAsOptions,
-    StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem,
+    StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem, VideoCodec,
 };
 
-pub use audio::FAKE_AUDIO_FORMAT;
+pub use audio::{DEFAULT_MICROPHONE, FAKE_AUDIO_FORMAT};
 pub use clipboard::ClipboardContent;
 pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
@@ -418,7 +419,35 @@ impl FakePlatform {
 
     /// 没有可用的音频输出设备：打开系统声音会以 `reason` 失败。
     pub fn without_audio_device(self, reason: &str) -> Self {
-        self.audio.lock().unwrap().unavailable = Some(reason.to_owned());
+        self.audio.lock().unwrap().system.unavailable = Some(reason.to_owned());
+        self
+    }
+
+    /// 系统里的麦克风换成 `devices`（标识、名字），第一个是系统默认设备；空列表表示没有麦克风。
+    pub fn with_microphones(self, devices: &[(&str, &str)]) -> Self {
+        self.audio.lock().unwrap().microphones = devices
+            .iter()
+            .map(|&(id, name)| AudioDevice {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            })
+            .collect();
+        self
+    }
+
+    /// 麦克风打不开：打开任何麦克风都会以 `reason` 失败。
+    pub fn with_microphone_failing(self, reason: &str) -> Self {
+        self.audio.lock().unwrap().microphone.unavailable = Some(reason.to_owned());
+        self
+    }
+
+    /// 视频编码器不支持 `codec`：用它开始编码会以 `message` 失败。
+    pub fn without_video_codec(self, codec: VideoCodec, message: &str) -> Self {
+        self.video
+            .lock()
+            .unwrap()
+            .unsupported_codecs
+            .push((codec, message.to_owned()));
         self
     }
 
@@ -428,14 +457,29 @@ impl FakePlatform {
         self
     }
 
-    /// 模拟音频设备中途失效：之后读取声音都以 `reason` 失败。
+    /// 模拟音频输出设备中途失效：之后读取系统声音都以 `reason` 失败。
     pub fn fail_audio_reads(&self, reason: &str) {
-        self.audio.lock().unwrap().read_error = Some(reason.to_owned());
+        self.audio.lock().unwrap().system.read_error = Some(reason.to_owned());
+    }
+
+    /// 模拟麦克风中途被拔掉：之后读取麦克风都以 `reason` 失败。
+    pub fn fail_microphone_reads(&self, reason: &str) {
+        self.audio.lock().unwrap().microphone.read_error = Some(reason.to_owned());
     }
 
     /// 是否正在采集系统声音（有还没关闭的音频流）。
     pub fn capturing_audio(&self) -> bool {
-        self.audio.lock().unwrap().open_streams > 0
+        self.audio.lock().unwrap().system.open_streams > 0
+    }
+
+    /// 是否正在采集麦克风。
+    pub fn capturing_microphone(&self) -> bool {
+        self.audio.lock().unwrap().microphone.open_streams > 0
+    }
+
+    /// 最近一次成功打开的麦克风：`Some(None)` 是系统默认设备，`None` 表示从没打开过。
+    pub fn opened_microphone(&self) -> Option<Option<String>> {
+        self.audio.lock().unwrap().opened_microphone.clone()
     }
 
     /// 系统从此刻（单调时间）起播放一段 `duration` 长、每个样本都是 `level` 的声音
@@ -449,12 +493,15 @@ impl FakePlatform {
     pub fn play_audio_since(&self, level: f32, ago: Duration, duration: Duration) {
         let captured_at = self.monotonic.lock().unwrap().saturating_sub(ago);
         let mut audio = self.audio.lock().unwrap();
-        if audio.open_streams > 0 {
-            audio.pending.push(AudioChunk {
-                captured_at,
-                samples: vec![level; duration.as_millis() as usize],
-            });
-        }
+        push_sound(&mut audio.system, captured_at, level, duration);
+    }
+
+    /// 用户从此刻起对着麦克风说了一段 `duration` 长、每个样本都是 `level` 的话。
+    /// 正在采集麦克风时，麦克风的音频流下一次读取时交出它。
+    pub fn speak(&self, level: f32, duration: Duration) {
+        let captured_at = *self.monotonic.lock().unwrap();
+        let mut audio = self.audio.lock().unwrap();
+        push_sound(&mut audio.microphone, captured_at, level, duration);
     }
 
     /// 生成交给 `bps-core` 的平台能力集合，它与本对象共享状态。
@@ -979,5 +1026,20 @@ impl Clock for FakeClock {
 
     fn monotonic(&self) -> Duration {
         *self.monotonic.lock().unwrap()
+    }
+}
+
+/// 正在采集 `input` 时，把一段声音交给它的音频流。
+fn push_sound(
+    input: &mut audio::InputState,
+    captured_at: Duration,
+    level: f32,
+    duration: Duration,
+) {
+    if input.open_streams > 0 {
+        input.pending.push(AudioChunk {
+            captured_at,
+            samples: vec![level; duration.as_millis() as usize],
+        });
     }
 }

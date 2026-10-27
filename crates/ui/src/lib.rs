@@ -23,7 +23,9 @@ use eframe::egui;
 pub use clipboard::{ReadClipboardText, SystemClipboard, WriteClipboardText};
 pub use hotkey_recording::{KeyStream, PauseHotkeys, StartKeyCapture};
 pub use result_panel::{ResultPanelEnvironment, run_result_panel};
-pub use settings_window::{PickFolder, SettingsEnvironment, run_settings_window};
+pub use settings_window::{
+    PickFolder, ProbeRecording, RecordingCapabilities, SettingsEnvironment, run_settings_window,
+};
 
 /// 界面用的一个字体文件（或字体集里的一个字体）。
 #[derive(Clone, Copy)]

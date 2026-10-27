@@ -13,10 +13,11 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use bps_platform::{
-    Image, PlatformError, StreamOptions, VideoEncoder, VideoFormat, VideoFrame, VideoSettings,
-    VideoSource, VideoStream, VideoTarget, VideoWriter,
+    Image, PlatformError, StreamOptions, VideoCodec, VideoEncoder, VideoFormat, VideoFrame,
+    VideoSettings, VideoSource, VideoStream, VideoTarget, VideoWriter,
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Win32::Foundation::HMODULE;
@@ -25,10 +26,12 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-    D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
-    ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11CreateDevice,
+    ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
 };
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_OUTPUT_DESC, IDXGIDevice};
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 use windows::core::Interface;
@@ -86,14 +89,142 @@ impl VideoEncoder for MfVideoEncoder {
         settings: &VideoSettings,
     ) -> Result<Box<dyn VideoWriter>, PlatformError> {
         match settings.format {
-            VideoFormat::Mp4 => Ok(Box::new(mp4::Mp4Writer::start(
-                VideoDevice::shared()?,
-                path,
-                settings,
-            )?)),
+            VideoFormat::Mp4 => {
+                let device = VideoDevice::shared()?;
+                check_codec(&device, settings.codec)?;
+                Ok(Box::new(mp4::Mp4Writer::start(device, path, settings)?))
+            }
             VideoFormat::Gif => Ok(Box::new(gif::GifWriter::start(path, settings)?)),
         }
     }
+}
+
+/// 自检用的画面边长：不小于硬件编码器的下限，和录屏时一样走硬件编码。
+const CHECK_SIZE: u32 = 256;
+/// 自检编码的帧数。
+const CHECK_FRAMES: u32 = 10;
+
+thread_local! {
+    /// H.265 / AV1 的自检结果（每个线程只试一次）。
+    static CHECKED: RefCell<Vec<(VideoCodec, Result<(), PlatformError>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// 返回不能用的视频编码和原因（H.265、AV1 逐个自检，见 [`check_codec`]）。
+/// 设置界面用它把不能用的编码置灰；第一次调用约需一秒。
+pub fn unsupported_video_codecs() -> Vec<(VideoCodec, String)> {
+    let candidates = [VideoCodec::H265, VideoCodec::Av1];
+    let device = match VideoDevice::shared() {
+        Ok(device) => device,
+        Err(e) => return candidates.map(|codec| (codec, e.to_string())).to_vec(),
+    };
+    candidates
+        .into_iter()
+        .filter_map(|codec| {
+            check_codec(&device, codec)
+                .err()
+                .map(|e| (codec, e.to_string()))
+        })
+        .collect()
+}
+
+/// 确认 `codec` 能从头到尾编出一个 MP4：用它把几帧空白画面编进临时文件并写完。
+/// 只建编码器不够：实测有的 AV1 硬件编码器能建好、能收帧，却在写完文件时才失败（缺少序列头），
+/// 那样整段录像就丢了。H.264 系统总有软件编码器，不必试；结果按线程缓存。
+fn check_codec(device: &Rc<VideoDevice>, codec: VideoCodec) -> Result<(), PlatformError> {
+    if codec == VideoCodec::H264 {
+        return Ok(());
+    }
+    if let Some(result) = CHECKED.with(|checked| {
+        checked
+            .borrow()
+            .iter()
+            .find(|(c, _)| *c == codec)
+            .map(|(_, result)| result.clone())
+    }) {
+        return result;
+    }
+    let path = std::env::temp_dir().join(format!(
+        "bps-codec-check-{}-{codec:?}.mp4",
+        std::process::id()
+    ));
+    let result = encode_blank(device, &path, codec);
+    let _ = std::fs::remove_file(&path);
+    CHECKED.with(|checked| checked.borrow_mut().push((codec, result.clone())));
+    result
+}
+
+fn encode_blank(
+    device: &Rc<VideoDevice>,
+    path: &Path,
+    codec: VideoCodec,
+) -> Result<(), PlatformError> {
+    let settings = VideoSettings {
+        format: VideoFormat::Mp4,
+        width: CHECK_SIZE,
+        height: CHECK_SIZE,
+        frame_rate: 30,
+        codec,
+        bitrate: 1_000_000,
+        audio: None,
+    };
+    let mut writer = Box::new(mp4::Mp4Writer::start(device.clone(), path, &settings)?);
+    let frame = blank_frame(device, CHECK_SIZE, CHECK_SIZE)?;
+    for n in 0..CHECK_FRAMES {
+        writer.write(&frame, Duration::from_secs(1) * n / settings.frame_rate)?;
+    }
+    writer.finish()
+}
+
+/// 录屏设备上一张全黑的 BGRA8 纹理。
+fn blank_frame(
+    device: &Rc<VideoDevice>,
+    width: u32,
+    height: u32,
+) -> Result<TextureFrame, PlatformError> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let pixels = vec![0u8; (width * height * 4) as usize];
+    let data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: pixels.as_ptr().cast(),
+        SysMemPitch: width * 4,
+        SysMemSlicePitch: 0,
+    };
+    let mut texture = None;
+    unsafe {
+        device
+            .d3d
+            .CreateTexture2D(&desc, Some(&data), Some(&mut texture))
+    }
+    .map_err(|e| win_error("创建自检画面失败", e))?;
+    Ok(TextureFrame {
+        device: device.clone(),
+        texture: texture.ok_or_else(|| PlatformError::new("创建自检画面失败"))?,
+        width,
+        height,
+    })
+}
+
+/// 系统里没有解码器的视频编码：用它录的视频系统播放器放不了（要装扩展或换播放器）。
+/// 列不出解码器时当作都有，不误报。
+pub fn undecodable_video_codecs() -> Vec<VideoCodec> {
+    VideoCodec::ALL
+        .into_iter()
+        .filter(|&codec| matches!(mp4::has_decoder(codec), Ok(false)))
+        .collect()
 }
 
 /// 录屏用的 D3D11 设备（同时包成 WinRT 的 `IDirect3DDevice` 给 Windows.Graphics.Capture 用）。

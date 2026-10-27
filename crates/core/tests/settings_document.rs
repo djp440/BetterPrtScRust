@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use bps_core::{
     BindingSettings, CaptureKind, CaptureMode, Config, DEFAULT_CONFIG, DEFAULT_FILENAME_TEMPLATE,
     DirectFunction, Language, Locale, OutputFormat, PostCaptureAction, RecordingFormat,
-    ResidentInstance, SaveDir, SettingsDocument, SettingsProblem, Texts,
+    RecordingSettings, ResidentInstance, SaveDir, SettingsDocument, SettingsProblem, Texts,
+    VideoQuality,
 };
-use bps_platform::{Hotkey, Key, Modifiers};
+use bps_platform::{Hotkey, Key, Modifiers, VideoCodec};
 use bps_platform_fake::FakePlatform;
 
 fn hotkey(text: &str) -> Hotkey {
@@ -426,4 +427,66 @@ fn cleared_hotkey_blocks_saving_until_a_new_one_is_recorded() {
     assert_eq!(settings.conflicting_binding(1), None);
     let zh = settings.problems()[0].localized(Texts::of(Locale::ZhCn));
     assert!(zh.contains("第 2 条"), "{zh}");
+}
+
+#[test]
+fn recording_defaults_are_exposed_and_written_back() {
+    let document = SettingsDocument::parse(DEFAULT_CONFIG).unwrap();
+    assert_eq!(
+        document.settings().recording,
+        RecordingSettings {
+            frame_rate: None,
+            show_cursor: true,
+            codec: VideoCodec::H264,
+            quality: VideoQuality::Standard,
+            system_audio: true,
+            microphone: false,
+            microphone_device: None,
+        }
+    );
+    let mut settings = document.settings().clone();
+    settings.recording = RecordingSettings {
+        frame_rate: Some(60),
+        show_cursor: false,
+        codec: VideoCodec::H265,
+        quality: VideoQuality::Custom(12000),
+        system_audio: false,
+        microphone: true,
+        microphone_device: Some("mic-1".to_owned()),
+    };
+
+    let text = document.render(&settings).unwrap();
+
+    let config = Config::parse(&text).unwrap();
+    let recording = &config.bindings[3].capture.recording;
+    assert_eq!(recording.frame_rate, Some(60));
+    assert_eq!(recording.show_cursor, Some(false));
+    assert_eq!(recording.codec, Some(VideoCodec::H265));
+    assert_eq!(recording.quality, Some(VideoQuality::Custom(12000)));
+    assert_eq!(recording.system_audio, Some(false));
+    assert_eq!(recording.microphone, Some(true));
+    assert_eq!(recording.microphone_device.as_deref(), Some("mic-1"));
+    assert_eq!(
+        SettingsDocument::parse(&text).unwrap().settings().recording,
+        settings.recording,
+        "读回来与写入的一致"
+    );
+}
+
+#[test]
+fn switching_recording_settings_back_removes_the_overriding_keys() {
+    let text = "frame_rate = 60\nvideo_bitrate = 8000\nmicrophone = \"mic-1\"\n";
+    let document = SettingsDocument::parse(text).unwrap();
+    let mut settings = document.settings().clone();
+    assert_eq!(settings.recording.quality, VideoQuality::Custom(8000));
+    settings.recording.frame_rate = None;
+    settings.recording.quality = VideoQuality::High;
+    settings.recording.microphone_device = None;
+
+    let written = document.render(&settings).unwrap();
+
+    assert_eq!(
+        written, "video_quality = \"high\"\n",
+        "自定义码率换成档位时去掉 video_bitrate"
+    );
 }

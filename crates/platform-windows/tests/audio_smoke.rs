@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 
 use bps_platform::{
     AudioSource, Clock, FrameSource, PlatformEvent, Rect, StreamFrame, StreamOptions, Ticker,
-    VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoTarget,
+    VideoCodec, VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoTarget,
 };
 use bps_platform_windows::{
     DxgiFrameSource, EventLoop, MfVideoEncoder, WasapiAudioSource, WgcVideoSource, WindowsClock,
-    dpi,
+    dpi, microphones,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFSample, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
@@ -46,8 +46,9 @@ fn play_alarm() -> Child {
 #[ignore = "真机冒烟：会发出声音"]
 fn loopback_captures_playing_sound_with_current_timestamps() {
     let clock = WindowsClock::new();
-    let mut stream = WasapiAudioSource::new().open_system_audio().unwrap();
-    let format = stream.format();
+    let mut source = WasapiAudioSource::new();
+    let format = source.format();
+    let mut stream = source.open_system_audio().unwrap();
     assert_eq!((format.sample_rate, format.channels), (48_000, 2));
     let mut player = play_alarm();
     let started = Instant::now();
@@ -84,6 +85,47 @@ fn loopback_captures_playing_sound_with_current_timestamps() {
 }
 
 #[test]
+#[ignore = "真机冒烟：打开麦克风采集约 1 秒（需要有麦克风）"]
+fn microphone_captures_with_current_timestamps() {
+    let devices = microphones().unwrap();
+    eprintln!("麦克风：{devices:?}");
+    assert!(!devices.is_empty(), "这台电脑应至少有一个麦克风");
+    let clock = WindowsClock::new();
+    let mut source = WasapiAudioSource::new();
+    // 系统默认设备和按设备标识打开都要能用。
+    for device in [None, Some(devices[0].id.as_str())] {
+        let mut stream = source.open_microphone(device).unwrap();
+        let started = Instant::now();
+        let mut frames = 0;
+        let mut previous = Duration::ZERO;
+        while started.elapsed() < Duration::from_secs(1) {
+            std::thread::sleep(Duration::from_millis(30));
+            let now = clock.monotonic();
+            for chunk in stream.read().unwrap() {
+                assert!(
+                    chunk.captured_at <= now
+                        && now - chunk.captured_at < Duration::from_millis(500)
+                );
+                assert!(chunk.captured_at >= previous, "采集时间应递增");
+                previous = chunk.captured_at;
+                assert_eq!(chunk.samples.len() % 2, 0);
+                frames += chunk.samples.len() / 2;
+            }
+        }
+        eprintln!("{device:?}：1 秒采集到 {frames} 帧");
+        // 麦克风即使没人说话也持续产生数据（与回环不同）。
+        assert!(
+            frames > 30_000,
+            "{device:?} 应持续产生声音数据，只有 {frames} 帧"
+        );
+    }
+    assert!(
+        source.open_microphone(Some("不存在的设备")).is_err(),
+        "不存在的设备应打开失败（core 据此回退到默认麦克风）"
+    );
+}
+
+#[test]
 #[ignore = "真机冒烟：会发出声音、录一段小视频"]
 fn mp4_with_system_audio_has_aac_track_as_long_as_video() {
     assert!(dpi::ensure_per_monitor_v2());
@@ -96,8 +138,9 @@ fn mp4_with_system_audio_has_aac_track_as_long_as_video() {
 
     let clock = WindowsClock::new();
     let fps = 30;
-    let mut audio = WasapiAudioSource::new().open_system_audio().unwrap();
-    let format = audio.format();
+    let mut source = WasapiAudioSource::new();
+    let format = source.format();
+    let mut audio = source.open_system_audio().unwrap();
     let mut video = WgcVideoSource::new()
         .open(
             VideoTarget::Region(region),
@@ -112,6 +155,8 @@ fn mp4_with_system_audio_has_aac_track_as_long_as_video() {
                 width: region.width,
                 height: region.height,
                 frame_rate: fps,
+                codec: VideoCodec::H264,
+                bitrate: 2_000_000,
                 audio: Some(format),
             },
         )

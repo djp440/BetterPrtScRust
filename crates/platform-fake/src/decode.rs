@@ -7,7 +7,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use bps_platform::{AudioFormat, Image, VideoFormat};
+use bps_platform::{AudioFormat, Image, VideoCodec, VideoFormat};
 
 use crate::video::FAKE_VIDEO_MAGIC;
 
@@ -106,6 +106,10 @@ pub fn dib(bytes: &[u8]) -> Image {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FakeVideo {
     pub format: VideoFormat,
+    /// 视频编码（GIF 也记着编码器收到的值，没有意义）。
+    pub codec: VideoCodec,
+    /// 目标码率（比特每秒）。
+    pub bitrate: u32,
     pub width: u32,
     pub height: u32,
     /// 每秒帧数。
@@ -160,8 +164,20 @@ pub fn video(bytes: &[u8]) -> FakeVideo {
         b"gif\0" => VideoFormat::Gif,
         other => panic!("未知的假视频格式 {other:?}"),
     };
+    let codec = match take(1) {
+        [0] => VideoCodec::H264,
+        [1] => VideoCodec::H265,
+        [2] => VideoCodec::Av1,
+        other => panic!("未知的假视频编码 {other:?}"),
+    };
     let mut u32_field = || u32::from_le_bytes(take(4).try_into().unwrap());
-    let (width, height, frame_rate, count) = (u32_field(), u32_field(), u32_field(), u32_field());
+    let (width, height, frame_rate, bitrate, count) = (
+        u32_field(),
+        u32_field(),
+        u32_field(),
+        u32_field(),
+        u32_field(),
+    );
     let frame_bytes = width as usize * height as usize * 4;
     let frames = (0..count)
         .map(|_| {
@@ -193,6 +209,8 @@ pub fn video(bytes: &[u8]) -> FakeVideo {
     assert!(rest.is_empty(), "假视频末尾有多余数据");
     FakeVideo {
         format,
+        codec,
+        bitrate,
         width,
         height,
         frame_rate,

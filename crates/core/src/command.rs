@@ -1,3 +1,4 @@
+use bps_platform::VideoCodec;
 use serde::Deserialize;
 
 use crate::{Locale, OutputOptions, Texts};
@@ -81,6 +82,8 @@ impl CaptureRequest {
 }
 
 /// 录屏选项；`None` 表示使用录屏功能的内置默认值。
+///
+/// 除了输出格式，每一项都可以写在全局设置里作默认值、再由热键绑定覆盖（见 [`Self::or`]）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordingOptions {
     /// 录屏的输出格式。
@@ -89,8 +92,95 @@ pub struct RecordingOptions {
     pub frame_rate: Option<u32>,
     /// 是否录入鼠标指针。
     pub show_cursor: Option<bool>,
-    /// MP4 是否录入系统声音（全局设置 `record_system_audio`，绑定可以覆盖）。
+    /// MP4 是否录入系统声音（默认开）。
     pub system_audio: Option<bool>,
+    /// MP4 的视频编码（默认 H.264）。
+    pub codec: Option<VideoCodec>,
+    /// MP4 的画质（默认标准）。
+    pub quality: Option<VideoQuality>,
+    /// MP4 是否录入麦克风（默认关），和系统声音混在同一条音轨。
+    pub microphone: Option<bool>,
+    /// 录哪个麦克风（[`bps_platform::AudioDevice::id`]）；`None` 表示系统默认的输入设备。
+    pub microphone_device: Option<String>,
+}
+
+impl RecordingOptions {
+    /// 这里没有设置的项取 `fallback` 的值（绑定的覆盖项在前、全局设置在后）。
+    pub fn or(self, fallback: &RecordingOptions) -> RecordingOptions {
+        RecordingOptions {
+            format: self.format.or(fallback.format),
+            frame_rate: self.frame_rate.or(fallback.frame_rate),
+            show_cursor: self.show_cursor.or(fallback.show_cursor),
+            system_audio: self.system_audio.or(fallback.system_audio),
+            codec: self.codec.or(fallback.codec),
+            quality: self.quality.or(fallback.quality),
+            microphone: self.microphone.or(fallback.microphone),
+            microphone_device: self
+                .microphone_device
+                .or_else(|| fallback.microphone_device.clone()),
+        }
+    }
+}
+
+/// MP4 的画质：码率档位，或自定义码率。
+///
+/// 档位按画面大小、帧率和编码换算成码率（H.265、AV1 同样画质需要的码率更低）；
+/// 配置文件里写作 `video_quality = "low" | "standard" | "high"`，自定义码率写作
+/// `video_bitrate = <千比特每秒>`（同时写了时 `video_bitrate` 优先）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum VideoQuality {
+    Low,
+    #[default]
+    Standard,
+    High,
+    /// 自定义码率（千比特每秒，大于 0）。
+    Custom(u32),
+}
+
+impl VideoQuality {
+    /// 三个档位。
+    pub const PRESETS: [VideoQuality; 3] = [
+        VideoQuality::Low,
+        VideoQuality::Standard,
+        VideoQuality::High,
+    ];
+
+    /// 档位在配置文件里的写法；自定义码率为 `None`。
+    pub fn config_name(self) -> Option<&'static str> {
+        Some(match self {
+            VideoQuality::Low => "low",
+            VideoQuality::Standard => "standard",
+            VideoQuality::High => "high",
+            VideoQuality::Custom(_) => return None,
+        })
+    }
+
+    /// 配置文件里的档位名（不区分大小写）。
+    pub fn from_config_name(name: &str) -> Option<VideoQuality> {
+        VideoQuality::PRESETS.into_iter().find(|q| {
+            q.config_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+    }
+}
+
+/// MP4 视频编码在配置文件里的写法：`h264`、`h265`（也可写 `hevc`）、`av1`，不区分大小写。
+pub fn codec_config_name(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "h264",
+        VideoCodec::H265 => "h265",
+        VideoCodec::Av1 => "av1",
+    }
+}
+
+/// 配置文件里的视频编码名，见 [`codec_config_name`]。
+pub fn codec_from_config_name(name: &str) -> Option<VideoCodec> {
+    match name.to_ascii_lowercase().as_str() {
+        "h264" => Some(VideoCodec::H264),
+        "h265" | "hevc" => Some(VideoCodec::H265),
+        "av1" => Some(VideoCodec::Av1),
+        _ => None,
+    }
 }
 
 /// 捕获模式：决定捕获屏幕上哪一部分内容。

@@ -258,6 +258,8 @@ mod tests {
                     height: size.1,
                     frame_rate: fps,
                     audio: None,
+                    codec: bps_platform::VideoCodec::H264,
+                    bitrate: 0,
                 },
             )
             .unwrap(),
@@ -324,6 +326,8 @@ mod tests {
                 height: 4,
                 frame_rate: 10,
                 audio: None,
+                codec: bps_platform::VideoCodec::H264,
+                bitrate: 0,
             },
         )
         .unwrap();

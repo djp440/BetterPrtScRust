@@ -40,7 +40,7 @@ mod video;
 mod window;
 mod window_source;
 
-pub use audio::{AudioChunk, AudioFormat, AudioSource, AudioStream};
+pub use audio::{AudioChunk, AudioDevice, AudioFormat, AudioSource, AudioStream};
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use background::{BackgroundResult, BackgroundWorker};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -74,8 +74,8 @@ pub use text::TextMask;
 pub use tray::{TrayMenu, TrayMenuItem, TrayMenuItemId};
 pub use update::{LatestRelease, UpdateService};
 pub use video::{
-    StreamFrame, StreamOptions, Ticker, VideoEncoder, VideoFormat, VideoFrame, VideoSettings,
-    VideoSource, VideoStream, VideoTarget, VideoWriter,
+    StreamFrame, StreamOptions, Ticker, VideoCodec, VideoEncoder, VideoFormat, VideoFrame,
+    VideoSettings, VideoSource, VideoStream, VideoTarget, VideoWriter,
 };
 pub use window::{StandaloneWindow, WindowLauncher};
 pub use window_source::{TopLevelWindow, WindowId, WindowLayout, WindowSource};

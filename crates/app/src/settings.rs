@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 use bps_core::{Reply, Request, WhenNotRunning, forward};
 use bps_platform_windows::{
-    PipeChannel, map_system_font, open_with_default_program, pick_folder, read_clipboard_text,
-    resident_pipe_name, spawn_key_capture, standard_user_can_write, user_ui_languages,
-    write_clipboard_text,
+    PipeChannel, map_system_font, microphones, open_with_default_program, pick_folder,
+    read_clipboard_text, resident_pipe_name, spawn_key_capture, standard_user_can_write,
+    undecodable_video_codecs, unsupported_video_codecs, user_ui_languages, write_clipboard_text,
 };
 use bps_ui::{
-    KeyStream, SettingsEnvironment, SystemClipboard, UiEnvironment, UiFont, WindowIcon,
-    run_settings_window,
+    KeyStream, RecordingCapabilities, SettingsEnvironment, SystemClipboard, UiEnvironment, UiFont,
+    WindowIcon, run_settings_window,
 };
 
 use crate::{data_location, icon};
@@ -53,6 +53,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             let _ = forward(&request, &mut channel, WhenNotRunning::GiveUp);
         }),
         program_writable_by_standard_users: program_writable_by_standard_users(&exe),
+        probe_recording: Arc::new(|| RecordingCapabilities {
+            unsupported_codecs: unsupported_video_codecs(),
+            undecodable_codecs: undecodable_video_codecs(),
+            microphones: microphones().map_err(|e| e.to_string()),
+        }),
     };
     run_settings_window(environment)?;
     Ok(())

@@ -12,13 +12,14 @@ use bps_platform::{Hotkey, ParseHotkeyError};
 use serde::Deserialize;
 use toml::Spanned;
 
+use crate::command::codec_from_config_name;
 use crate::i18n::UnknownLanguage;
 use crate::translation::{TargetLanguage, TranslationConfig, TranslationProvider};
 use crate::{CaptureKind, DirectFunction};
 use crate::{
     CaptureMode, CaptureRequest, FilenameTemplate, FilenameTemplateError, HotkeyBinding, Language,
     Locale, OutputFormat, OutputOptions, PostCaptureAction, RecordingFormat, RecordingOptions,
-    SaveDir, Texts,
+    SaveDir, Texts, VideoQuality,
 };
 
 /// 首次运行时写入的配置文件，包含 spec #1 规定的 6 条默认热键绑定。
@@ -35,7 +36,16 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
 #   autostart = false                              开机自启：true / false
 #   ocr_auto_copy = false                          OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板：true / false
+#   录屏的默认参数（每条绑定可以单独覆盖，见下文）：
+#   frame_rate = 30                                录屏帧率，缺省时 MP4 为 30、GIF 为 15
+#   show_cursor = true                             录屏时显示鼠标指针：true / false
+#   video_codec = "h264"                           MP4 的视频编码：h264、h265、av1（后两种需要显卡或系统支持，
+#                                                  不支持时自动改用 h264 并提示）
+#   video_quality = "standard"                     MP4 的画质：low、standard、high
+#   video_bitrate = 8000                           MP4 的自定义码率（千比特每秒），写了就不按 video_quality 计算
 #   record_system_audio = true                     MP4 录屏录入系统声音（默认输出设备正在播放的声音）：true / false
+#   record_microphone = false                      MP4 录屏录入麦克风（和系统声音混在同一条音轨）：true / false
+#   microphone = "..."                             录哪个麦克风（设备标识，在设置界面里选），缺省为系统默认设备
 #   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
 #                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
 #                                                  登录时不弹 UAC 提示
@@ -52,9 +62,9 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #            ocr（OCR），热键直接进入该功能
 #   auto_save  true / false，默认 false：截图最终交付时（复制并退出、确认）同时存进保存目录，
 #            取消时不保存；与 after 无关。对 long_screenshot 同样有效
-# 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif）、
-#   frame_rate（录屏帧率，MP4 默认 30、GIF 默认 15）、show_cursor（录屏时是否显示鼠标指针：true / false）、
-#   record_system_audio（MP4 录屏是否录入系统声音：true / false）
+# 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif），
+#   以及上面录屏的默认参数：frame_rate、show_cursor、video_codec、video_quality、video_bitrate、
+#   record_system_audio、record_microphone、microphone。GIF 不使用编码、画质和声音参数
 #
 # 翻译（可选，OCR 结果面板里的“翻译”按钮）：在 [translation] 里填写你自己的翻译服务；不填 api_key
 # 时按钮禁用。点“翻译”时只会把识别出的文字发给你配置的服务，截图本身绝不上传。把 [translation]
@@ -122,9 +132,9 @@ pub struct Config {
     /// OCR（直达热键或工具条）识别后自动复制文字、不弹结果面板（默认关闭）。已合并进各热键绑定的
     /// [`CaptureRequest::ocr_auto_copy`]。
     pub ocr_auto_copy: bool,
-    /// MP4 录屏录入系统声音（默认开启）。没有单独设置的录屏绑定按它录制
-    /// （已合并进各热键绑定的 [`RecordingOptions::system_audio`]）。
-    pub record_system_audio: bool,
+    /// 全局的录屏参数（帧率、鼠标指针、编码、画质、声音；`format` 总是 `None`）。
+    /// 已合并进各热键绑定的 [`CaptureRequest::recording`]：绑定没有覆盖的项用这里的值。
+    pub recording: RecordingOptions,
 }
 
 impl Config {
@@ -139,7 +149,7 @@ impl Config {
             run_as_admin: false,
             translation: None,
             ocr_auto_copy: false,
-            record_system_audio: true,
+            recording: RecordingOptions::default(),
         }
     }
 
@@ -171,6 +181,17 @@ impl Config {
             output_format,
         };
         let ocr_auto_copy = raw.ocr_auto_copy.unwrap_or(false);
+        let recording = RawRecording {
+            frame_rate: raw.frame_rate,
+            show_cursor: raw.show_cursor,
+            video_codec: raw.video_codec,
+            video_quality: raw.video_quality,
+            video_bitrate: raw.video_bitrate,
+            record_system_audio: raw.record_system_audio,
+            record_microphone: raw.record_microphone,
+            microphone: raw.microphone,
+        }
+        .resolve(text)?;
         let mut bindings: Vec<HotkeyBinding> = raw
             .bindings
             .into_iter()
@@ -178,8 +199,8 @@ impl Config {
             .collect::<Result<_, _>>()?;
         for binding in &mut bindings {
             binding.capture.ocr_auto_copy = ocr_auto_copy;
-            let recording = &mut binding.capture.recording;
-            recording.system_audio = recording.system_audio.or(raw.record_system_audio);
+            let own = std::mem::take(&mut binding.capture.recording);
+            binding.capture.recording = own.or(&recording);
         }
         let translation = raw
             .translation
@@ -195,7 +216,7 @@ impl Config {
             run_as_admin: raw.run_as_admin.unwrap_or(false),
             translation,
             ocr_auto_copy,
-            record_system_audio: raw.record_system_audio.unwrap_or(true),
+            recording,
         })
     }
 }
@@ -236,6 +257,9 @@ enum ConfigProblem {
     RecordingFormatForScreenshot,
     RecordingFormatInGlobal,
     ZeroFrameRate,
+    UnknownVideoCodec(String),
+    UnknownVideoQuality(String),
+    ZeroBitrate,
     UnknownLanguage(String),
     UnknownTranslationProvider(String),
     UnknownTargetLanguage(String),
@@ -322,6 +346,13 @@ impl ConfigProblem {
                 texts.get("config-recording-format-in-global")
             }
             ConfigProblem::ZeroFrameRate => texts.get("config-zero-frame-rate"),
+            ConfigProblem::UnknownVideoCodec(codec) => {
+                texts.format("config-unknown-video-codec", &[("codec", codec)])
+            }
+            ConfigProblem::UnknownVideoQuality(quality) => {
+                texts.format("config-unknown-video-quality", &[("quality", quality)])
+            }
+            ConfigProblem::ZeroBitrate => texts.get("config-zero-bitrate"),
             ConfigProblem::UnknownLanguage(language) => {
                 texts.format("config-unknown-language", &[("language", language)])
             }
@@ -377,7 +408,14 @@ struct RawConfig {
     autostart: Option<bool>,
     run_as_admin: Option<bool>,
     ocr_auto_copy: Option<bool>,
+    frame_rate: Option<Spanned<u32>>,
+    show_cursor: Option<bool>,
+    video_codec: Option<Spanned<String>>,
+    video_quality: Option<Spanned<String>>,
+    video_bitrate: Option<Spanned<u32>>,
     record_system_audio: Option<bool>,
+    record_microphone: Option<bool>,
+    microphone: Option<String>,
     save_dir: Option<PathBuf>,
     filename_template: Option<Spanned<String>>,
     output_format: Option<Spanned<String>>,
@@ -446,7 +484,77 @@ struct RawBinding {
     output_format: Option<Spanned<String>>,
     frame_rate: Option<Spanned<u32>>,
     show_cursor: Option<bool>,
+    video_codec: Option<Spanned<String>>,
+    video_quality: Option<Spanned<String>>,
+    video_bitrate: Option<Spanned<u32>>,
     record_system_audio: Option<bool>,
+    record_microphone: Option<bool>,
+    microphone: Option<String>,
+}
+
+/// 录屏参数的原文：全局设置和热键绑定里都可以写。
+struct RawRecording {
+    frame_rate: Option<Spanned<u32>>,
+    show_cursor: Option<bool>,
+    video_codec: Option<Spanned<String>>,
+    video_quality: Option<Spanned<String>>,
+    video_bitrate: Option<Spanned<u32>>,
+    record_system_audio: Option<bool>,
+    record_microphone: Option<bool>,
+    microphone: Option<String>,
+}
+
+impl RawRecording {
+    /// 校验录屏参数（输出格式另行处理）。
+    fn resolve(self, text: &str) -> Result<RecordingOptions, ConfigError> {
+        let at = |span: Range<usize>, problem| ConfigError::at(text, span, problem);
+        let frame_rate = match self.frame_rate {
+            Some(rate) if *rate.get_ref() == 0 => {
+                return Err(at(rate.span(), ConfigProblem::ZeroFrameRate));
+            }
+            rate => rate.map(Spanned::into_inner),
+        };
+        let codec = self
+            .video_codec
+            .map(|name| {
+                codec_from_config_name(name.get_ref()).ok_or_else(|| {
+                    at(
+                        name.span(),
+                        ConfigProblem::UnknownVideoCodec(name.get_ref().clone()),
+                    )
+                })
+            })
+            .transpose()?;
+        let quality = match (self.video_bitrate, self.video_quality) {
+            (Some(bitrate), _) if *bitrate.get_ref() == 0 => {
+                return Err(at(bitrate.span(), ConfigProblem::ZeroBitrate));
+            }
+            (Some(bitrate), _) => Some(VideoQuality::Custom(bitrate.into_inner())),
+            (None, Some(name)) => Some(VideoQuality::from_config_name(name.get_ref()).ok_or_else(
+                || {
+                    at(
+                        name.span(),
+                        ConfigProblem::UnknownVideoQuality(name.get_ref().clone()),
+                    )
+                },
+            )?),
+            (None, None) => None,
+        };
+        let microphone_device = self
+            .microphone
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
+        Ok(RecordingOptions {
+            format: None,
+            frame_rate,
+            show_cursor: self.show_cursor,
+            system_audio: self.record_system_audio,
+            codec,
+            quality,
+            microphone: self.record_microphone,
+            microphone_device,
+        })
+    }
 }
 
 impl RawBinding {
@@ -491,20 +599,19 @@ impl RawBinding {
             }
             flag => flag.is_some_and(Spanned::into_inner),
         };
-        let frame_rate = match self.frame_rate {
-            Some(rate) if *rate.get_ref() == 0 => {
-                return Err(at(rate.span(), ConfigProblem::ZeroFrameRate));
-            }
-            rate => rate.map(Spanned::into_inner),
-        };
         let records = kind == CaptureKind::Function(DirectFunction::Record);
         let mut output = global.clone();
-        let mut recording = RecordingOptions {
-            format: None,
-            frame_rate,
+        let mut recording = RawRecording {
+            frame_rate: self.frame_rate,
             show_cursor: self.show_cursor,
-            system_audio: self.record_system_audio,
-        };
+            video_codec: self.video_codec,
+            video_quality: self.video_quality,
+            video_bitrate: self.video_bitrate,
+            record_system_audio: self.record_system_audio,
+            record_microphone: self.record_microphone,
+            microphone: self.microphone,
+        }
+        .resolve(text)?;
         if let Some(dir) = self.save_dir {
             output.save_dir = SaveDir::Custom(dir);
         }

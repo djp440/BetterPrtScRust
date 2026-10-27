@@ -75,10 +75,35 @@ pub trait VideoFrame {
 /// 视频文件的格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VideoFormat {
-    /// H.264 视频的 MP4 文件，可以带一条 AAC 音轨。
+    /// MP4 文件（视频编码见 [`VideoCodec`]），可以带一条 AAC 音轨。
     Mp4,
     /// GIF 动图，纯 CPU 编码；每帧最多 256 色，没有声音。
     Gif,
+}
+
+/// MP4 的视频编码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum VideoCodec {
+    /// H.264，Windows 都自带编码器。
+    #[default]
+    H264,
+    /// H.265（HEVC），需要显卡的硬件编码器或系统的 HEVC 扩展。
+    H265,
+    /// AV1，需要支持 AV1 编码的显卡。
+    Av1,
+}
+
+impl VideoCodec {
+    pub const ALL: [VideoCodec; 3] = [VideoCodec::H264, VideoCodec::H265, VideoCodec::Av1];
+
+    /// 给用户看的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H.264",
+            VideoCodec::H265 => "H.265",
+            VideoCodec::Av1 => "AV1",
+        }
+    }
 }
 
 /// 一段视频的编码参数。
@@ -90,6 +115,10 @@ pub struct VideoSettings {
     pub height: u32,
     /// 恒定帧率（每秒帧数）。
     pub frame_rate: u32,
+    /// 视频编码（只对 [`VideoFormat::Mp4`] 有意义）。
+    pub codec: VideoCodec,
+    /// 目标码率（比特每秒，只对 [`VideoFormat::Mp4`] 有意义）。
+    pub bitrate: u32,
     /// 音轨的格式；`None` 表示没有音轨。只有 [`VideoFormat::Mp4`] 能带音轨。
     pub audio: Option<AudioFormat>,
 }

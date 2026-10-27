@@ -1,18 +1,19 @@
 //! 设置界面的数据模型：把 `config.toml` 读成可编辑的 [`Settings`]，修改后写回文本。
 //!
 //! 写回时只改动用户在界面上改过的项，其余内容（注释、空行、界面上没有的覆盖项，
-//! 如录屏帧率）原样保留。写回的文件由常驻实例的自动重新加载生效。
+//! 如热键绑定各自的录屏帧率）原样保留。写回的文件由常驻实例的自动重新加载生效。
 
 use std::path::PathBuf;
 
-use bps_platform::Hotkey;
+use bps_platform::{Hotkey, VideoCodec};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
+use crate::command::codec_config_name;
 use crate::config::{Format, allows_typing};
 use crate::{CaptureKind, DirectFunction};
 use crate::{
     CaptureMode, Config, ConfigError, FilenameTemplate, FilenameTemplateError, Language,
-    OutputFormat, SaveDir, Texts,
+    OutputFormat, SaveDir, Texts, VideoQuality,
 };
 
 const BOM: char = '\u{feff}';
@@ -32,8 +33,28 @@ pub struct Settings {
     pub filename_template: String,
     /// 截图的输出格式（全局）。
     pub output_format: OutputFormat,
+    /// 录屏的默认参数。
+    pub recording: RecordingSettings,
     /// 热键绑定，按配置文件中的顺序排列。
     pub bindings: Vec<BindingSettings>,
+}
+
+/// 录屏的默认参数（设置界面的“录屏”分组）。每条录屏绑定可以在 `config.toml` 里单独覆盖。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingSettings {
+    /// 帧率；`None` 表示按格式取默认值（MP4 30、GIF 15）。
+    pub frame_rate: Option<u32>,
+    pub show_cursor: bool,
+    /// MP4 的视频编码。
+    pub codec: VideoCodec,
+    /// MP4 的画质。
+    pub quality: VideoQuality,
+    /// MP4 录入系统声音。
+    pub system_audio: bool,
+    /// MP4 录入麦克风。
+    pub microphone: bool,
+    /// 录哪个麦克风；`None` 表示系统默认设备。
+    pub microphone_device: Option<String>,
 }
 
 impl Settings {
@@ -287,6 +308,7 @@ impl SettingsDocument {
                 settings.output_format.extension().into(),
             );
         }
+        write_recording(root, &settings.recording, &old.recording);
     }
 
     /// 按 `bindings` 重建 `[[bindings]]`：原有的绑定沿用原来的表（保留注释和覆盖项），
@@ -354,6 +376,49 @@ pub fn set_ocr_auto_copy(text: &str, on: bool) -> Option<String> {
     document.render(&settings).ok()
 }
 
+/// 写回录屏的默认参数中改过的项。
+fn write_recording(root: &mut Table, new: &RecordingSettings, old: &RecordingSettings) {
+    if new.frame_rate != old.frame_rate {
+        match new.frame_rate {
+            Some(rate) => set_value(root, "frame_rate", i64::from(rate).into()),
+            None => {
+                root.remove("frame_rate");
+            }
+        }
+    }
+    for (key, new, old) in [
+        ("show_cursor", new.show_cursor, old.show_cursor),
+        ("record_system_audio", new.system_audio, old.system_audio),
+        ("record_microphone", new.microphone, old.microphone),
+    ] {
+        if new != old {
+            set_value(root, key, new.into());
+        }
+    }
+    if new.codec != old.codec {
+        set_value(root, "video_codec", codec_config_name(new.codec).into());
+    }
+    if new.quality != old.quality {
+        match new.quality {
+            VideoQuality::Custom(kbps) => set_value(root, "video_bitrate", i64::from(kbps).into()),
+            preset => {
+                // 写了 video_bitrate 就不按档位计算，换回档位时去掉它。
+                root.remove("video_bitrate");
+                let name = preset.config_name().expect("档位都有名字");
+                set_value(root, "video_quality", name.into());
+            }
+        }
+    }
+    if new.microphone_device != old.microphone_device {
+        match &new.microphone_device {
+            Some(id) => set_value(root, "microphone", id.as_str().into()),
+            None => {
+                root.remove("microphone");
+            }
+        }
+    }
+}
+
 /// 从解析好的配置得到设置。
 fn settings_of(config: &Config) -> Settings {
     Settings {
@@ -368,6 +433,15 @@ fn settings_of(config: &Config) -> Settings {
         },
         filename_template: config.output.filename_template.as_str().to_owned(),
         output_format: config.output.output_format,
+        recording: RecordingSettings {
+            frame_rate: config.recording.frame_rate,
+            show_cursor: config.recording.show_cursor.unwrap_or(true),
+            codec: config.recording.codec.unwrap_or_default(),
+            quality: config.recording.quality.unwrap_or_default(),
+            system_audio: config.recording.system_audio.unwrap_or(true),
+            microphone: config.recording.microphone.unwrap_or(false),
+            microphone_device: config.recording.microphone_device.clone(),
+        },
         bindings: config
             .bindings
             .iter()

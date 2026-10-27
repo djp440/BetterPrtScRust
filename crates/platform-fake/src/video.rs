@@ -2,7 +2,7 @@
 //!
 //! - 假视频源的每一帧都是调用 `latest` 那一刻假显示器画面上目标区域的副本；需要时把鼠标指针
 //!   画成指针所在位置的一个 [`FAKE_CURSOR_COLOR`] 像素（见 [`draw_fake_cursor`]）。
-//! - 假编码器把收到的帧和时间戳原样记下，`finish` 时按 [`crate::decode::video`] 能读回的
+//! - 假编码器把编码参数、收到的帧和时间戳原样记下，`finish` 时按 [`crate::decode::video`] 能读回的
 //!   简单格式写进假文件系统（音轨的样本跟在帧后面）；没有 `finish` 就被丢弃时什么也不写。
 //! - 假节拍只记录周期，节拍事件由测试用 [`crate::FakePlatform::tick`] 生成。
 
@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bps_platform::{
-    Image, PlatformError, Point, Rect, StreamFrame, StreamOptions, Ticker, VideoEncoder,
-    VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoStream, VideoTarget, VideoWriter,
-    WindowId,
+    Image, PlatformError, Point, Rect, StreamFrame, StreamOptions, Ticker, VideoCodec,
+    VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource, VideoStream, VideoTarget,
+    VideoWriter, WindowId,
 };
 
 use crate::file_system::FsState;
@@ -54,6 +54,8 @@ pub(crate) struct VideoState {
     pub encoder_error: Option<String>,
     /// 开始编码带音轨的视频时失败的原因（例如没有可用的 AAC 编码器）。
     pub audio_encoder_error: Option<String>,
+    /// 不支持的 MP4 视频编码，以及用它开始编码时失败的原因。
+    pub unsupported_codecs: Vec<(VideoCodec, String)>,
     /// 节拍的周期；`None` 表示没有开始。
     pub ticker: Option<Duration>,
 }
@@ -196,18 +198,27 @@ impl VideoEncoder for FakeVideoEncoder {
         path: &Path,
         settings: &VideoSettings,
     ) -> Result<Box<dyn VideoWriter>, PlatformError> {
-        if let Some(message) = &self.state.lock().unwrap().encoder_error {
+        let state = self.state.lock().unwrap();
+        if let Some(message) = &state.encoder_error {
             return Err(PlatformError::new(message.clone()));
+        }
+        if settings.format == VideoFormat::Mp4
+            && let Some((_, message)) = state
+                .unsupported_codecs
+                .iter()
+                .find(|(codec, _)| *codec == settings.codec)
+        {
+            return Err(PlatformError::new(message.clone()));
+        }
+        if settings.format == VideoFormat::Mp4 && settings.bitrate == 0 {
+            return Err(PlatformError::new("假编码器：码率不能为 0"));
         }
         if settings.width == 0 || settings.height == 0 || settings.frame_rate == 0 {
             return Err(PlatformError::new(format!(
                 "假编码器：无效的参数 {settings:?}"
             )));
         }
-        if let (Some(_), Some(message)) = (
-            settings.audio,
-            &self.state.lock().unwrap().audio_encoder_error,
-        ) {
+        if let (Some(_), Some(message)) = (settings.audio, &state.audio_encoder_error) {
             return Err(PlatformError::new(message.clone()));
         }
         if settings.audio.is_some() && settings.format != VideoFormat::Mp4 {
@@ -272,10 +283,16 @@ impl VideoWriter for FakeVideoWriter {
             VideoFormat::Mp4 => b"mp4\0",
             VideoFormat::Gif => b"gif\0",
         });
+        bytes.push(match self.settings.codec {
+            VideoCodec::H264 => 0,
+            VideoCodec::H265 => 1,
+            VideoCodec::Av1 => 2,
+        });
         for value in [
             self.settings.width,
             self.settings.height,
             self.settings.frame_rate,
+            self.settings.bitrate,
             self.frames.len() as u32,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());

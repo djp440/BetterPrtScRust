@@ -1,5 +1,6 @@
 //! 录屏的系统声音（#29）：MP4 默认带一条系统声音的音轨，按采集时间与画面对齐；暂停期间的声音
 //! 不录；没有声音的时段是静音。全局设置 `record_system_audio` 可以关掉，每条绑定可以单独覆盖。
+//! 关掉声音时 MP4 仍有一条静音的音轨，录制中可以在控制条上打开（#30）。
 //!
 //! 时间由测试推进：`advance_clock` 让单调时间前进，`tick` 生成节拍事件；`play_audio` 让系统
 //! 从此刻起播放一段声音。假音频源每毫秒一个样本（`FAKE_AUDIO_FORMAT`）。
@@ -180,7 +181,11 @@ fn record_system_audio_off_records_silent_video() {
     record_for(&fake, &mut instance, ms(300));
     let video = stop_and_read_video(&fake, &mut instance);
 
-    assert_eq!(video.audio, None, "关掉后 MP4 没有音轨");
+    assert_eq!(
+        video.audio.expect("音轨留着，录制中可以打开声音").samples,
+        segments(&[(0.0, 300)]),
+        "关掉后音轨是静音"
+    );
     assert_eq!(video.frames.len(), 9);
 }
 
@@ -270,7 +275,11 @@ fn no_audio_device_records_silent_video_and_notifies() {
     record_for(&fake, &mut instance, ms(300));
     let video = stop_and_read_video(&fake, &mut instance);
 
-    assert_eq!(video.audio, None, "照常录无声视频");
+    assert_eq!(
+        video.audio.expect("音轨留着").samples,
+        segments(&[(0.0, 300)]),
+        "照常录制，音轨是静音"
+    );
     assert_eq!(video.frames.len(), 9);
     assert_eq!(fake.notifications()[1].title, "录屏已保存");
 }
