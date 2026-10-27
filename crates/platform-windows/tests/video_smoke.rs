@@ -264,6 +264,7 @@ fn record(
                 width: region.width,
                 height: region.height,
                 frame_rate: fps,
+                audio: None,
             },
         )
         .unwrap();

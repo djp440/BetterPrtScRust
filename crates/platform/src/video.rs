@@ -10,7 +10,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::{Image, PlatformError, Rect, WindowId};
+use crate::{AudioFormat, Image, PlatformError, Rect, WindowId};
 
 /// 录屏要持续捕获的目标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,7 @@ pub trait VideoFrame {
 /// 视频文件的格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VideoFormat {
-    /// H.264 视频的 MP4 文件，只有画面、没有声音。
+    /// H.264 视频的 MP4 文件，可以带一条 AAC 音轨。
     Mp4,
     /// GIF 动图，纯 CPU 编码；每帧最多 256 色，没有声音。
     Gif,
@@ -90,6 +90,8 @@ pub struct VideoSettings {
     pub height: u32,
     /// 恒定帧率（每秒帧数）。
     pub frame_rate: u32,
+    /// 音轨的格式；`None` 表示没有音轨。只有 [`VideoFormat::Mp4`] 能带音轨。
+    pub audio: Option<AudioFormat>,
 }
 
 /// 视频编码器。
@@ -107,6 +109,10 @@ pub trait VideoWriter {
     /// 写入一帧。`timestamp` 是这一帧从视频开头算起的显示时间，逐帧严格递增；
     /// 帧一直显示到下一帧的时间戳（最后一帧显示 1 / 帧率 秒）。
     fn write(&mut self, frame: &dyn VideoFrame, timestamp: Duration) -> Result<(), PlatformError>;
+
+    /// 往音轨里追加样本（[`VideoSettings::audio`] 格式、交错排列）。音轨从视频开头开始，
+    /// 样本首尾相接、没有时间戳：空白由调用方补上静音。没有音轨时返回错误。
+    fn write_audio(&mut self, samples: &[f32]) -> Result<(), PlatformError>;
 
     /// 写完全部数据并关闭文件，之后文件就是可以播放的完整视频。
     fn finish(self: Box<Self>) -> Result<(), PlatformError>;

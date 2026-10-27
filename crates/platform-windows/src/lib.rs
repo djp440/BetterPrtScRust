@@ -37,6 +37,7 @@
 //! `cargo test -p bps-platform-windows -- --ignored`。
 #![cfg(windows)]
 
+mod audio;
 mod autostart;
 mod background;
 mod child_windows;
@@ -71,6 +72,7 @@ mod video;
 mod window_capture;
 mod window_source;
 
+pub use audio::WasapiAudioSource;
 pub use autostart::WindowsAutostart;
 pub use background::ThreadBackground;
 pub use child_windows::{
@@ -137,6 +139,7 @@ pub fn platform(event_loop: &EventLoop, config_file: PathBuf, ui_exe: PathBuf) -
         overlay: Box::new(event_loop.selection_overlay()),
         video_source: Box::new(WgcVideoSource::new()),
         video_encoder: Box::new(MfVideoEncoder::new()),
+        audio_source: Box::new(WasapiAudioSource::new()),
         ticker: Box::new(event_loop.ticker()),
         recording_toolbar: Box::new(event_loop.recording_toolbar()),
         file_dialog: Box::new(WindowsFileDialog::new()),

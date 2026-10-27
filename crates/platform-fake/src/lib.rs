@@ -26,7 +26,7 @@
 //!
 //! 录屏：单调时间只在测试调用 [`FakePlatform::advance_clock`] 时前进；节拍开始后，
 //! [`FakePlatform::tick`] 生成平台事件循环会递交的节拍事件。假视频源的帧是此刻假显示器画面的
-//! 副本，假编码器写出的视频用 [`decode::video`] 读回。
+//! 副本，假编码器写出的视频用 [`decode::video`] 读回。系统声音用 [`FakePlatform::play_audio`] 播放。
 //!
 //! ```
 //! use bps_platform::{Point, Rect};
@@ -40,6 +40,7 @@
 //! assert!(fake.clipboard().is_empty());
 //! ```
 
+mod audio;
 mod autostart;
 mod background;
 mod clipboard;
@@ -68,13 +69,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bps_platform::{
-    AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest, HttpResponse,
-    HttpTransport, Image, Key, LatestRelease, LocalDateTime, Modifiers, Notification, OverlayInput,
-    OverlayKey, OverlayScene, Platform, PlatformError, PlatformEvent, Point, PointerButton,
-    RecognitionLanguage, RecordingToolbarView, Rect, SaveAsOptions, StandaloneWindow,
-    SystemLanguage, TextRecognizer, TrayMenuItem,
+    AudioChunk, AutostartEntry, AutostartMethod, Backdrop, Clock, Hotkey, HttpRequest,
+    HttpResponse, HttpTransport, Image, Key, LatestRelease, LocalDateTime, Modifiers, Notification,
+    OverlayInput, OverlayKey, OverlayScene, Platform, PlatformError, PlatformEvent, Point,
+    PointerButton, RecognitionLanguage, RecordingToolbarView, Rect, SaveAsOptions,
+    StandaloneWindow, SystemLanguage, TextRecognizer, TrayMenuItem,
 };
 
+pub use audio::FAKE_AUDIO_FORMAT;
 pub use clipboard::ClipboardContent;
 pub use config_file::FAKE_CONFIG_PATH;
 pub use file_system::DEFAULT_PICTURES_DIR;
@@ -84,6 +86,7 @@ pub use text::text_mask;
 pub use video::{FAKE_CURSOR_COLOR, draw_fake_cursor};
 pub use window_source::{FakeWindow, window_pattern};
 
+use audio::{AudioState, FakeAudioSource};
 use autostart::{FakeAutostart, FakeElevation, FakeScreenshotTool, SystemState};
 use background::{BackgroundState, FakeBackground};
 use clipboard::FakeClipboard;
@@ -129,6 +132,7 @@ pub struct FakePlatform {
     system: Arc<Mutex<SystemState>>,
     overlay: Arc<Mutex<OverlayState>>,
     video: Arc<Mutex<VideoState>>,
+    audio: Arc<Mutex<AudioState>>,
     /// 正显示着的录屏控制条。
     recording_toolbar: Arc<Mutex<Option<RecordingToolbarView>>>,
     dialogs: Arc<Mutex<DialogState>>,
@@ -157,6 +161,7 @@ impl Default for FakePlatform {
             system: Default::default(),
             overlay: Default::default(),
             video: Default::default(),
+            audio: Default::default(),
             recording_toolbar: Default::default(),
             dialogs: Default::default(),
             sampler: Default::default(),
@@ -411,6 +416,47 @@ impl FakePlatform {
         self
     }
 
+    /// 没有可用的音频输出设备：打开系统声音会以 `reason` 失败。
+    pub fn without_audio_device(self, reason: &str) -> Self {
+        self.audio.lock().unwrap().unavailable = Some(reason.to_owned());
+        self
+    }
+
+    /// 视频编码器开始编码带音轨的视频时会以 `message` 失败（不带音轨时正常）。
+    pub fn with_audio_encoder_failing(self, message: &str) -> Self {
+        self.video.lock().unwrap().audio_encoder_error = Some(message.to_owned());
+        self
+    }
+
+    /// 模拟音频设备中途失效：之后读取声音都以 `reason` 失败。
+    pub fn fail_audio_reads(&self, reason: &str) {
+        self.audio.lock().unwrap().read_error = Some(reason.to_owned());
+    }
+
+    /// 是否正在采集系统声音（有还没关闭的音频流）。
+    pub fn capturing_audio(&self) -> bool {
+        self.audio.lock().unwrap().open_streams > 0
+    }
+
+    /// 系统从此刻（单调时间）起播放一段 `duration` 长、每个样本都是 `level` 的声音
+    /// （[`FAKE_AUDIO_FORMAT`]：每毫秒一个样本）。正在采集时，音频流下一次读取时交出它。
+    pub fn play_audio(&self, level: f32, duration: Duration) {
+        self.play_audio_since(level, Duration::ZERO, duration);
+    }
+
+    /// 同 [`play_audio`](Self::play_audio)，但声音从 `ago` 之前就开始了：平台晚交出的声音
+    /// （例如暂停前采集、暂停后才读到）。
+    pub fn play_audio_since(&self, level: f32, ago: Duration, duration: Duration) {
+        let captured_at = self.monotonic.lock().unwrap().saturating_sub(ago);
+        let mut audio = self.audio.lock().unwrap();
+        if audio.open_streams > 0 {
+            audio.pending.push(AudioChunk {
+                captured_at,
+                samples: vec![level; duration.as_millis() as usize],
+            });
+        }
+    }
+
     /// 生成交给 `bps-core` 的平台能力集合，它与本对象共享状态。
     pub fn platform(&self) -> Platform {
         Platform {
@@ -448,6 +494,7 @@ impl FakePlatform {
                 files: self.files.clone(),
                 state: self.video.clone(),
             }),
+            audio_source: Box::new(FakeAudioSource(self.audio.clone())),
             ticker: Box::new(FakeTicker(self.video.clone())),
             recording_toolbar: Box::new(FakeRecordingToolbar(self.recording_toolbar.clone())),
             file_dialog: Box::new(FakeFileDialog(self.dialogs.clone())),

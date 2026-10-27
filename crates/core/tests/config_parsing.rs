@@ -47,6 +47,7 @@ show_cursor = false
             format: Some(RecordingFormat::Gif),
             frame_rate: Some(12),
             show_cursor: Some(false),
+            system_audio: None,
         }
     );
 }

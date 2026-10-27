@@ -16,6 +16,12 @@
 //! 暂停期间不计时、不写帧：时间轴按“已录时长”（单调时间减去暂停的时长）计算，继续之后
 //! 接着上一帧的时间戳往下排，视频里没有暂停期间的画面。暂停期间仍按节拍读取视频源，
 //! 继续时用的是此刻最新的画面。
+//!
+//! 声音（MP4 默认录系统声音，见 [`AudioTrack`]）：每个节拍读取音频源，按每段声音的采集时间
+//! 换算出它在时间轴上的位置（同样去掉暂停的时长），和画面用同一条时间轴。音轨是首尾相接的
+//! 样本：声音之间的空白补静音，与已写入的部分明显重叠时丢掉重叠的部分；暂停期间采集的声音不录。
+//! 停止时用静音把音轨补到与画面等长。打不开音频源（例如没有输出设备）或编码器不支持音轨时
+//! 照常录无声视频并通知用户；录制中途音频源出错时通知一次，之后的音轨是静音。
 
 mod toolbar;
 
@@ -24,9 +30,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use bps_platform::{
-    Backdrop, ClipboardItem, IncomingRequest, NewFile, Notification, NotificationClick,
-    OverlayInput, OverlayScene, Platform, PlatformError, Rect, StreamFrame, StreamOptions,
-    TopLevelWindow, VideoFormat, VideoFrame, VideoSettings, VideoStream, VideoTarget, VideoWriter,
+    AudioChunk, AudioFormat, AudioStream, Backdrop, ClipboardItem, IncomingRequest, NewFile,
+    Notification, NotificationClick, OverlayInput, OverlayScene, Platform, PlatformError, Rect,
+    StreamFrame, StreamOptions, TopLevelWindow, VideoFormat, VideoFrame, VideoSettings,
+    VideoStream, VideoTarget, VideoWriter,
 };
 
 use crate::capture::{self, CaptureFailure};
@@ -51,6 +58,10 @@ const GIF_MIN_SIZE: u32 = 1;
 /// 同名文件最多尝试到 `-N` 的 N。
 const MAX_NAME_SUFFIX: u32 = 9999;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
+/// 声音的位置与已写入的音轨相差不超过它时直接接上，不补静音也不裁剪：吸收采集时间的抖动。
+const AUDIO_SYNC_TOLERANCE: Duration = Duration::from_millis(30);
+/// 补静音时每次最多写入的时长，免得长时间的空白占用大量内存。
+const SILENCE_BLOCK: Duration = Duration::from_secs(1);
 
 /// 一次录屏是怎么结束的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,12 +124,27 @@ struct Active {
     paused_total: Duration,
     /// 正暂停着时，暂停开始的单调时间。
     paused_at: Option<Duration>,
+    /// 最近一次继续录制的单调时间（还没暂停过时是开始录制的时间）。
+    resumed_at: Duration,
     /// 已经写入的帧数。
     written: u64,
     /// 视频源最近给出的一帧。
     latest: Option<Rc<dyn VideoFrame>>,
     /// 录屏控制条；读不到显示器布局时没有。
     controls: Option<Controls>,
+    /// 系统声音的音轨；不录声音时没有。
+    audio: Option<AudioTrack>,
+}
+
+/// 录屏的音轨：把音频源给出的声音排成从视频开头开始、首尾相接的样本。
+struct AudioTrack {
+    /// 音频源；读取出错（例如设备被拔掉）后没有，之后的音轨是静音。
+    stream: Option<Box<dyn AudioStream>>,
+    /// 读取出错、还没通知用户的原因。
+    lost: Option<PlatformError>,
+    format: AudioFormat,
+    /// 已经写入的采样帧数。
+    written: u64,
 }
 
 /// 录屏的参数（热键绑定没有覆盖的项取默认值）。
@@ -126,6 +152,8 @@ struct Settings {
     format: VideoFormat,
     frame_rate: u32,
     show_cursor: bool,
+    /// 录入系统声音（只有 MP4）。
+    system_audio: bool,
 }
 
 impl Settings {
@@ -139,6 +167,7 @@ impl Settings {
             format,
             frame_rate: options.frame_rate.unwrap_or(default_frame_rate),
             show_cursor: options.show_cursor.unwrap_or(true),
+            system_audio: format == VideoFormat::Mp4 && options.system_audio.unwrap_or(true),
         })
     }
 
@@ -366,6 +395,16 @@ impl Recording {
         let due = active.due(platform.clock.monotonic());
         match active.catch_up(due) {
             Ok(true) => {
+                if let Some(error) = active.audio.as_mut().and_then(|t| t.lost.take()) {
+                    platform.notifier.notify(Notification {
+                        title: self.texts.get("notification-recording-audio-lost-title"),
+                        body: self.texts.format(
+                            "notification-recording-audio-lost-body",
+                            &[("reason", &error)],
+                        ),
+                        on_click: None,
+                    });
+                }
                 active.refresh_toolbar(platform);
                 None
             }
@@ -417,6 +456,10 @@ impl Recording {
             });
         let extension = settings.extension();
         let temp = reserve_temp_file(platform, &dir, &stem, extension)?;
+        let mut audio = settings
+            .system_audio
+            .then(|| self.open_system_audio(platform))
+            .flatten();
         let opened = (|| {
             let video_target = match window {
                 Some(window) => VideoTarget::Window {
@@ -432,15 +475,24 @@ impl Recording {
                     show_cursor: settings.show_cursor,
                 },
             )?;
-            let writer = platform.video_encoder.start(
-                &temp,
-                &VideoSettings {
-                    format: settings.format,
-                    width: rect.width,
-                    height: rect.height,
-                    frame_rate: settings.frame_rate,
-                },
-            )?;
+            let video_settings = |audio: Option<AudioFormat>| VideoSettings {
+                format: settings.format,
+                width: rect.width,
+                height: rect.height,
+                frame_rate: settings.frame_rate,
+                audio,
+            };
+            let format = audio.as_ref().map(|stream| stream.format());
+            let writer = match platform.video_encoder.start(&temp, &video_settings(format)) {
+                // 编码器不支持音轨：退回无声视频（无声也开不了时照常报告失败）。
+                Err(error) if audio.is_some() => {
+                    let writer = platform.video_encoder.start(&temp, &video_settings(None))?;
+                    audio = None;
+                    notify_no_audio(platform, self.texts, &error);
+                    writer
+                }
+                writer => writer?,
+            };
             platform
                 .ticker
                 .start(Duration::from_secs(1) / settings.frame_rate)?;
@@ -458,6 +510,7 @@ impl Recording {
             .displays()
             .ok()
             .map(|displays| Controls::new(Toolbar::beside(rect, &displays, self.texts)));
+        let started = platform.clock.monotonic();
         let mut active = Active {
             stream,
             writer,
@@ -466,15 +519,33 @@ impl Recording {
             stem,
             extension,
             frame_rate: settings.frame_rate,
-            started: platform.clock.monotonic(),
+            started,
             paused_total: Duration::ZERO,
             paused_at: None,
+            resumed_at: started,
             written: 0,
             latest: None,
             controls,
+            audio: audio.map(|stream| AudioTrack {
+                format: stream.format(),
+                stream: Some(stream),
+                lost: None,
+                written: 0,
+            }),
         };
         active.refresh_toolbar(platform);
         Ok(active)
+    }
+
+    /// 打开系统声音；打不开时通知用户，这段录屏没有声音。
+    fn open_system_audio(&self, platform: &mut Platform) -> Option<Box<dyn AudioStream>> {
+        match platform.audio_source.open_system_audio() {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                notify_no_audio(platform, self.texts, &error);
+                None
+            }
+        }
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {
@@ -494,7 +565,10 @@ impl Recording {
 impl Active {
     /// 到单调时间 `now` 为止的已录时长：从开始录制算起，去掉暂停的时间。
     fn recorded(&self, now: Duration) -> Duration {
-        let paused = self.paused_total + self.paused_at.map_or(Duration::ZERO, |at| now - at);
+        let paused = self.paused_total
+            + self
+                .paused_at
+                .map_or(Duration::ZERO, |at| now.saturating_sub(at));
         now.saturating_sub(self.started).saturating_sub(paused)
     }
 
@@ -509,6 +583,7 @@ impl Active {
         match self.paused_at.take() {
             Some(at) => {
                 self.paused_total += now.saturating_sub(at);
+                self.resumed_at = now;
                 Ok(true)
             }
             None => {
@@ -540,6 +615,7 @@ impl Active {
     /// 暂停期间不写帧，但照样读取视频源：继续时手里是此刻最新的画面，而不是视频源里
     /// 积压的、暂停期间的旧画面。
     fn catch_up(&mut self, due: u64) -> Result<bool, PlatformError> {
+        self.pull_audio()?;
         if self.written >= due && self.paused_at.is_none() {
             return Ok(true);
         }
@@ -561,11 +637,44 @@ impl Active {
         Ok(alive)
     }
 
+    /// 把音频源采集到的声音写进音轨。暂停开始之后、继续之前采集的部分丢掉。
+    fn pull_audio(&mut self) -> Result<(), PlatformError> {
+        let Some(track) = self.audio.as_mut() else {
+            return Ok(());
+        };
+        let Some(stream) = track.stream.as_mut() else {
+            return Ok(());
+        };
+        let chunks = match stream.read() {
+            Ok(chunks) => chunks,
+            Err(error) => {
+                track.stream = None;
+                track.lost = Some(error);
+                return Ok(());
+            }
+        };
+        for chunk in chunks {
+            let start = chunk.captured_at.max(self.resumed_at);
+            let end = self.paused_at;
+            let position = self.recorded(start);
+            let track = self.audio.as_mut().expect("上面取到过音轨");
+            track.place(self.writer.as_mut(), &chunk, start, end, position)?;
+        }
+        Ok(())
+    }
+
     /// 停止录制：补齐到此刻的帧（至少一帧），写完视频，改名成命名模板生成的文件名，
     /// 发“录屏已保存”通知，再把文件放进剪贴板。
     fn finish(mut self, platform: &mut Platform, texts: &Texts) -> Result<Ending, CaptureFailure> {
-        let due = self.due(platform.clock.monotonic()).max(1);
-        let caught_up = self.catch_up(due);
+        let now = platform.clock.monotonic();
+        let due = self.due(now).max(1);
+        let recorded = self.recorded(now);
+        let caught_up = self.catch_up(due).and_then(|alive| {
+            if let Some(track) = self.audio.as_mut() {
+                track.pad_to(self.writer.as_mut(), recorded)?;
+            }
+            Ok(alive)
+        });
         platform.ticker.stop();
         platform.recording_toolbar.hide();
         let Active {
@@ -617,6 +726,87 @@ impl Active {
         drop(writer);
         let _ = platform.file_system.remove_file(&temp);
     }
+}
+
+impl AudioTrack {
+    /// 时长 `duration` 含多少个采样帧（向下取整）。
+    fn frames_in(&self, duration: Duration) -> u64 {
+        (duration.as_nanos() * u128::from(self.format.sample_rate) / NANOS_PER_SECOND) as u64
+    }
+
+    /// 把 `chunk` 里从单调时间 `start` 起（`end` 有值时到 `end` 为止）的声音写进音轨，
+    /// 它的开头在时间轴上的位置是 `position`。
+    fn place(
+        &mut self,
+        writer: &mut dyn VideoWriter,
+        chunk: &AudioChunk,
+        start: Duration,
+        end: Option<Duration>,
+        position: Duration,
+    ) -> Result<(), PlatformError> {
+        let channels = usize::from(self.format.channels);
+        let total = chunk.samples.len() / channels;
+        let first = (self.frames_in(start.saturating_sub(chunk.captured_at)) as usize).min(total);
+        let last = end.map_or(total, |end| {
+            (self.frames_in(end.saturating_sub(chunk.captured_at)) as usize).min(total)
+        });
+        if first >= last {
+            return Ok(());
+        }
+        let mut samples = &chunk.samples[first * channels..last * channels];
+        let target = self.frames_in(position);
+        let tolerance = self.frames_in(AUDIO_SYNC_TOLERANCE);
+        if target > self.written + tolerance {
+            self.write_silence(writer, target - self.written)?;
+        } else if target + tolerance < self.written {
+            let overlap = ((self.written - target) as usize * channels).min(samples.len());
+            samples = &samples[overlap..];
+        }
+        if !samples.is_empty() {
+            writer.write_audio(samples)?;
+            self.written += (samples.len() / channels) as u64;
+        }
+        Ok(())
+    }
+
+    /// 用静音把音轨补到时间轴上的 `position`。
+    fn pad_to(
+        &mut self,
+        writer: &mut dyn VideoWriter,
+        position: Duration,
+    ) -> Result<(), PlatformError> {
+        let target = self.frames_in(position);
+        if target > self.written {
+            self.write_silence(writer, target - self.written)?;
+        }
+        Ok(())
+    }
+
+    fn write_silence(
+        &mut self,
+        writer: &mut dyn VideoWriter,
+        frames: u64,
+    ) -> Result<(), PlatformError> {
+        let block = self.frames_in(SILENCE_BLOCK).max(1);
+        let channels = usize::from(self.format.channels);
+        let mut left = frames;
+        while left > 0 {
+            let n = left.min(block);
+            writer.write_audio(&vec![0.0; n as usize * channels])?;
+            left -= n;
+        }
+        self.written += frames;
+        Ok(())
+    }
+}
+
+/// 通知用户这段录屏没有声音（打不开音频源，或编码器不支持音轨）。
+fn notify_no_audio(platform: &mut Platform, texts: &Texts, error: &PlatformError) {
+    platform.notifier.notify(Notification {
+        title: texts.get("notification-recording-no-audio-title"),
+        body: texts.format("notification-recording-no-audio-body", &[("reason", error)]),
+        on_click: None,
+    });
 }
 
 /// 把录好的临时文件改名为 `<stem>.<extension>`；同名文件已存在时依次尝试 `-1`、`-2`……

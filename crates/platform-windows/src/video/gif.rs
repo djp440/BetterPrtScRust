@@ -105,6 +105,10 @@ impl VideoWriter for GifWriter {
         Ok(())
     }
 
+    fn write_audio(&mut self, _samples: &[f32]) -> Result<(), PlatformError> {
+        Err(PlatformError::new("GIF 没有音轨"))
+    }
+
     fn finish(mut self: Box<Self>) -> Result<(), PlatformError> {
         // 最后一帧显示 1 / 帧率 秒（与 `VideoWriter::write` 的约定一致）。
         let end = self.last_timestamp + self.frame_period;
@@ -253,6 +257,7 @@ mod tests {
                     width: size.0,
                     height: size.1,
                     frame_rate: fps,
+                    audio: None,
                 },
             )
             .unwrap(),
@@ -318,6 +323,7 @@ mod tests {
                 width: 4,
                 height: 4,
                 frame_rate: 10,
+                audio: None,
             },
         )
         .unwrap();

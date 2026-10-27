@@ -3,7 +3,7 @@
 //! - 假视频源的每一帧都是调用 `latest` 那一刻假显示器画面上目标区域的副本；需要时把鼠标指针
 //!   画成指针所在位置的一个 [`FAKE_CURSOR_COLOR`] 像素（见 [`draw_fake_cursor`]）。
 //! - 假编码器把收到的帧和时间戳原样记下，`finish` 时按 [`crate::decode::video`] 能读回的
-//!   简单格式写进假文件系统；没有 `finish` 就被丢弃时什么也不写。
+//!   简单格式写进假文件系统（音轨的样本跟在帧后面）；没有 `finish` 就被丢弃时什么也不写。
 //! - 假节拍只记录周期，节拍事件由测试用 [`crate::FakePlatform::tick`] 生成。
 
 use std::any::Any;
@@ -52,6 +52,8 @@ pub(crate) struct VideoState {
     pub ended: bool,
     /// 开始编码时失败的原因。
     pub encoder_error: Option<String>,
+    /// 开始编码带音轨的视频时失败的原因（例如没有可用的 AAC 编码器）。
+    pub audio_encoder_error: Option<String>,
     /// 节拍的周期；`None` 表示没有开始。
     pub ticker: Option<Duration>,
 }
@@ -202,11 +204,21 @@ impl VideoEncoder for FakeVideoEncoder {
                 "假编码器：无效的参数 {settings:?}"
             )));
         }
+        if let (Some(_), Some(message)) = (
+            settings.audio,
+            &self.state.lock().unwrap().audio_encoder_error,
+        ) {
+            return Err(PlatformError::new(message.clone()));
+        }
+        if settings.audio.is_some() && settings.format != VideoFormat::Mp4 {
+            return Err(PlatformError::new("假编码器：只有 MP4 能带音轨"));
+        }
         Ok(Box::new(FakeVideoWriter {
             files: self.files.clone(),
             path: path.to_path_buf(),
             settings: *settings,
             frames: Vec::new(),
+            audio: Vec::new(),
         }))
     }
 }
@@ -216,6 +228,7 @@ struct FakeVideoWriter {
     path: PathBuf,
     settings: VideoSettings,
     frames: Vec<(Duration, Image)>,
+    audio: Vec<f32>,
 }
 
 impl VideoWriter for FakeVideoWriter {
@@ -242,6 +255,17 @@ impl VideoWriter for FakeVideoWriter {
         Ok(())
     }
 
+    fn write_audio(&mut self, samples: &[f32]) -> Result<(), PlatformError> {
+        let Some(format) = self.settings.audio else {
+            return Err(PlatformError::new("假编码器：这段视频没有音轨"));
+        };
+        if samples.len() % usize::from(format.channels) != 0 {
+            return Err(PlatformError::new("假编码器：样本数不是声道数的整数倍"));
+        }
+        self.audio.extend_from_slice(samples);
+        Ok(())
+    }
+
     fn finish(self: Box<Self>) -> Result<(), PlatformError> {
         let mut bytes = FAKE_VIDEO_MAGIC.to_vec();
         bytes.extend_from_slice(match self.settings.format {
@@ -259,6 +283,22 @@ impl VideoWriter for FakeVideoWriter {
         for (timestamp, image) in &self.frames {
             bytes.extend_from_slice(&(timestamp.as_nanos() as u64).to_le_bytes());
             bytes.extend_from_slice(image.rgba());
+        }
+        match self.settings.audio {
+            None => bytes.push(0),
+            Some(format) => {
+                bytes.push(1);
+                for value in [
+                    format.sample_rate,
+                    u32::from(format.channels),
+                    self.audio.len() as u32,
+                ] {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+                for sample in &self.audio {
+                    bytes.extend_from_slice(&sample.to_le_bytes());
+                }
+            }
         }
         self.files.lock().unwrap().overwrite(&self.path, bytes)
     }

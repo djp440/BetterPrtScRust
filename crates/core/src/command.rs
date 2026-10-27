@@ -89,6 +89,8 @@ pub struct RecordingOptions {
     pub frame_rate: Option<u32>,
     /// 是否录入鼠标指针。
     pub show_cursor: Option<bool>,
+    /// MP4 是否录入系统声音（全局设置 `record_system_audio`，绑定可以覆盖）。
+    pub system_audio: Option<bool>,
 }
 
 /// 捕获模式：决定捕获屏幕上哪一部分内容。

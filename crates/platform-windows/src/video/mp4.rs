@@ -1,4 +1,5 @@
-//! 用 Media Foundation 的 Sink Writer 把纹理编码成 MP4（H.264 High profile，只有视频）。
+//! 用 Media Foundation 的 Sink Writer 把纹理编码成 MP4（H.264 High profile），可以带一条 AAC 音轨
+//! （系统自带的 AAC 编码器：输入 16 位 PCM，44.1 / 48 kHz、单声道或双声道）。
 //!
 //! Sink Writer 拿到录屏设备的 DXGI 设备管理器，并允许使用硬件 MFT：BGRA → NV12 的颜色转换和
 //! H.264 编码都优先在 GPU 上完成，没有硬件编码器时自动退回系统自带的软件编码器。
@@ -8,16 +9,19 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use bps_platform::{PlatformError, VideoFrame, VideoSettings, VideoWriter};
+use bps_platform::{AudioFormat, PlatformError, VideoFrame, VideoSettings, VideoWriter};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize, IMF2DBuffer, IMFAttributes,
-    IMFByteStream, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter, MF_MT_AVG_BITRATE,
+    IMFByteStream, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter,
+    MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
+    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
     MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
     MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_D3D_MANAGER,
-    MF_TRANSCODE_CONTAINERTYPE, MF_VERSION, MFCreateAttributes, MFCreateDXGIDeviceManager,
-    MFCreateDXGISurfaceBuffer, MFCreateMediaType, MFCreateSample, MFCreateSinkWriterFromURL,
+    MF_TRANSCODE_CONTAINERTYPE, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_PCM,
+    MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
+    MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Audio,
     MFMediaType_Video, MFSTARTUP_LITE, MFShutdown, MFStartup, MFTranscodeContainerType_MPEG4,
     MFVideoFormat_ARGB32, MFVideoFormat_H264, MFVideoInterlace_Progressive,
     eAVEncH264VProfile_High,
@@ -36,6 +40,10 @@ const MIN_HARDWARE_SIZE: u32 = 256;
 /// 码率的上下限（比特每秒）。
 const MIN_BITRATE: f64 = 1_000_000.0;
 const MAX_BITRATE: f64 = 60_000_000.0;
+/// AAC 音轨的码率（字节每秒）：24000 即 192 kbps，编码器支持的最高档。
+const AAC_BYTES_PER_SECOND: u32 = 24_000;
+/// 一个 AAC 帧的采样帧数：音轨一个样本也没有时写入这么多静音，免得写完文件时出错。
+const AAC_FRAME: usize = 1024;
 
 /// 一段正在编码的 MP4。
 ///
@@ -47,6 +55,8 @@ pub(super) struct Mp4Writer {
     height: u32,
     /// 每帧的时长（100 纳秒单位）。
     frame_duration: i64,
+    /// 音轨；没有声音时没有。
+    audio: Option<AudioStreamState>,
     _manager: IMFDXGIDeviceManager,
     _device: Rc<VideoDevice>,
     _media_foundation: MediaFoundation,
@@ -75,7 +85,7 @@ impl Mp4Writer {
             // 这种画面时同样退回软件编码器。
             let hardware =
                 settings.width >= MIN_HARDWARE_SIZE && settings.height >= MIN_HARDWARE_SIZE;
-            let (writer, stream) = if hardware {
+            let (writer, stream, audio) = if hardware {
                 create_sink_writer(path, settings, Some(&manager))
                     .or_else(|_| create_sink_writer(path, settings, None))?
             } else {
@@ -87,6 +97,13 @@ impl Mp4Writer {
                 width: settings.width,
                 height: settings.height,
                 frame_duration: hundred_nanos(Duration::from_secs(1) / settings.frame_rate),
+                audio: audio
+                    .zip(settings.audio)
+                    .map(|(stream, format)| AudioStreamState {
+                        stream,
+                        format,
+                        written: 0,
+                    }),
                 _manager: manager,
                 _device: device,
                 _media_foundation: media_foundation,
@@ -133,18 +150,81 @@ impl VideoWriter for Mp4Writer {
         }
     }
 
-    fn finish(self: Box<Self>) -> Result<(), PlatformError> {
+    fn write_audio(&mut self, samples: &[f32]) -> Result<(), PlatformError> {
+        let audio = self
+            .audio
+            .as_mut()
+            .ok_or_else(|| PlatformError::new("这段视频没有音轨"))?;
+        audio.write(&self.writer, samples)
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), PlatformError> {
+        if let Some(audio) = self.audio.as_mut().filter(|audio| audio.written == 0) {
+            let silence = vec![0.0; AAC_FRAME * usize::from(audio.format.channels)];
+            audio.write(&self.writer, &silence)?;
+        }
         unsafe { self.writer.Finalize() }.map_err(|e| win_error("写完视频文件失败", e))
     }
 }
 
-/// 建好写 `path` 的 Sink Writer（H.264 输出、BGRA 输入）并开始写入，返回它和视频流的序号。
+/// MP4 里的音轨。
+struct AudioStreamState {
+    stream: u32,
+    format: AudioFormat,
+    /// 已经写入的采样帧数。
+    written: u64,
+}
+
+impl AudioStreamState {
+    /// 把交错排列的浮点样本转成 16 位 PCM，接在已写入的声音后面。
+    fn write(&mut self, writer: &IMFSinkWriter, samples: &[f32]) -> Result<(), PlatformError> {
+        let channels = usize::from(self.format.channels);
+        let frames = (samples.len() / channels) as u64;
+        if frames == 0 {
+            return Ok(());
+        }
+        let bytes: Vec<u8> = samples[..frames as usize * channels]
+            .iter()
+            .flat_map(|s| ((s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16).to_le_bytes())
+            .collect();
+        let rate = u64::from(self.format.sample_rate);
+        let time = |frames: u64| (u128::from(frames) * 10_000_000 / u128::from(rate)) as i64;
+        unsafe {
+            let buffer = MFCreateMemoryBuffer(bytes.len() as u32)
+                .map_err(|e| win_error("创建音频缓冲失败", e))?;
+            let mut data = std::ptr::null_mut();
+            buffer
+                .Lock(&mut data, None, None)
+                .map_err(|e| win_error("写入音频缓冲失败", e))?;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+            buffer
+                .Unlock()
+                .and_then(|()| buffer.SetCurrentLength(bytes.len() as u32))
+                .map_err(|e| win_error("写入音频缓冲失败", e))?;
+            let sample = MFCreateSample().map_err(|e| win_error("创建音频样本失败", e))?;
+            let start = time(self.written);
+            sample
+                .AddBuffer(&buffer)
+                .and_then(|()| sample.SetSampleTime(start))
+                .and_then(|()| sample.SetSampleDuration(time(self.written + frames) - start))
+                .map_err(|e| win_error("设置音频样本失败", e))?;
+            writer
+                .WriteSample(self.stream, &sample)
+                .map_err(|e| win_error("编码声音失败", e))?;
+        }
+        self.written += frames;
+        Ok(())
+    }
+}
+
+/// 建好写 `path` 的 Sink Writer（H.264 输出、BGRA 输入；有声音时再加一条 AAC 音轨）并开始写入，
+/// 返回它、视频流的序号和音频流的序号。
 /// 给了 `manager` 时允许硬件 MFT、在 GPU 上转换和编码；否则只用软件编码器。
 unsafe fn create_sink_writer(
     path: &Path,
     settings: &VideoSettings,
     manager: Option<&IMFDXGIDeviceManager>,
-) -> Result<(IMFSinkWriter, u32), PlatformError> {
+) -> Result<(IMFSinkWriter, u32, Option<u32>), PlatformError> {
     unsafe {
         let mut attributes = None;
         MFCreateAttributes(&mut attributes, 3).map_err(|e| win_error("创建编码属性失败", e))?;
@@ -198,10 +278,72 @@ unsafe fn create_sink_writer(
                     e,
                 )
             })?;
+        let audio = match settings.audio {
+            Some(format) => Some(add_audio_stream(&writer, format)?),
+            None => None,
+        };
         writer
             .BeginWriting()
             .map_err(|e| win_error("开始编码失败", e))?;
-        Ok((writer, stream))
+        Ok((writer, stream, audio))
+    }
+}
+
+/// 给 Sink Writer 加一条 AAC 音轨（输入 16 位 PCM），返回它的序号。
+unsafe fn add_audio_stream(
+    writer: &IMFSinkWriter,
+    format: AudioFormat,
+) -> Result<u32, PlatformError> {
+    unsafe {
+        let output = audio_type(&MFAudioFormat_AAC, format)?;
+        output
+            .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, AAC_BYTES_PER_SECOND)
+            .map_err(|e| win_error("设置 AAC 参数失败", e))?;
+        let stream = writer
+            .AddStream(&output)
+            .map_err(|e| win_error("添加 AAC 音轨失败", e))?;
+        let input = audio_type(&MFAudioFormat_PCM, format)?;
+        let block = u32::from(format.channels) * 2;
+        input
+            .SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, block)
+            .and_then(|()| {
+                input.SetUINT32(
+                    &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                    format.sample_rate * block,
+                )
+            })
+            .map_err(|e| win_error("设置音频输入格式失败", e))?;
+        writer
+            .SetInputMediaType(stream, &input, None)
+            .map_err(|e| {
+                win_error(
+                    &format!(
+                        "没有可用的 AAC 编码器支持 {} Hz、{} 声道的声音",
+                        format.sample_rate, format.channels
+                    ),
+                    e,
+                )
+            })?;
+        Ok(stream)
+    }
+}
+
+/// `subtype` 格式、16 位、采样率和声道数与 `format` 一致的音频类型。
+fn audio_type(subtype: &GUID, format: AudioFormat) -> Result<IMFMediaType, PlatformError> {
+    unsafe {
+        let media_type = MFCreateMediaType().map_err(|e| win_error("创建媒体类型失败", e))?;
+        media_type
+            .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+            .and_then(|()| media_type.SetGUID(&MF_MT_SUBTYPE, subtype))
+            .and_then(|()| media_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16))
+            .and_then(|()| {
+                media_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, format.sample_rate)
+            })
+            .and_then(|()| {
+                media_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, u32::from(format.channels))
+            })
+            .map_err(|e| win_error("设置媒体类型失败", e))?;
+        Ok(media_type)
     }
 }
 

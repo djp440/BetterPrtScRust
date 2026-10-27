@@ -35,6 +35,7 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
 #   autostart = false                              开机自启：true / false
 #   ocr_auto_copy = false                          OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板：true / false
+#   record_system_audio = true                     MP4 录屏录入系统声音（默认输出设备正在播放的声音）：true / false
 #   run_as_admin = false                           以管理员身份运行：true / false。开启后即使前台是
 #                                                  管理员权限的窗口，热键也能生效；开机自启改用计划任务，
 #                                                  登录时不弹 UAC 提示
@@ -52,7 +53,8 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   auto_save  true / false，默认 false：截图最终交付时（复制并退出、确认）同时存进保存目录，
 #            取消时不保存；与 after 无关。对 long_screenshot 同样有效
 # 每条绑定还可以单独覆盖：save_dir、filename_template、output_format（录屏用 mp4 或 gif）、
-#   frame_rate（录屏帧率，MP4 默认 30、GIF 默认 15）、show_cursor（录屏时是否显示鼠标指针：true / false）
+#   frame_rate（录屏帧率，MP4 默认 30、GIF 默认 15）、show_cursor（录屏时是否显示鼠标指针：true / false）、
+#   record_system_audio（MP4 录屏是否录入系统声音：true / false）
 #
 # 翻译（可选，OCR 结果面板里的“翻译”按钮）：在 [translation] 里填写你自己的翻译服务；不填 api_key
 # 时按钮禁用。点“翻译”时只会把识别出的文字发给你配置的服务，截图本身绝不上传。把 [translation]
@@ -120,6 +122,9 @@ pub struct Config {
     /// OCR（直达热键或工具条）识别后自动复制文字、不弹结果面板（默认关闭）。已合并进各热键绑定的
     /// [`CaptureRequest::ocr_auto_copy`]。
     pub ocr_auto_copy: bool,
+    /// MP4 录屏录入系统声音（默认开启）。没有单独设置的录屏绑定按它录制
+    /// （已合并进各热键绑定的 [`RecordingOptions::system_audio`]）。
+    pub record_system_audio: bool,
 }
 
 impl Config {
@@ -134,6 +139,7 @@ impl Config {
             run_as_admin: false,
             translation: None,
             ocr_auto_copy: false,
+            record_system_audio: true,
         }
     }
 
@@ -172,6 +178,8 @@ impl Config {
             .collect::<Result<_, _>>()?;
         for binding in &mut bindings {
             binding.capture.ocr_auto_copy = ocr_auto_copy;
+            let recording = &mut binding.capture.recording;
+            recording.system_audio = recording.system_audio.or(raw.record_system_audio);
         }
         let translation = raw
             .translation
@@ -187,6 +195,7 @@ impl Config {
             run_as_admin: raw.run_as_admin.unwrap_or(false),
             translation,
             ocr_auto_copy,
+            record_system_audio: raw.record_system_audio.unwrap_or(true),
         })
     }
 }
@@ -368,6 +377,7 @@ struct RawConfig {
     autostart: Option<bool>,
     run_as_admin: Option<bool>,
     ocr_auto_copy: Option<bool>,
+    record_system_audio: Option<bool>,
     save_dir: Option<PathBuf>,
     filename_template: Option<Spanned<String>>,
     output_format: Option<Spanned<String>>,
@@ -436,6 +446,7 @@ struct RawBinding {
     output_format: Option<Spanned<String>>,
     frame_rate: Option<Spanned<u32>>,
     show_cursor: Option<bool>,
+    record_system_audio: Option<bool>,
 }
 
 impl RawBinding {
@@ -492,6 +503,7 @@ impl RawBinding {
             format: None,
             frame_rate,
             show_cursor: self.show_cursor,
+            system_audio: self.record_system_audio,
         };
         if let Some(dir) = self.save_dir {
             output.save_dir = SaveDir::Custom(dir);

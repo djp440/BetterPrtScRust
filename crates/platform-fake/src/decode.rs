@@ -7,7 +7,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use bps_platform::{Image, VideoFormat};
+use bps_platform::{AudioFormat, Image, VideoFormat};
 
 use crate::video::FAKE_VIDEO_MAGIC;
 
@@ -103,7 +103,7 @@ pub fn dib(bytes: &[u8]) -> Image {
 }
 
 /// 假编码器写出的一段视频。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FakeVideo {
     pub format: VideoFormat,
     pub width: u32,
@@ -112,6 +112,16 @@ pub struct FakeVideo {
     pub frame_rate: u32,
     /// 按时间戳排列的全部帧。
     pub frames: Vec<FakeVideoFrame>,
+    /// 音轨；没有音轨时为 `None`。
+    pub audio: Option<FakeAudio>,
+}
+
+/// 假视频的音轨。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FakeAudio {
+    pub format: AudioFormat,
+    /// 交错排列的全部样本，从视频开头开始。
+    pub samples: Vec<f32>,
 }
 
 impl FakeVideo {
@@ -162,6 +172,24 @@ pub fn video(bytes: &[u8]) -> FakeVideo {
             }
         })
         .collect();
+    let audio = match take(1) {
+        [0] => None,
+        [1] => {
+            let mut u32_field = || u32::from_le_bytes(take(4).try_into().unwrap());
+            let (sample_rate, channels, count) = (u32_field(), u32_field(), u32_field());
+            let samples = (0..count)
+                .map(|_| f32::from_le_bytes(take(4).try_into().unwrap()))
+                .collect();
+            Some(FakeAudio {
+                format: AudioFormat {
+                    sample_rate,
+                    channels: channels as u16,
+                },
+                samples,
+            })
+        }
+        other => panic!("假视频的音轨标记无效 {other:?}"),
+    };
     assert!(rest.is_empty(), "假视频末尾有多余数据");
     FakeVideo {
         format,
@@ -169,6 +197,7 @@ pub fn video(bytes: &[u8]) -> FakeVideo {
         height,
         frame_rate,
         frames,
+        audio,
     }
 }
 

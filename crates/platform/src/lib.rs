@@ -8,6 +8,7 @@
 //! 新增一种能力时：在这里加 trait，在 [`Platform`] 里加一个字段，
 //! 然后分别在 `platform-windows` 和 `platform-fake` 里实现。
 
+mod audio;
 mod autostart;
 mod background;
 mod clipboard;
@@ -39,6 +40,7 @@ mod video;
 mod window;
 mod window_source;
 
+pub use audio::{AudioChunk, AudioFormat, AudioSource, AudioStream};
 pub use autostart::{Autostart, AutostartEntry, AutostartMethod, Elevation};
 pub use background::{BackgroundResult, BackgroundWorker};
 pub use clipboard::{Clipboard, ClipboardItem};
@@ -116,6 +118,8 @@ pub struct Platform {
     pub video_source: Box<dyn VideoSource>,
     /// 把录屏的帧编码成视频文件。
     pub video_encoder: Box<dyn VideoEncoder>,
+    /// 录屏的音频源：采集系统声音。
+    pub audio_source: Box<dyn AudioSource>,
     /// 节拍：录屏期间按帧率递交 [`PlatformEvent::Tick`]。
     pub ticker: Box<dyn Ticker>,
     /// 录屏期间的录屏控制条和区域边框；控制条上的输入以 [`PlatformEvent::OverlayInput`] 递交。

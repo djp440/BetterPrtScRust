@@ -21,6 +21,7 @@ windows-numerics.workspace = true
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [
+    # 录屏的系统声音用 Media_Audio（WASAPI 回环）、Com_StructuredStorage。
     # WinRT：窗口截取用 Graphics_Capture、Graphics_DirectX*；文字识别（只在结果面板子进程里用）
     # 用 Media_Ocr、Globalization、Graphics_Imaging、Security_Cryptography、Storage_Streams、
     # Foundation_Collections。
@@ -47,12 +48,14 @@ features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
     "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
