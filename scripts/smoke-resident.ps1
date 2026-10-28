@@ -7,7 +7,8 @@
   APPDATA 指向一个空的临时目录，结束时确认它仍然是空的（便携模式不写用户目录）。
 
     1. 首次运行：程序目录里生成含 6 条默认绑定的 config.toml；
-       第 1 条默认绑定（PrtSc → 区域 + 标注）尚未实现，应通知“暂不支持”且不碰剪贴板。
+       投递第 1 条默认绑定（PrtSc → 区域 + 等待确认），应弹出选区遮罩；投递 Esc 取消，
+       遮罩隐藏且不碰剪贴板。
     2. 改写 config.toml（带 BOM，同记事本），第 1 条绑定换成 Shift+PrtSc → 显示器 + 复制 +
        自动存储，存储目录覆盖为临时目录；不重启，投递热键事件后剪贴板应出现 PNG + DIB +
        存下的文件。
@@ -39,6 +40,8 @@ public static class BpsSmokeUser32 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr FindWindowW(string className, string windowName);
     [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")]
     public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 '@
@@ -48,6 +51,7 @@ $WM_HOTKEY = 0x0312
 $WM_RBUTTONUP = 0x0205
 $WM_TRAY = 0x8000 + 1   # WM_APP + 1，见 platform-windows 的 event_loop.rs
 $VK_RETURN = 0x0D
+$VK_ESCAPE = 0x1B
 $VK_UP = 0x26
 # 第 1 条热键绑定的标识（热键标识 = 绑定下标 + 1）。
 $FirstBinding = 1
@@ -87,6 +91,18 @@ function Wait-Log([string]$text) {
     throw "5 秒内输出里没有出现：$text"
 }
 
+# 等选区遮罩（常驻窗口，平时隐藏）显示或隐藏。
+function Wait-OverlayVisible([bool]$visible) {
+    for ($i = 0; $i -lt 50; $i++) {
+        $overlay = Find-Window 'BetterPrtSc.SelectionOverlay'
+        if ($overlay -ne [IntPtr]::Zero -and [BpsSmokeUser32]::IsWindowVisible($overlay) -eq $visible) { return $overlay }
+        if ($overlay -eq [IntPtr]::Zero -and -not $visible) { return $overlay }
+        Start-Sleep -Milliseconds 100
+    }
+    $state = if ($visible) { '没有显示' } else { '没有隐藏' }
+    throw "5 秒内选区遮罩$state"
+}
+
 function Send-Hotkey([IntPtr]$hwnd, [int]$id) {
     [BpsSmokeUser32]::PostMessageW($hwnd, $WM_HOTKEY, [IntPtr]$id, [IntPtr]::Zero) | Out-Null
 }
@@ -118,7 +134,8 @@ $CopyAndSaveConfig = @"
 [[bindings]]
 hotkey = "Shift+PrintScreen"
 mode = "display"
-actions = ["copy_to_clipboard", "auto_save"]
+after = "copy_to_clipboard"
+auto_save = true
 save_dir = '$saveDir'
 "@
 
@@ -150,9 +167,13 @@ try {
     "程序目录生成了 config.toml，含 $bindings 条默认绑定"
     $clip::Clear()
     Send-Hotkey $hwnd $FirstBinding
-    Wait-Log '[通知] 暂不支持'
-    if ($clip::GetDataObject().GetDataPresent('PNG')) { throw '“暂不支持”的捕获不应写入剪贴板' }
-    'PrtSc（区域 + 标注）通知了“暂不支持”，剪贴板未被写入'
+    $overlay = Wait-OverlayVisible $true
+    '选区遮罩已显示'
+    [BpsSmokeUser32]::PostMessageW($overlay, $WM_KEYDOWN, [IntPtr]$VK_ESCAPE, [IntPtr]::Zero) | Out-Null
+    $null = Wait-OverlayVisible $false
+    Start-Sleep -Milliseconds 300
+    if ($clip::GetDataObject().GetDataPresent('PNG')) { throw '取消选区不应写入剪贴板' }
+    'Esc 取消了选区，遮罩已隐藏，剪贴板未被写入'
 
     '--- 2. 修改配置后自动重新加载 ---'
     Set-Content -Path $config -Value $CopyAndSaveConfig -Encoding UTF8   # Windows PowerShell 写入带 BOM 的 UTF-8
