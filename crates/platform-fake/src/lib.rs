@@ -836,18 +836,19 @@ impl FakePlatform {
             | OverlayInput::Character(_)
             | OverlayInput::Interrupted => None,
         };
-        if let (Some(position), Some(area)) = (position, self.overlay_pass_through()) {
+        if let Some(position) = position {
+            let areas = self.overlay_pass_through();
             assert!(
-                !area.contains(position),
-                "{position:?} 在透过遮罩的范围 {area:?} 里，鼠标操作会交给底下的窗口"
+                !areas.iter().any(|area| area.contains(position)),
+                "{position:?} 在透过遮罩的范围 {areas:?} 里，鼠标操作会交给底下的窗口"
             );
         }
         PlatformEvent::OverlayInput(input)
     }
 
-    /// 遮罩上透过遮罩的范围（用户在这里看到实时桌面、鼠标操作交给底下的窗口）；
-    /// 遮罩没有打开或没有透过的范围时返回 `None`。
-    pub fn overlay_pass_through(&self) -> Option<Rect> {
+    /// 遮罩上透过遮罩的范围（用户在这里看到实时桌面、鼠标操作交给底下的窗口，可以有几块）；
+    /// 遮罩没有打开或没有透过的范围时为空。
+    pub fn overlay_pass_through(&self) -> Vec<Rect> {
         self.overlay.lock().unwrap().visible_pass_through()
     }
 

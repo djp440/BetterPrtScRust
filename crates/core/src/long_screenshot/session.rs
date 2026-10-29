@@ -19,7 +19,7 @@ use bps_platform::{
 use super::{LongScreenshot, Stitched, preview};
 use crate::annotation::finish::{self, Origin};
 use crate::annotation::session::{Annotator, Response};
-use crate::annotation::toolbar::{Entry, Toolbar, ToolbarButton};
+use crate::annotation::toolbar::{Entry, Toolbar, ToolbarButton, text_width};
 use crate::capture::{CaptureFailure, Screenshot, display_at};
 use crate::magnifier::Magnifier;
 use crate::region::{Ending, frozen_region};
@@ -86,6 +86,8 @@ struct Sampling {
     preview_box: Rect,
     /// 遮罩画布上正显示着的预览画面的范围；拼接结果变化后为 `None`，下次重画时更新。
     preview_shown: Option<Rect>,
+    /// 当前透过遮罩的范围：区域里除去控制条、预览和状态标签的部分，随预览变大而更新。
+    pass_through: Vec<Rect>,
     /// 最近一帧和已拼接的内容对不上（滚动太快）。
     lost: bool,
 }
@@ -420,14 +422,15 @@ impl LongScreenshotCapture {
         let (preview_box, _) = preview::preview_box(region, border, &self.displays);
         let bar = self.bar(&SAMPLING_BAR, region);
         let started = frozen_region(platform, &self.displays, region).and_then(|first| {
-            // 控制条、预览放不到区域外面时盖在区域里，这部分不透过遮罩。
-            let open = clear_of(region, &[bar.bounds(), preview_box]);
-            platform.overlay.set_pass_through(Some(open))?;
+            // 控制条、预览放不到区域外面时盖在区域里，这部分不透过遮罩，其余部分都透过。
+            // 先按整个预览框避开，画出预览后再按它实际的大小放开（见 `redraw`）。
+            let open = uncovered(region, &[bar.bounds(), preview_box]);
+            platform.overlay.set_pass_through(&open)?;
             platform.region_sampler.start(region)?;
-            Ok(first)
+            Ok((first, open))
         });
-        let first = match started {
-            Ok(first) => first,
+        let (first, pass_through) = match started {
+            Ok(started) => started,
             Err(e) => return Some(Err(self.fail(platform, e))),
         };
         self.phase = Phase::Sampling(Box::new(Sampling {
@@ -435,6 +438,7 @@ impl LongScreenshotCapture {
             long: LongScreenshot::new(first),
             preview_box,
             preview_shown: None,
+            pass_through,
             lost: false,
         }));
         self.hovered = None;
@@ -502,7 +506,7 @@ impl LongScreenshotCapture {
         if matches!(self.phase, Phase::Sampling(_)) {
             platform.region_sampler.stop();
             // 遮罩接着用（标注）或马上关闭，恢复失败也不影响结果。
-            let _ = platform.overlay.set_pass_through(None);
+            let _ = platform.overlay.set_pass_through(&[]);
         }
     }
 
@@ -535,11 +539,41 @@ impl LongScreenshotCapture {
             let magnifier = self.magnifier.items(platform.overlay.as_ref(), focus)?;
             scene.items.extend(magnifier);
         }
+        if let Phase::Sampling(sampling) = &self.phase {
+            let open = self.open_while_sampling(sampling, &scene);
+            if open != sampling.pass_through {
+                platform.overlay.set_pass_through(&open)?;
+                if let Phase::Sampling(sampling) = &mut self.phase {
+                    sampling.pass_through = open;
+                }
+            }
+        }
         if canvas_changed || self.drawn.as_ref() != Some(&scene) {
             platform.overlay.render(&scene)?;
             self.drawn = Some(scene);
         }
         Ok(())
+    }
+
+    /// 采样时区域里透过遮罩的部分：避开控制条、正显示着的预览（连同边框）和状态标签，
+    /// 预览下方空着的地方也交给底下的窗口滚动。
+    fn open_while_sampling(&self, sampling: &Sampling, scene: &OverlayScene) -> Vec<Rect> {
+        let border = self.border(sampling.region) as i32;
+        let preview = sampling.preview_shown.unwrap_or(sampling.preview_box);
+        let mut obstacles = vec![
+            self.bar(&SAMPLING_BAR, sampling.region).bounds(),
+            Rect::new(
+                preview.x - border,
+                preview.y - border,
+                preview.width + 2 * border as u32,
+                preview.height + 2 * border as u32,
+            ),
+        ];
+        obstacles.extend(scene.items.iter().filter_map(|item| match item {
+            OverlayItem::Label(label) => Some(label_bounds(label)),
+            _ => None,
+        }));
+        uncovered(sampling.region, &obstacles)
     }
 
     /// 遮罩上现在要画的内容。
@@ -668,31 +702,27 @@ enum ControlInput {
     Pass,
 }
 
-/// `region` 里避开 `obstacles` 的部分：盖在区域里的障碍从它所在的那一边切掉（障碍靠下就
-/// 切掉下方，否则靠右就切掉右侧，否则切掉左侧）。切完不剩时返回 `region` 本身。
-fn clear_of(region: Rect, obstacles: &[Rect]) -> Rect {
-    let mut open = region;
-    for obstacle in obstacles {
-        let Some(overlap) = open.intersection(*obstacle) else {
-            continue;
-        };
-        let (left, top) = (open.x, open.y);
-        let (right, bottom) = (left + open.width as i32, top + open.height as i32);
-        let center_y = top + open.height as i32 / 2;
-        let center_x = left + open.width as i32 / 2;
-        let cut = if overlap.y >= center_y {
-            (left, top, right, overlap.y)
-        } else if overlap.x >= center_x {
-            (left, top, overlap.x, bottom)
-        } else {
-            (overlap.x + overlap.width as i32, top, right, bottom)
-        };
-        let (l, t, r, b) = cut;
-        if l < r && t < b {
-            open = Rect::new(l, t, (r - l) as u32, (b - t) as u32);
-        }
-    }
-    open
+/// 标签底色框的大致范围：文字宽度按字符估算，多留一个字号的余量。
+fn label_bounds(label: &Label) -> Rect {
+    let font_size = f64::from(label.font_size);
+    let padding = label.padding as i32;
+    let width = (text_width(&label.text, font_size) + font_size).ceil() as i32 + 2 * padding;
+    let height = (font_size * 1.4).ceil() as i32 + 2 * padding;
+    let top = match label.corner {
+        Corner::TopLeft => label.anchor.y,
+        Corner::BottomLeft => label.anchor.y - height,
+    };
+    Rect::new(label.anchor.x, top, width as u32, height as u32)
+}
+
+/// `region` 去掉 `obstacles` 后剩下的部分（几块互不重叠的矩形）。
+fn uncovered(region: Rect, obstacles: &[Rect]) -> Vec<Rect> {
+    obstacles.iter().fold(vec![region], |parts, &obstacle| {
+        parts
+            .into_iter()
+            .flat_map(|part| subtract(part, obstacle))
+            .collect()
+    })
 }
 
 /// `rect` 去掉 `hole` 后剩下的部分（最多四块）。
@@ -730,16 +760,16 @@ mod tests {
     }
 
     #[test]
-    fn clear_of_cuts_obstacles_off_the_side_they_sit_on() {
+    fn uncovered_keeps_everything_around_the_obstacles() {
         let region = Rect::new(0, 0, 100, 100);
-        assert_eq!(
-            clear_of(region, &[Rect::new(60, 90, 40, 10)]),
-            Rect::new(0, 0, 100, 90)
+        // 右上角的预览、右下角的控制条：两者之间和它们左边都还留着。
+        let parts = uncovered(
+            region,
+            &[Rect::new(70, 0, 30, 40), Rect::new(60, 90, 40, 10)],
         );
-        assert_eq!(
-            clear_of(region, &[Rect::new(70, 0, 30, 40)]),
-            Rect::new(0, 0, 70, 100)
-        );
-        assert_eq!(clear_of(region, &[Rect::new(200, 0, 5, 5)]), region);
+        let area: u32 = parts.iter().map(|r| r.width * r.height).sum();
+        assert_eq!(area, 100 * 100 - 30 * 40 - 40 * 10);
+        assert!(parts.iter().any(|r| r.contains(Point::new(85, 60))));
+        assert_eq!(uncovered(region, &[Rect::new(200, 0, 5, 5)]), vec![region]);
     }
 }
