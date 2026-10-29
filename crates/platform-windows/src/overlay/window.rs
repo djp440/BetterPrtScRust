@@ -203,30 +203,32 @@ impl OverlayWindow {
         self.shared.stale.get()
     }
 
-    /// 让 `area`（虚拟桌面物理像素）透过窗口：用窗口区域把这块挖空，底下的桌面直接露出来、
-    /// 鼠标事件也落到底下的窗口；同时让窗口不出现在屏幕捕获里。`None` 恢复整个窗口。
-    pub fn set_pass_through(&self, area: Option<Rect>) -> Result<(), PlatformError> {
+    /// 让 `areas`（虚拟桌面物理像素）透过窗口：用窗口区域把这几块挖空，底下的桌面直接露出来、
+    /// 鼠标事件也落到底下的窗口；同时让窗口不出现在屏幕捕获里。空切片恢复整个窗口。
+    pub fn set_pass_through(&self, areas: &[Rect]) -> Result<(), PlatformError> {
         unsafe {
-            let Some(area) = area else {
+            if areas.is_empty() {
                 SetWindowRgn(self.hwnd, None, true);
                 let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);
                 return Ok(());
-            };
+            }
             let bounds = self.bounds;
             let whole = CreateRectRgn(0, 0, bounds.width as i32, bounds.height as i32);
-            let left = area.x - bounds.x;
-            let top = area.y - bounds.y;
-            let hole = CreateRectRgn(
-                left,
-                top,
-                left + area.width as i32,
-                top + area.height as i32,
-            );
-            let combined = CombineRgn(Some(whole), Some(whole), Some(hole), RGN_DIFF);
-            let _ = DeleteObject(HGDIOBJ(hole.0));
-            if combined.0 == 0 {
-                let _ = DeleteObject(HGDIOBJ(whole.0));
-                return Err(PlatformError::new("计算遮罩透过范围失败"));
+            for area in areas {
+                let left = area.x - bounds.x;
+                let top = area.y - bounds.y;
+                let hole = CreateRectRgn(
+                    left,
+                    top,
+                    left + area.width as i32,
+                    top + area.height as i32,
+                );
+                let combined = CombineRgn(Some(whole), Some(whole), Some(hole), RGN_DIFF);
+                let _ = DeleteObject(HGDIOBJ(hole.0));
+                if combined.0 == 0 {
+                    let _ = DeleteObject(HGDIOBJ(whole.0));
+                    return Err(PlatformError::new("计算遮罩透过范围失败"));
+                }
             }
             // 成功后区域归系统所有。
             if SetWindowRgn(self.hwnd, Some(whole), true) == 0 {

@@ -284,7 +284,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
         text::rasterize(&resources.gpu, text, font_size)
     }
 
-    fn set_pass_through(&mut self, area: Option<Rect>) -> Result<(), PlatformError> {
+    fn set_pass_through(&mut self, areas: &[Rect]) -> Result<(), PlatformError> {
         let (Some(resources), Some(session)) = (self.resources.as_ref(), self.session.as_ref())
         else {
             return Err(PlatformError::new("选区遮罩没有打开"));
@@ -292,7 +292,7 @@ impl SelectionOverlay for D2dSelectionOverlay {
         if session.live.is_some() {
             return Err(PlatformError::new("实时画面上的遮罩本来就是透明的"));
         }
-        resources.window.set_pass_through(area)
+        resources.window.set_pass_through(areas)
     }
 
     fn close(&mut self) {

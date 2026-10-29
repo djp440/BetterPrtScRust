@@ -54,7 +54,7 @@ fn pass_through_region_is_sampled_live_and_mask_is_excluded() {
             ..OverlayScene::default()
         })
         .unwrap();
-    overlay.set_pass_through(Some(region)).unwrap();
+    overlay.set_pass_through(&[region]).unwrap();
 
     let hwnd = unsafe { FindWindowExW(None, None, w!("BetterPrtSc.SelectionOverlay"), None) };
     if let Ok(hwnd) = hwnd {
@@ -83,7 +83,7 @@ fn pass_through_region_is_sampled_live_and_mask_is_excluded() {
     );
 
     let live = frames.capture_display(primary.id).unwrap();
-    overlay.set_pass_through(None).unwrap();
+    overlay.set_pass_through(&[]).unwrap();
     overlay.close();
     // 遮罩压暗到 10% 左右；采到的应与不含遮罩的实时桌面一样亮（容许桌面自己在变化）。
     let (rx, ry) = (

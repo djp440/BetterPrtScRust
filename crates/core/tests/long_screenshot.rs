@@ -241,7 +241,7 @@ fn pressing_start_samples_the_region_and_lets_the_user_scroll_it() {
     assert_eq!(fake.sampling_region(), Some(VIEWPORT));
     assert_eq!(
         fake.overlay_pass_through(),
-        Some(VIEWPORT),
+        vec![VIEWPORT],
         "区域应透过遮罩，用户才能在里面滚动"
     );
     assert!(has_text(fake, "完成"));
@@ -462,9 +462,8 @@ fn annotating_a_long_screenshot_shows_it_scaled_down_and_produces_full_size() {
         "从等待确认转入的长截屏，完成后回到等待确认（标注）"
     );
     assert_eq!(fake.sampling_region(), None);
-    assert_eq!(
-        fake.overlay_pass_through(),
-        None,
+    assert!(
+        fake.overlay_pass_through().is_empty(),
         "标注时整个遮罩都接收输入"
     );
     let (view, _) = fake.overlay_canvas().expect("应显示长截屏");
@@ -571,17 +570,27 @@ fn display_mode_starts_with_the_whole_display_selected() {
     feed(&mut instance, fake.click_text("开始"));
 
     assert_eq!(fake.sampling_region(), Some(SCREEN));
-    let open = fake.overlay_pass_through().unwrap();
+    let open = fake.overlay_pass_through();
     let (preview, _) = fake.overlay_canvas().unwrap();
     let finish = fake.overlay_scene().unwrap().text_rect("完成").unwrap();
-    assert!(contains(SCREEN, open));
+    assert!(open.iter().all(|&part| contains(SCREEN, part)));
     assert!(
-        open.intersection(preview).is_none(),
+        open.iter().all(|part| part.intersection(preview).is_none()),
         "预览盖在区域里时不透过遮罩"
     );
     assert!(
-        open.intersection(finish).is_none(),
+        open.iter().all(|part| part.intersection(finish).is_none()),
         "控制条盖在区域里时不透过遮罩"
+    );
+    // 预览和状态标签下方（同一列）的空处仍在区域里，用户在那里滚动滚轮要交给底下的窗口。
+    let below = Point::new(
+        preview.x + preview.width as i32 / 2,
+        preview.y + preview.height as i32 + 60,
+    );
+    assert!(contains(SCREEN, Rect::new(below.x, below.y, 1, 1)));
+    assert!(
+        open.iter().any(|part| part.contains(below)),
+        "预览下方 {below:?} 应透过遮罩：{open:?}"
     );
 }
 

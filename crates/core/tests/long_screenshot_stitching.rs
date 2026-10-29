@@ -364,3 +364,63 @@ fn irregular_scroll_steps_from_smooth_scrolling_stitch_correctly() {
         &stack(&[&header, &rows(&doc, 0, content_end)]),
     );
 }
+
+/// `bar` 上一小块变了色：像鼠标悬停高亮了工具栏按钮、任务栏时钟跳了一分钟。
+fn highlighted(bar: &Image) -> Image {
+    let mut pixels = bar.rgba().to_vec();
+    for y in 2..bar.height() - 2 {
+        for x in 30..40 {
+            let i = ((y * WIDTH + x) * 4) as usize;
+            pixels[i..i + 4].copy_from_slice(&[255, 220, 0, 255]);
+        }
+    }
+    Image::from_rgba(WIDTH, bar.height(), pixels)
+}
+
+#[test]
+fn small_in_place_change_in_a_fixed_bar_is_not_mistaken_for_scrolling_too_fast() {
+    let doc = document(1000);
+    let toolbar = bar(18, 200);
+    let hovered = highlighted(&toolbar);
+    let before = Viewport::new(&doc, 120).with_header(toolbar.clone());
+    let after = Viewport::new(&doc, 120).with_header(hovered.clone());
+
+    let mut long = LongScreenshot::new(before.frame(0));
+    assert!(matches!(
+        long.push(&before.frame(40)),
+        Stitched::Scrolled { distance: 40, .. }
+    ));
+    // 没有滚动，只有工具栏上的按钮变了高亮。
+    assert_eq!(long.push(&after.frame(40)), Stitched::Unchanged);
+    assert_eq!(long.push(&before.frame(40)), Stitched::Unchanged);
+    for offset in (40..=400).step_by(30) {
+        long.push(&after.frame(offset));
+    }
+
+    let content_end = 400 + before.content_height();
+    assert_same(
+        &long.image(),
+        &stack(&[&toolbar, &rows(&doc, 0, content_end)]),
+    );
+}
+
+#[test]
+fn small_in_place_change_in_a_fixed_bottom_bar_is_not_mistaken_for_scrolling_too_fast() {
+    let doc = document(1000);
+    let taskbar = bar(14, 90);
+    let ticked = highlighted(&taskbar);
+    let before = Viewport::new(&doc, 120).with_footer(taskbar.clone());
+    let after = Viewport::new(&doc, 120).with_footer(ticked.clone());
+
+    let mut long = LongScreenshot::new(before.frame(0));
+    assert_eq!(long.push(&after.frame(0)), Stitched::Unchanged);
+    for offset in (0..=400).step_by(30) {
+        long.push(&after.frame(offset));
+    }
+
+    let content_end = 390 + after.content_height();
+    assert_same(
+        &long.image(),
+        &stack(&[&rows(&doc, 0, content_end), &ticked]),
+    );
+}

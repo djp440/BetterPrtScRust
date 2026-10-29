@@ -16,6 +16,9 @@
 //! 不变的列；找到后侧栏只取第一帧的内容放在长图最顶部（一屏高），其下的延长区域用侧栏的
 //! 主要背景色填充，正文照常拼接，宽度保持不变。
 //!
+//! 内容区里找不到滚动距离、但同一位置变了的行很少时（鼠标悬停让工具栏按钮高亮、任务栏
+//! 时钟跳了一分钟），当作原地变化：没有滚动，以后和变化后的画面比较。
+//!
 //! 找不到重叠（滚得太快、两帧之间隔了超过一屏）时丢弃这一帧，参照帧不变：用户滚回能和
 //! 参照帧重叠的位置后就能继续拼接，不会漏行。高度到达上限（[`LongScreenshot::MAX_HEIGHT`]）
 //! 后不再接受新的帧。
@@ -37,6 +40,8 @@ const MIN_SIDEBAR_WIDTH: usize = 8;
 /// 两帧内容区至少要重叠的行数占内容区高度的比例（另有下限 [`MIN_OVERLAP_ROWS`]）。
 const MIN_OVERLAP_FRACTION: u32 = 10;
 const MIN_OVERLAP_ROWS: u32 = 4;
+/// 找不到滚动距离、但同一位置变了的行不超过一屏的这么多分之一时，当作原地变化而不是滚得太快。
+const MAX_IN_PLACE_FRACTION: u32 = 8;
 
 /// 把一帧帧画面拼接成的长截屏。
 ///
@@ -188,7 +193,10 @@ impl LongScreenshot {
             .take_while(|&y| current[y] == reference[y])
             .count();
         let (lo, hi) = (top as u32, (h - bottom) as u32);
-        let Some(distance) = self.find_distance(&current, lo, hi) else {
+        let Some(distance) = self
+            .find_distance(&current, lo, hi)
+            .or_else(|| self.changed_in_place(&current, lo, hi).then_some(0))
+        else {
             return Stitched::Lost;
         };
         if distance == 0 {
@@ -265,6 +273,16 @@ impl LongScreenshot {
                 )
             })
             .map(|(d, _)| d)
+    }
+
+    /// 找不到滚动距离时，变化是否只是原地的一小块（工具栏按钮的悬停高亮、任务栏时钟）：
+    /// 同一位置内容不同的行不超过一屏的 1/[`MAX_IN_PLACE_FRACTION`]。真的滚过头时几乎每一行
+    /// 都会变，仍按丢失处理。
+    fn changed_in_place(&self, current: &[Row], lo: u32, hi: u32) -> bool {
+        let changed = (lo..hi)
+            .filter(|&y| current[y as usize] != self.reference[y as usize])
+            .count() as u32;
+        changed <= self.frame_height / MAX_IN_PLACE_FRACTION
     }
 
     /// 按滚动距离 `distance` 把新帧放进拼接结果，接上新露出来的行；返回多出来的行数。

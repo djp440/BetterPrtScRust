@@ -480,7 +480,7 @@ fn place(region: Rect, (width, height): (i32, i32), gap: i32, screen: Rect) -> (
 }
 
 /// 估算一行文字的宽度（像素）：汉字等全角字符占 1 个字号，其余占 0.6 个字号。
-fn text_width(text: &str, font_size: f64) -> f64 {
+pub(crate) fn text_width(text: &str, font_size: f64) -> f64 {
     text.chars()
         .map(|c| if c.is_ascii() { 0.6 } else { 1.0 })
         .sum::<f64>()
