@@ -375,14 +375,44 @@ impl Annotation {
 /// 蒙版是共享的），所以任何组合的撤销、重做都精确还原。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnnotationDocument {
+    source: Option<Arc<CanvasSource>>,
     annotations: Vec<Annotation>,
     /// 每一步修改之前的标注列表，最近的在最后。
-    undo: Vec<Vec<Annotation>>,
+    undo: Vec<DocumentState>,
     /// 被撤销的步骤做完之后的标注列表，最近撤销的在最后。
-    redo: Vec<Vec<Annotation>>,
+    redo: Vec<DocumentState>,
+}
+
+/// 一步历史中的捕获来源；窗口身份和窗口底图必须一起撤回。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanvasSource {
+    pub region: Rect,
+    /// 普通区域从冻结帧重裁，不在历史里保留每个裁剪结果；窗口和长截屏共享原图。
+    pub base: Option<Arc<Image>>,
+    pub window: Option<bps_platform::TopLevelWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DocumentState {
+    annotations: Vec<Annotation>,
+    source: Option<Arc<CanvasSource>>,
 }
 
 impl AnnotationDocument {
+    fn snapshot(&self) -> DocumentState {
+        DocumentState {
+            annotations: self.annotations.clone(),
+            source: self.source.clone(),
+        }
+    }
+
+    fn restore(&mut self, state: DocumentState) -> DocumentState {
+        let previous = self.snapshot();
+        self.annotations = state.annotations;
+        self.source = state.source;
+        previous
+    }
+
     /// 没有任何标注的文档。
     pub fn new() -> Self {
         Self::default()
@@ -390,7 +420,7 @@ impl AnnotationDocument {
 
     /// 记下一步历史，然后让 `edit` 修改标注列表。
     fn record(&mut self, edit: impl FnOnce(&mut Vec<Annotation>)) {
-        self.undo.push(self.annotations.clone());
+        self.undo.push(self.snapshot());
         self.redo.clear();
         edit(&mut self.annotations);
     }
@@ -426,7 +456,7 @@ impl AnnotationDocument {
         let Some(previous) = self.undo.pop() else {
             return false;
         };
-        let current = std::mem::replace(&mut self.annotations, previous);
+        let current = self.restore(previous);
         self.redo.push(current);
         true
     }
@@ -436,7 +466,7 @@ impl AnnotationDocument {
         let Some(next) = self.redo.pop() else {
             return false;
         };
-        let current = std::mem::replace(&mut self.annotations, next);
+        let current = self.restore(next);
         self.undo.push(current);
         true
     }

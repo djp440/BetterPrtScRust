@@ -26,7 +26,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let auto_copy = std::env::args().any(|a| a == AUTO_COPY_ARGUMENT);
     let screenshot = read_screenshot(&mut std::io::stdin().lock())?;
     if auto_copy {
-        return copy_without_panel(screenshot);
+        return copy_without_panel(screenshot, translate);
     }
     let config = configured();
     run_result_panel(ResultPanelEnvironment {
@@ -44,9 +44,24 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 }
 
 /// 识别、复制，把结果交回常驻实例去通知用户。
-fn copy_without_panel(screenshot: Image) -> Result<(), Box<dyn Error>> {
+fn copy_without_panel(screenshot: Image, translate: bool) -> Result<(), Box<dyn Error>> {
     let mut clipboard = WindowsClipboard::new(None);
-    let copy = copy_recognized_text(screenshot, &WindowsTextRecognizer, &mut clipboard);
+    let copy = if translate {
+        let config = configured().unwrap_or_default();
+        let locale = config
+            .language
+            .resolve(&settings::ui_environment().system_languages);
+        bps_core::copy_translated_text(
+            screenshot,
+            &WindowsTextRecognizer,
+            &mut clipboard,
+            config.translation.as_ref(),
+            locale,
+            &WinHttpTransport,
+        )
+    } else {
+        copy_recognized_text(screenshot, &WindowsTextRecognizer, &mut clipboard)
+    };
     eprintln!("[OCR 自动复制] {copy:?}");
     let exe = std::env::current_exe()?;
     let mut channel = PipeChannel::new(&resident_pipe_name(), exe);

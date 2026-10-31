@@ -456,7 +456,7 @@ fn toolbar_ocr_copies_without_panel_when_auto_copy_is_on() {
 }
 
 #[test]
-fn toolbar_translate_still_opens_result_panel_when_auto_copy_is_on() {
+fn toolbar_translate_copies_translation_without_panel_when_auto_copy_is_on() {
     let fake = desk();
     let mut instance = awaiting(
         &fake,
@@ -470,9 +470,9 @@ fn toolbar_translate_still_opens_result_panel_when_auto_copy_is_on() {
         [StandaloneWindow::ResultPanel {
             screenshot: desktop_pattern(REGION),
             translate: true,
-            auto_copy: false,
+            auto_copy: true,
         }],
-        "翻译要看译文，总是打开面板"
+        "翻译遵循自动复制选项"
     );
 }
 

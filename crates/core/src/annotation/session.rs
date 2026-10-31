@@ -98,6 +98,8 @@ pub(crate) struct Annotator {
     canvas: Option<Canvas>,
     /// 工具条上带转入录屏、长截屏、OCR、翻译的按钮。
     handoffs: bool,
+    selection_editable: bool,
+    shortcuts: crate::config::UiShortcuts,
 }
 
 /// 锁定的区域、它的截图和上面的标注。
@@ -105,7 +107,7 @@ struct Canvas {
     /// 截图显示在屏幕上的范围。
     region: Rect,
     /// 截图（标注的底图），通常从冻结帧取出。
-    base: Image,
+    base: Arc<Image>,
     /// 截图缩小显示时屏幕上的样子；按原尺寸显示时为 `None`。
     view: Option<View>,
     document: AnnotationDocument,
@@ -119,6 +121,7 @@ struct Canvas {
     moving: Option<Moving>,
     /// 遮罩画布上正显示着的标注（屏幕上的尺寸）；画布还没显示时为 `None`。
     shown: Option<Vec<Annotation>>,
+    resize_original: Option<super::DocumentState>,
 }
 
 /// 缩小显示的截图：屏幕像素 / 截图像素的比例，以及缩小后的底图。
@@ -224,6 +227,22 @@ impl Typing {
 }
 
 impl Canvas {
+    fn sync_source(&mut self, base: Arc<Image>) {
+        let Some(source) = self.document.source.as_ref() else {
+            return;
+        };
+        self.region = source.region;
+        self.base = base;
+        self.view = ((self.region.width, self.region.height)
+            != (self.base.width(), self.base.height()))
+            .then(|| View {
+                scale_x: f64::from(self.region.width) / f64::from(self.base.width().max(1)),
+                scale_y: f64::from(self.region.height) / f64::from(self.base.height().max(1)),
+                base: downscale(&self.base, self.region.width, self.region.height),
+            });
+        self.shown = None;
+    }
+
     /// 现在应显示的标注：已画好的加上正在画的和正在输入的。
     fn annotations(&self) -> Vec<Annotation> {
         let mut annotations = self.document.annotations().to_vec();
@@ -376,12 +395,19 @@ impl Annotator {
             pointer: None,
             canvas: None,
             handoffs: false,
+            selection_editable: false,
+            shortcuts: crate::config::UiShortcuts::default(),
         }
     }
 
     /// 工具条上带转入录屏、长截屏、OCR、翻译的按钮（等待确认的截图界面）。
     pub fn with_handoffs(mut self) -> Self {
         self.handoffs = true;
+        self
+    }
+
+    pub fn with_shortcuts(mut self, shortcuts: crate::config::UiShortcuts) -> Self {
+        self.shortcuts = shortcuts;
         self
     }
 
@@ -407,9 +433,37 @@ impl Annotator {
             self.pressed = None;
             return Ok(Response::Pass);
         };
-        let locked = self.canvas.is_some();
+        let locked = self.canvas.is_some() && !self.selection_editable;
         let typing = self.typing().is_some();
         let toolbar = self.toolbar(region);
+        if !typing && self.handoffs {
+            if let OverlayInput::KeyPressed { key, modifiers } = *input {
+                let key = match key {
+                    OverlayKey::C => Some(bps_platform::Key::Letter('C')),
+                    OverlayKey::Z => Some(bps_platform::Key::Letter('Z')),
+                    OverlayKey::Y => Some(bps_platform::Key::Letter('Y')),
+                    OverlayKey::Shortcut(key) => Some(key),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    let hotkey = bps_platform::Hotkey::new(modifiers, key);
+                    let switch = if self.shortcuts.ocr == Some(hotkey) {
+                        Some(Switch::Ocr)
+                    } else if self.shortcuts.translate == Some(hotkey) {
+                        Some(Switch::Translate)
+                    } else {
+                        None
+                    };
+                    if let Some(switch) = switch {
+                        if let Some(canvas) = self.canvas.as_mut() {
+                            canvas.commit_draft();
+                            canvas.commit_move();
+                        }
+                        return Ok(Response::Switch(switch));
+                    }
+                }
+            }
+        }
         let response = match *input {
             OverlayInput::Interrupted if locked => Response::Cancel,
             OverlayInput::KeyPressed { key, .. } if typing => {
@@ -438,8 +492,8 @@ impl Annotator {
             OverlayInput::KeyPressed {
                 key: key @ (OverlayKey::Z | OverlayKey::Y),
                 modifiers,
-            } if locked && modifiers.ctrl && !modifiers.alt => {
-                self.step_history(key == OverlayKey::Y || modifiers.shift);
+            } if self.canvas.is_some() && modifiers.ctrl && !modifiers.alt => {
+                self.step_history(platform, key == OverlayKey::Y || modifiers.shift)?;
                 Response::Handled
             }
             OverlayInput::KeyPressed {
@@ -500,6 +554,8 @@ impl Annotator {
                     } else {
                         Response::Handled
                     }
+                } else if !locked {
+                    Response::Pass
                 } else if let Some(canvas) = self.canvas.as_mut() {
                     canvas.drag_selected(position);
                     canvas.commit_move();
@@ -616,12 +672,12 @@ impl Annotator {
     }
 
     /// 撤销（`redo` 为假）或重做一步修改。正在拖拽画标注或拖动标注时不处理。
-    fn step_history(&mut self, redo: bool) {
+    fn step_history(&mut self, platform: &Platform, redo: bool) -> Result<(), PlatformError> {
         let Some(canvas) = self.canvas.as_mut() else {
-            return;
+            return Ok(());
         };
-        if canvas.draft.is_some() || canvas.moving.is_some() {
-            return;
+        if canvas.draft.is_some() || canvas.moving.is_some() || canvas.resize_original.is_some() {
+            return Ok(());
         }
         let changed = if redo {
             canvas.document.redo()
@@ -630,7 +686,15 @@ impl Annotator {
         };
         if changed {
             canvas.selected = None;
+            if let Some(source) = &canvas.document.source {
+                let base = match &source.base {
+                    Some(base) => base.clone(),
+                    None => Arc::new(frozen_region(platform, &self.displays, source.region)?),
+                };
+                canvas.sync_source(base);
+            }
         }
+        Ok(())
     }
 
     /// 删除选中的标注。
@@ -708,6 +772,7 @@ impl Annotator {
     ) -> Result<Response, PlatformError> {
         Ok(match button {
             Button::Tool(tool) => {
+                self.selection_editable = false;
                 self.finish_typing();
                 self.lock(platform, region)?;
                 self.tool = Some(tool);
@@ -741,7 +806,7 @@ impl Annotator {
             }
             Button::Undo | Button::Redo => {
                 self.finish_typing();
-                self.step_history(button == Button::Redo);
+                self.step_history(platform, button == Button::Redo)?;
                 Response::Handled
             }
             Button::Record => Response::Switch(Switch::Record),
@@ -759,6 +824,13 @@ impl Annotator {
         if self.canvas.is_none() {
             let base = frozen_region(platform, &self.displays, region)?;
             self.lock_image(region, base);
+            if let Some(source) = self
+                .canvas
+                .as_mut()
+                .and_then(|c| c.document.source.as_mut())
+            {
+                Arc::make_mut(source).base = None;
+            }
         }
         Ok(())
     }
@@ -777,7 +849,7 @@ impl Annotator {
             });
         self.canvas = Some(Canvas {
             region,
-            base: image,
+            base: Arc::new(image),
             view,
             document: AnnotationDocument::new(),
             draft: None,
@@ -785,7 +857,14 @@ impl Annotator {
             selected: None,
             moving: None,
             shown: None,
+            resize_original: None,
         });
+        let canvas = self.canvas.as_mut().unwrap();
+        canvas.document.source = Some(Arc::new(super::CanvasSource {
+            region,
+            base: Some(canvas.base.clone()),
+            window: None,
+        }));
     }
 
     /// 贴着 `region` 的工具条，让开选区边框（宽度与选区状态机画的一致：按区域左上角所在
@@ -931,6 +1010,9 @@ impl Annotator {
             hovered: self.hovered,
         }));
         let over_toolbar = self.pointer.is_some_and(|p| toolbar.contains(p));
+        scene
+            .items
+            .extend(toolbar.shortcut_tooltip(self.hovered, self.shortcuts));
         let drawing_here = self.canvas.is_some()
             && self.tool.is_some()
             && self.pointer.is_some_and(|p| region.contains(p));
@@ -962,6 +1044,117 @@ impl Annotator {
             Some(canvas) => Ok(canvas.document.compose(&canvas.base)),
             None => frozen_region(platform, &self.displays, region),
         }
+    }
+
+    pub fn window(&self) -> Option<&bps_platform::TopLevelWindow> {
+        self.canvas
+            .as_ref()?
+            .document
+            .source
+            .as_ref()?
+            .window
+            .as_ref()
+    }
+
+    pub fn set_window(&mut self, window: bps_platform::TopLevelWindow) {
+        if let Some(source) = self
+            .canvas
+            .as_mut()
+            .and_then(|c| c.document.source.as_mut())
+        {
+            Arc::make_mut(source).window = Some(window);
+        }
+    }
+
+    /// 尚未选择标注工具时右键清除已有选区。
+    pub fn clear_selection(&mut self) {
+        self.canvas = None;
+        self.selection_editable = false;
+    }
+
+    pub fn selection_editable(&self) -> bool {
+        self.selection_editable
+    }
+
+    pub fn lock_for_resize(
+        &mut self,
+        platform: &Platform,
+        region: Rect,
+    ) -> Result<(), PlatformError> {
+        if self.canvas.is_none() {
+            self.lock(platform, region)?;
+            self.selection_editable = true;
+        }
+        Ok(())
+    }
+
+    /// 提交输入中的文字，并保存整次拖动之前的来源和标注。
+    pub fn begin_resize(&mut self) {
+        self.finish_typing();
+        if let Some(canvas) = self.canvas.as_mut() {
+            canvas.commit_draft();
+            canvas.commit_move();
+            canvas.resize_original = Some(canvas.document.snapshot());
+            canvas.selected = None;
+        }
+    }
+
+    pub fn resize(
+        &mut self,
+        platform: &Platform,
+        region: Rect,
+        finished: bool,
+    ) -> Result<(), PlatformError> {
+        let Some(canvas) = self.canvas.as_mut() else {
+            return Ok(());
+        };
+        let Some(original) = canvas.resize_original.as_ref() else {
+            return Ok(());
+        };
+        let source = original.source.as_ref().expect("锁定画布有捕获来源");
+        let base = if region == source.region {
+            canvas.document.annotations = original.annotations.clone();
+            canvas.document.source = original.source.clone();
+            match &source.base {
+                Some(base) => base.clone(),
+                None => Arc::new(frozen_region(platform, &self.displays, region)?),
+            }
+        } else {
+            let base = frozen_region(platform, &self.displays, region)?;
+            let (sx, sy) = source.base.as_ref().map_or((1.0, 1.0), |base| {
+                (
+                    f64::from(source.region.width) / f64::from(base.width()),
+                    f64::from(source.region.height) / f64::from(base.height()),
+                )
+            });
+            canvas.document.annotations = original
+                .annotations
+                .iter()
+                .map(|a| {
+                    let a = if sx == 1.0 && sy == 1.0 {
+                        a.clone()
+                    } else {
+                        a.scaled(sx, sy)
+                    };
+                    a.translated(source.region.x - region.x, source.region.y - region.y)
+                })
+                .collect();
+            canvas.document.source = Some(Arc::new(super::CanvasSource {
+                region,
+                base: None,
+                window: None,
+            }));
+            Arc::new(base)
+        };
+        canvas.sync_source(base);
+        if finished {
+            let original = canvas.resize_original.take().unwrap();
+            if canvas.document.source != original.source {
+                canvas.document.undo.push(original);
+                canvas.document.redo.clear();
+            }
+        }
+        Ok(())
     }
 
     /// 已锁定的区域。

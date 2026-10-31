@@ -27,6 +27,8 @@ pub struct Settings {
     pub run_as_admin: bool,
     /// OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板。
     pub ocr_auto_copy: bool,
+    pub ocr_shortcut: Option<Hotkey>,
+    pub translate_shortcut: Option<Hotkey>,
     /// 自动存储目录；`None` 表示默认目录（“图片”文件夹下的 `BetterPrtSc`）。
     pub save_dir: Option<PathBuf>,
     /// 命名模板的原文。
@@ -90,6 +92,18 @@ impl Settings {
                 });
             }
         }
+        for hotkey in [self.ocr_shortcut, self.translate_shortcut]
+            .into_iter()
+            .flatten()
+        {
+            if !allows_typing(hotkey)
+                || crate::config::shortcut_reserved(hotkey)
+                || self.bindings.iter().any(|b| b.hotkey == Some(hotkey))
+                || self.ocr_shortcut == self.translate_shortcut
+            {
+                problems.push(SettingsProblem::ShortcutConflict(hotkey));
+            }
+        }
         problems
     }
 
@@ -140,6 +154,7 @@ impl BindingSettings {
 /// 设置无法写回的原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsProblem {
+    ShortcutConflict(Hotkey),
     InvalidFilenameTemplate(FilenameTemplateError),
     /// 选了自定义存储目录却没有填写。
     EmptySaveDir,
@@ -166,6 +181,9 @@ impl SettingsProblem {
     /// 用 `texts` 的语言说明问题。
     pub fn localized(&self, texts: &Texts) -> String {
         match self {
+            SettingsProblem::ShortcutConflict(key) => {
+                texts.format("config-shortcut-conflict", &[("hotkey", key)])
+            }
             SettingsProblem::InvalidFilenameTemplate(error) => error.localized(texts),
             SettingsProblem::EmptySaveDir => texts.get("settings-problem-empty-save-dir"),
             SettingsProblem::TypingKeyWithoutModifier { binding, hotkey } => texts.format(
@@ -284,6 +302,22 @@ impl SettingsDocument {
         ] {
             if new != old {
                 set_value(root, key, new.into());
+            }
+        }
+        for (name, new, old) in [
+            ("ocr_shortcut", settings.ocr_shortcut, old.ocr_shortcut),
+            (
+                "translate_shortcut",
+                settings.translate_shortcut,
+                old.translate_shortcut,
+            ),
+        ] {
+            if new != old {
+                if let Some(key) = new {
+                    set_value(root, name, key.to_string().into());
+                } else {
+                    root.remove(name);
+                }
             }
         }
         if settings.save_dir != old.save_dir {
@@ -427,6 +461,8 @@ fn settings_of(config: &Config) -> Settings {
         autostart: config.autostart,
         run_as_admin: config.run_as_admin,
         ocr_auto_copy: config.ocr_auto_copy,
+        ocr_shortcut: config.ocr_shortcut,
+        translate_shortcut: config.translate_shortcut,
         save_dir: match &config.output.save_dir {
             SaveDir::Default => None,
             SaveDir::Custom(dir) => Some(dir.clone()),

@@ -35,7 +35,9 @@ pub const DEFAULT_CONFIG: &str = r#"# BetterPrtSc 配置文件
 #   language = "auto"                              界面语言：auto（跟随系统）、zh-CN、en
 #   check_for_updates = false                      检查更新：只查询 GitHub Releases 上的最新版本并提示，不自动下载
 #   autostart = false                              开机自启：true / false
-#   ocr_auto_copy = false                          OCR（直达热键或工具条）识别后自动复制文字，不弹结果面板：true / false
+#   ocr_auto_copy = false                          OCR / 翻译后自动复制文字 / 译文，不弹结果面板：true / false
+#   ocr_shortcut = "Ctrl+O"                         等待确认界面的 OCR 快捷键
+#   translate_shortcut = "Ctrl+T"                   等待确认界面的翻译快捷键
 #   录屏的默认参数（每条绑定可以单独覆盖，见下文）：
 #   frame_rate = 30                                录屏帧率，缺省时 MP4 为 30、GIF 为 15
 #   show_cursor = true                             录屏时显示鼠标指针：true / false
@@ -110,6 +112,13 @@ mode = "region"
 function = "ocr"
 "#;
 
+/// 等待确认界面的实际生效按键；禁用的兼容默认键为 None。
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UiShortcuts {
+    pub ocr: Option<Hotkey>,
+    pub translate: Option<Hotkey>,
+}
+
 /// 配置文件的内容。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -130,9 +139,12 @@ pub struct Config {
     /// 翻译服务（OpenAI 兼容接口或 DeepL）；没有配置（或没填 `api_key`）时为 `None`，
     /// 结果面板的翻译按钮禁用。
     pub translation: Option<TranslationConfig>,
-    /// OCR（直达热键或工具条）识别后自动复制文字、不弹结果面板（默认关闭）。已合并进各热键绑定的
+    /// OCR / 翻译后自动复制文字 / 译文，不弹结果面板（默认关闭）。已合并进各热键绑定的
     /// [`CaptureRequest::ocr_auto_copy`]。
     pub ocr_auto_copy: bool,
+    /// 等待确认时的界面快捷键；旧配置与全局热键冲突时为 None。
+    pub ocr_shortcut: Option<Hotkey>,
+    pub translate_shortcut: Option<Hotkey>,
     /// 全局的录屏参数（帧率、鼠标指针、编码、画质、声音；`format` 总是 `None`）。
     /// 已合并进各热键绑定的 [`CaptureRequest::recording`]：绑定没有覆盖的项用这里的值。
     pub recording: RecordingOptions,
@@ -150,6 +162,8 @@ impl Config {
             run_as_admin: false,
             translation: None,
             ocr_auto_copy: false,
+            ocr_shortcut: Some("Ctrl+O".parse().unwrap()),
+            translate_shortcut: Some("Ctrl+T".parse().unwrap()),
             recording: RecordingOptions::default(),
         }
     }
@@ -203,6 +217,35 @@ impl Config {
             let own = std::mem::take(&mut binding.capture.recording);
             binding.capture.recording = own.or(&recording);
         }
+        let shortcut = |value: Option<Spanned<String>>,
+                        default: &str|
+         -> Result<Option<Hotkey>, ConfigError> {
+            let explicit = value.is_some();
+            let key = value.as_ref().map_or(default, |v| v.get_ref().as_str());
+            let span = value.as_ref().map_or(0..0, |v| v.span());
+            let hotkey = parse_hotkey(key).map_err(|e| at(span.clone(), e))?;
+            if shortcut_reserved(hotkey) {
+                return Err(at(span, ConfigProblem::ShortcutConflict(key.to_owned())));
+            }
+            if bindings.iter().any(|b| b.hotkey == hotkey) {
+                return if explicit {
+                    Err(at(span, ConfigProblem::ShortcutConflict(key.to_owned())))
+                } else {
+                    Ok(None)
+                };
+            }
+            Ok(Some(hotkey))
+        };
+        let ocr_shortcut = shortcut(raw.ocr_shortcut, "Ctrl+O")?;
+        let translate_shortcut = shortcut(raw.translate_shortcut, "Ctrl+T")?;
+        if let Some(hotkey) = ocr_shortcut
+            && translate_shortcut == Some(hotkey)
+        {
+            return Err(at(
+                0..0,
+                ConfigProblem::ShortcutConflict(hotkey.to_string()),
+            ));
+        }
         let translation = raw
             .translation
             .map(|translation| translation.resolve(text))
@@ -217,6 +260,8 @@ impl Config {
             run_as_admin: raw.run_as_admin.unwrap_or(false),
             translation,
             ocr_auto_copy,
+            ocr_shortcut,
+            translate_shortcut,
             recording,
         })
     }
@@ -242,6 +287,7 @@ enum ConfigProblem {
     /// TOML 语法错误、取值类型不符、未知的键等，附带 TOML 解析器的说明（英文，不随界面语言变化）。
     Toml(String),
     InvalidHotkey(ParseHotkeyError),
+    ShortcutConflict(String),
     /// 字母、数字热键没有搭配 Ctrl、Alt 或 Win；附带热键原文。
     TypingKeyWithoutModifier(String),
     /// 旧版的 `actions = [...]` 写法已不再支持。
@@ -324,6 +370,9 @@ impl ConfigProblem {
             ConfigProblem::InvalidHotkey(error) => hotkey_error(error, texts),
             ConfigProblem::TypingKeyWithoutModifier(hotkey) => {
                 texts.format("config-hotkey-typing-key", &[("hotkey", hotkey)])
+            }
+            ConfigProblem::ShortcutConflict(key) => {
+                texts.format("config-shortcut-conflict", &[("hotkey", key)])
             }
             ConfigProblem::LegacyActions => texts.get("config-legacy-actions"),
             ConfigProblem::UnknownMode(name) => {
@@ -416,6 +465,8 @@ struct RawConfig {
     autostart: Option<bool>,
     run_as_admin: Option<bool>,
     ocr_auto_copy: Option<bool>,
+    ocr_shortcut: Option<Spanned<String>>,
+    translate_shortcut: Option<Spanned<String>>,
     frame_rate: Option<Spanned<u32>>,
     show_cursor: Option<bool>,
     video_codec: Option<Spanned<String>>,
@@ -662,6 +713,13 @@ impl RawBinding {
 }
 
 /// 解析热键并检查它不会吞掉正常输入。
+/// 与现有遮罩的实际按键分派保持一致：Ctrl+Z/Y 会忽略 Shift 和 Win。
+pub(crate) fn shortcut_reserved(hotkey: Hotkey) -> bool {
+    matches!(hotkey.key, bps_platform::Key::Letter('Z' | 'Y'))
+        && hotkey.modifiers.ctrl
+        && !hotkey.modifiers.alt
+}
+
 fn parse_hotkey(text: &str) -> Result<Hotkey, ConfigProblem> {
     let hotkey: Hotkey = text.parse().map_err(ConfigProblem::InvalidHotkey)?;
     if !allows_typing(hotkey) {

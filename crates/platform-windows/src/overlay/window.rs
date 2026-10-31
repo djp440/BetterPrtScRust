@@ -525,6 +525,16 @@ fn key(wparam: WPARAM) -> Option<OverlayKey> {
         VK_DELETE => Some(OverlayKey::Delete),
         VK_Z => Some(OverlayKey::Z),
         VK_Y => Some(OverlayKey::Y),
+        VIRTUAL_KEY(v @ 0x41..=0x5a) => Some(OverlayKey::Shortcut(bps_platform::Key::Letter(
+            char::from_u32(v as u32)?,
+        ))),
+        VIRTUAL_KEY(v @ 0x30..=0x39) => Some(OverlayKey::Shortcut(bps_platform::Key::Digit(
+            (v - 0x30) as u8,
+        ))),
+        VIRTUAL_KEY(v @ 0x70..=0x87) => Some(OverlayKey::Shortcut(bps_platform::Key::F(
+            (v - 0x70 + 1) as u8,
+        ))),
+        VIRTUAL_KEY(0x2c) => Some(OverlayKey::Shortcut(bps_platform::Key::PrintScreen)),
         _ => None,
     }
 }

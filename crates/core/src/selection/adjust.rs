@@ -28,6 +28,10 @@ enum End {
 }
 
 impl Grip {
+    pub fn axes(self) -> (bool, bool) {
+        (self.x.is_some(), self.y.is_some())
+    }
+
     /// 抓住的是整个选区：拖动时移动选区。
     pub fn is_move(self) -> bool {
         self.x.is_none() && self.y.is_none()

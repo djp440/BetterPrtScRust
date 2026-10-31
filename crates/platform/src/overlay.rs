@@ -259,4 +259,6 @@ pub enum OverlayKey {
     /// 字母键 Z、Y（撤销、重做的快捷键，与大小写、输入法无关）。
     Z,
     Y,
+    /// 其余可配置界面快捷键的主键。
+    Shortcut(crate::Key),
 }

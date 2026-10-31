@@ -91,7 +91,7 @@ pub use output::{OutputFormat, OutputOptions, SaveDir};
 pub use request::{HOTKEY_PAUSE_LEASE, Reply, Request};
 pub use result_panel::{
     OcrCopy, Recognition, RecognitionOutcome, RecognitionStatus, ResultPanel, Translation,
-    TranslationOutcome, TranslationStatus, copy_recognized_text,
+    TranslationOutcome, TranslationStatus, copy_recognized_text, copy_translated_text,
 };
 pub use settings::{
     BindingSettings, RecordingSettings, Settings, SettingsDocument, SettingsProblem,

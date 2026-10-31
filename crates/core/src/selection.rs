@@ -20,7 +20,7 @@
 //!   虚拟桌面内。
 //! - 还没有选区、拖拽框选、拖动手柄时显示放大镜（[`RegionSelection::magnifier_focus`]），
 //!   这时按 C 复制放大镜对准的像素的颜色值（[`Step::CopyColor`]）。
-//! - 选区锁定（[`RegionSelection::lock`]，开始标注）后不再显示手柄和放大镜。
+//! - 选区锁定（[`RegionSelection::lock`]，开始标注）后仍显示边框手柄，隐藏放大镜。
 //! - 拖拽时选区的边吸附到附近窗口、控件的边缘，按住 Ctrl 临时不吸附（见 [`crate::snap`]）。
 //!
 //! 扩展点（后续 ticket）：在 [`State`] 里加状态或字段，在 [`RegionSelection::handle`] 里处理
@@ -106,7 +106,7 @@ pub(crate) struct RegionSelection {
     selected_hint: Option<String>,
     /// 指针最近的位置（限制在虚拟桌面内）；指针还没在遮罩上动过时为 `None`。
     pointer: Option<Point>,
-    /// 选区已锁定（开始标注），不再显示手柄和放大镜。
+    /// 选区已锁定（开始标注），不显示放大镜，也不提示拖动内部移动。
     locked: bool,
     /// 拖拽框选时选区的边吸附到窗口、控件的边缘；默认没有目标，不吸附。
     snapping: Snapping,
@@ -173,8 +173,7 @@ impl RegionSelection {
         self
     }
 
-    /// 选区已锁定（例如开始标注）：此后不再显示手柄和放大镜。锁定后选区由别处接管输入，
-    /// 这里不再收到输入。
+    /// 选区已锁定：隐藏放大镜，边框仍可调整；输入由捕获会话先区分手柄与标注。
     pub fn lock(&mut self) {
         self.locked = true;
     }
@@ -208,6 +207,16 @@ impl RegionSelection {
             State::Selected(region) => Some(region),
             _ => None,
         }
+    }
+
+    pub fn resizing(&self) -> bool {
+        matches!(self.state, State::Adjusting { .. })
+    }
+
+    pub fn resize_hit(&self, point: Point) -> bool {
+        self.region()
+            .and_then(|r| self.grip_at(r, point))
+            .is_some_and(|g| !g.is_move())
     }
 
     /// 处理一次用户输入。
@@ -313,8 +322,7 @@ impl RegionSelection {
                 },
             ) => {
                 let to = self.clamp(position);
-                self.state =
-                    State::Selected(adjust::dragged(original, grip, from, to, self.bounds));
+                self.state = State::Selected(self.adjusted(original, grip, from, to));
             }
             (State::Selected(region), KeyPressed { key, modifiers }) => {
                 if let Some(nudged) = adjust::nudged(region, key, modifiers, self.bounds) {
@@ -428,7 +436,7 @@ impl RegionSelection {
                 grip,
                 from,
                 to,
-            } => Some(adjust::dragged(original, grip, from, to, self.bounds)),
+            } => Some(self.adjusted(original, grip, from, to)),
         }
     }
 
@@ -461,12 +469,12 @@ impl RegionSelection {
     /// 其余是十字。
     fn cursor(&self) -> OverlayCursor {
         let grip = match self.state {
-            _ if self.locked => None,
             State::Adjusting { grip, .. } => Some(grip),
             State::Selected(region) => self.pointer.and_then(|p| self.grip_at(region, p)),
             State::Idle | State::Pressed { .. } | State::Dragging { .. } => None,
         };
-        grip.map_or(OverlayCursor::Crosshair, Grip::cursor)
+        grip.filter(|g| !self.locked || !g.is_move())
+            .map_or(OverlayCursor::Crosshair, Grip::cursor)
     }
 
     /// 选中 `window`：选区变成它在虚拟桌面内的部分。窗口完全在虚拟桌面外时什么也不做。
@@ -567,9 +575,7 @@ impl RegionSelection {
                     width: border,
                     color: ACCENT,
                 });
-                if !self.locked
-                    && matches!(self.state, State::Selected(_) | State::Adjusting { .. })
-                {
+                if matches!(self.state, State::Selected(_) | State::Adjusting { .. }) {
                     items.extend(adjust::handles(region, border, scale));
                 }
                 let size = format!("{} × {}", region.width, region.height);
@@ -655,6 +661,18 @@ impl RegionSelection {
             .or_else(|| self.displays.iter().find(|d| d.is_primary))
             .or_else(|| self.displays.first())
             .map_or(1.0, |d| d.scale_factor)
+    }
+
+    fn adjusted(&self, original: Rect, grip: Grip, from: Point, to: Point) -> Rect {
+        let region = adjust::dragged(original, grip, from, to, self.bounds);
+        if !self.locked || from == to {
+            return region;
+        }
+        let Some(pixel) = adjust::dragged_pixel(original, grip, from, to, self.bounds) else {
+            return region;
+        };
+        let end = DragEnd::new(pixel, (SNAP_DISTANCE * self.scale_at(to)).round() as i32);
+        self.snapping.resized(self.bounds, region, end, grip.axes())
     }
 
     /// 从 `anchor` 拖到 `current` 框出的选区，边缘按吸附规则对齐。

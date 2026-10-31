@@ -156,7 +156,7 @@ settings-check-for-updates = 检查更新
 settings-check-for-updates-hint = 只向 GitHub Releases 查询最新的版本号，有新版本时提示，不下载任何东西。关闭时程序不发出任何网络请求。
 settings-section-ocr = OCR
 settings-ocr-auto-copy = 识别后自动复制，不弹面板
-settings-ocr-auto-copy-hint = 直达 OCR 热键和截图界面工具条上的 OCR：识别出的文字直接进剪贴板，用通知提示字数。工具条上的“翻译”仍打开结果面板。
+settings-ocr-auto-copy-hint = 对直达 OCR、工具条和界面快捷键生效；翻译只复制译文，失败时保留剪贴板。
 settings-update-checking = 正在检查更新…
 settings-update-up-to-date = 已是最新版本（{ $version }）
 settings-update-available = 发现新版本 { $version }
@@ -326,3 +326,11 @@ cli-missing-mode = 缺少捕获模式
 cli-extra-argument = 多余的参数：{ $argument }
 cli-missing-command = 缺少命令
 cli-unknown-command = 未知的命令：{ $command }
+
+config-shortcut-conflict = 界面快捷键 { $hotkey } 与保留按键、另一界面快捷键或全局热键冲突，请改键。
+
+notification-shortcut-disabled-title = 界面快捷键暂未生效
+notification-shortcut-disabled = 旧配置的全局热键已占用 { $hotkey }，请在设置里修改 OCR / 翻译界面快捷键；工具条按钮仍可使用。
+settings-ocr-shortcut = OCR 界面快捷键
+settings-translate-shortcut = 翻译界面快捷键
+result-panel-translation-unconfigured = 请在 config.toml 的 [translation] 中配置翻译服务。

@@ -317,7 +317,7 @@ fn shifted(rect: Rect, dx: i32, dy: i32) -> Rect {
 }
 
 #[test]
-fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
+fn selection_handles_remain_after_annotating_and_toolbar_follows_adjustments() {
     let fake = single_display();
     let mut instance = capture(&fake, PostCaptureAction::AwaitConfirmation);
     let region = Rect::new(450, 80, 250, 200);
@@ -342,14 +342,11 @@ fn selection_can_be_adjusted_until_annotating_starts_and_toolbar_follows_it() {
         handle_points(adjusted)[7]
     ));
 
-    // 选了标注工具（开始标注）后区域锁定：手柄消失，方向键不再移动区域。
+    // 开始标注后手柄仍在；方向键不再移动区域。
     feed(&mut instance, fake.click_text("矩形"));
     let scene = fake.overlay_scene().unwrap();
     for point in handle_points(adjusted) {
-        assert!(
-            !handle_at(&scene, point),
-            "开始标注后不应再有手柄：{point:?}"
-        );
+        assert!(handle_at(&scene, point), "开始标注后仍有手柄：{point:?}");
     }
     feed(
         &mut instance,
