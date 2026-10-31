@@ -156,7 +156,7 @@ settings-check-for-updates = Check for updates
 settings-check-for-updates-hint = Only asks GitHub Releases for the latest version number and tells you when there is a new one; nothing is downloaded. When off, BetterPrtSc makes no network requests at all.
 settings-section-ocr = OCR
 settings-ocr-auto-copy = Copy recognized text automatically, without the panel
-settings-ocr-auto-copy-hint = Applies to direct OCR hotkeys and OCR on the screenshot toolbar: the recognized text goes straight to the clipboard and a notification shows the character count. Translate on the toolbar still opens the result panel.
+settings-ocr-auto-copy-hint = Applies to direct OCR, toolbar buttons and UI shortcuts. Translation copies only the translated text; failures preserve the clipboard.
 settings-update-checking = Checking for updates…
 settings-update-up-to-date = You have the latest version ({ $version })
 settings-update-available = New version available: { $version }
@@ -326,3 +326,11 @@ cli-missing-mode = Missing capture mode
 cli-extra-argument = Unexpected argument: { $argument }
 cli-missing-command = Missing command
 cli-unknown-command = Unknown command: { $command }
+
+config-shortcut-conflict = UI shortcut { $hotkey } conflicts with a reserved key, another UI shortcut or a global hotkey. Choose another key.
+
+notification-shortcut-disabled-title = UI shortcut disabled
+notification-shortcut-disabled = Your existing global hotkey uses { $hotkey }. Change the OCR / translation UI shortcut in Settings. Toolbar buttons remain available.
+settings-ocr-shortcut = OCR UI shortcut
+settings-translate-shortcut = Translation UI shortcut
+result-panel-translation-unconfigured = Configure a translation service in [translation] in config.toml.

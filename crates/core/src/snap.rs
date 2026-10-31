@@ -58,6 +58,37 @@ impl DragEnd {
 }
 
 impl Snapping {
+    /// 调整大小时只吸附正在拖动的边，不移动对边和未参与调整的方向。
+    pub fn resized(
+        &self,
+        bounds: Rect,
+        rect: Rect,
+        mut moving: DragEnd,
+        axes: (bool, bool),
+    ) -> Rect {
+        moving.snaps = !self.current_suspended;
+        let (mut left, mut right) = (rect.x, rect.x + rect.width as i32);
+        let (mut top, mut bottom) = (rect.y, rect.y + rect.height as i32);
+        if axes.0 {
+            if moving.point.x == left {
+                left = self.snap(Axis::X, bounds, left, moving);
+            } else {
+                right = self.snap(Axis::X, bounds, right, moving);
+            }
+        }
+        if axes.1 {
+            if moving.point.y == top {
+                top = self.snap(Axis::Y, bounds, top, moving);
+            } else {
+                bottom = self.snap(Axis::Y, bounds, bottom, moving);
+            }
+        }
+        if right <= left || bottom <= top {
+            return rect;
+        }
+        Rect::new(left, top, (right - left) as u32, (bottom - top) as u32)
+    }
+
     /// 吸附到此刻桌面上窗口的边缘：在拍冻结帧（或打开实时遮罩）之前调用，
     /// 使吸附目标与用户看到的画面一致。取不到窗口布局时不吸附。
     pub fn of_desktop(windows: &dyn WindowSource) -> Self {

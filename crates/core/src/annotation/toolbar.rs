@@ -209,6 +209,28 @@ pub(crate) struct Toolbar<B = Button> {
 }
 
 impl Toolbar<Button> {
+    pub fn shortcut_tooltip(
+        &self,
+        hovered: Option<Button>,
+        shortcuts: crate::config::UiShortcuts,
+    ) -> Option<OverlayItem> {
+        let key = match hovered? {
+            Button::Ocr => shortcuts.ocr?,
+            Button::Translate => shortcuts.translate?,
+            _ => return None,
+        };
+        let button = self.buttons.iter().find(|b| Some(b.button) == hovered)?;
+        Some(OverlayItem::Label(bps_platform::Label {
+            text: format!("{} ({key})", button.label.as_deref().unwrap_or_default()),
+            anchor: Point::new(self.bounds.x, self.bounds.y - 4),
+            corner: bps_platform::Corner::BottomLeft,
+            font_size: self.font_size,
+            padding: 4,
+            color: Color::rgba(255, 255, 255, 255),
+            background: Color::rgba(20, 20, 20, 240),
+        }))
+    }
+
     /// 贴着 `region`（外侧有宽 `frame` 的边框）的标注工具条，按钮文字用 `texts` 的语言；
     /// `handoffs` 时带转入录屏、长截屏、OCR、翻译的按钮。
     pub fn beside(

@@ -13,7 +13,7 @@
 //! 选择结束方式、转入录屏 / 长截屏 / OCR / 翻译），标注不处理的再交给选区状态机；
 //! 捕获以用户选择的结束方式结束。
 //! 选好工具开始标注之前，标注把手柄、方向键等输入都交给选区状态机，选区仍可调整，工具条随
-//! 调整后的选区重新定位；开始标注后区域锁定，选区状态机不再收到输入、不再画手柄和放大镜。
+//! 调整后的选区重新定位；开始标注后仍可拖动边框，调整与标注共用撤销历史。
 //!
 //! 放大镜（`magnifier`）画在最上层；何时显示、对准哪个像素由选区状态机决定。
 
@@ -76,7 +76,6 @@ pub(crate) struct RegionCapture {
     /// 截后动作为等待确认时的标注界面；否则为 `None`。
     annotator: Option<Annotator>,
     /// 单击选中、正在标注的窗口：命名模板用它的标题，转入录屏、长截屏时用它。
-    window: Option<TopLevelWindow>,
     /// 框选时光标旁的放大镜。
     magnifier: Magnifier,
     /// 遮罩上当前画着的场景；场景没变时不重画。
@@ -93,6 +92,7 @@ impl RegionCapture {
         platform: &mut Platform,
         request: CaptureRequest,
         texts: &'static Texts,
+        shortcuts: crate::config::UiShortcuts,
     ) -> Result<Self, CoreError> {
         let captured_at = platform.clock.now();
         // 用户要框选时，选区吸附到拍冻结帧那一刻的窗口边缘，也能单击选中窗口。
@@ -110,9 +110,11 @@ impl RegionCapture {
                 .with_snapping(snapping)
                 .pick_windows(cursor, platform.overlay.drag_threshold());
         }
-        let mut annotator = request
-            .awaits_confirmation()
-            .then(|| Annotator::new(displays.clone(), texts).with_handoffs());
+        let mut annotator = request.awaits_confirmation().then(|| {
+            Annotator::new(displays.clone(), texts)
+                .with_handoffs()
+                .with_shortcuts(shortcuts)
+        });
         // 复制到剪贴板的截图和直达 OCR：框选松开即完成，不等 Enter（录屏、长截屏仍要确认，
         // 方便开始前微调选区）。
         if matches!(
@@ -151,7 +153,6 @@ impl RegionCapture {
             displays,
             selection,
             annotator,
-            window: None,
             drawn: None,
             texts,
             requester: None,
@@ -169,10 +170,84 @@ impl RegionCapture {
         platform: &mut Platform,
         input: &OverlayInput,
     ) -> Option<Result<Ending, CaptureFailure>> {
+        let locked = self
+            .annotator
+            .as_ref()
+            .is_some_and(|a| a.locked_region().is_some());
+        let start_resize = self.annotator.is_some()
+            && matches!(input, OverlayInput::PointerPressed { button: bps_platform::PointerButton::Left, position, .. } if self.selection.resize_hit(*position));
+        if locked || start_resize {
+            self.selection
+                .snapping_mut()
+                .load_controls(input, platform.window_source.as_ref());
+            let start = start_resize;
+            let resizing = self.selection.resizing();
+            let pointer_move = matches!(input, OverlayInput::PointerMoved { .. });
+            let pointer_event = matches!(
+                input,
+                OverlayInput::PointerMoved { .. }
+                    | OverlayInput::PointerReleased {
+                        button: bps_platform::PointerButton::Left,
+                        ..
+                    }
+            );
+            if start || (resizing && pointer_event) || pointer_move {
+                if start {
+                    let annotator = self.annotator.as_mut()?;
+                    if let Err(error) =
+                        annotator.lock_for_resize(platform, self.selection.region()?)
+                    {
+                        platform.overlay.close();
+                        return Some(Err(CaptureFailure::before_actions(error)));
+                    }
+                    annotator.begin_resize();
+                }
+                let selection_input = match *input {
+                    OverlayInput::PointerPressed {
+                        button,
+                        position,
+                        modifiers,
+                        ..
+                    } if start => OverlayInput::PointerPressed {
+                        button,
+                        position,
+                        modifiers,
+                        double_click: false,
+                    },
+                    other => other,
+                };
+                self.selection.handle(&selection_input);
+                if start || resizing {
+                    if let Some(region) = self.selection.region() {
+                        let finished = matches!(
+                            input,
+                            OverlayInput::PointerReleased {
+                                button: bps_platform::PointerButton::Left,
+                                ..
+                            }
+                        );
+                        if let Err(error) =
+                            self.annotator.as_mut()?.resize(platform, region, finished)
+                        {
+                            platform.overlay.close();
+                            return Some(Err(CaptureFailure::before_actions(error)));
+                        }
+                    }
+                    return self.keep_going(platform);
+                }
+            }
+        }
         if let Some(annotator) = self.annotator.as_mut() {
             match annotator.handle(platform, input, self.selection.selected()) {
                 Ok(Response::Pass) => {}
-                Ok(Response::Handled) => return self.keep_going(platform),
+                Ok(Response::Handled) => {
+                    if !self.selection.resizing() {
+                        if let Some(region) = annotator.locked_region() {
+                            self.selection.set_selected(region);
+                        }
+                    }
+                    return self.keep_going(platform);
+                }
                 Ok(Response::Finish(finish)) => return self.finish_annotation(platform, finish),
                 Ok(Response::Switch(switch)) => return self.switch(platform, switch),
                 Ok(Response::Cancel) => {
@@ -190,7 +265,26 @@ impl RegionCapture {
             .snapping_mut()
             .load_controls(input, platform.window_source.as_ref());
         match self.selection.handle(input) {
-            Step::Continue => self.keep_going(platform),
+            Step::Continue => {
+                if let Some(annotator) = self.annotator.as_mut() {
+                    if annotator.selection_editable() {
+                        if self.selection.resizing() {
+                            annotator.begin_resize();
+                        } else if let Some(region) = self.selection.region() {
+                            if Some(region) != annotator.locked_region() {
+                                annotator.begin_resize();
+                                if let Err(error) = annotator.resize(platform, region, true) {
+                                    platform.overlay.close();
+                                    return Some(Err(CaptureFailure::before_actions(error)));
+                                }
+                            }
+                        } else {
+                            annotator.clear_selection();
+                        }
+                    }
+                }
+                self.keep_going(platform)
+            }
             // 等待确认时 Enter 或双击选区等于点“确认”。
             Step::Confirmed(_) if self.annotator.is_some() => {
                 self.finish_annotation(platform, Finish::Confirm)
@@ -239,7 +333,7 @@ impl RegionCapture {
         let view = annotation_view(window.bounds, &image, &self.displays);
         self.annotator.as_mut()?.lock_image(view, image);
         self.selection.set_selected(view);
-        self.window = Some(window);
+        self.annotator.as_mut()?.set_window(window);
         self.keep_going(platform)
     }
 
@@ -299,13 +393,13 @@ impl RegionCapture {
                 );
                 return Some(done.map(|()| Ending::Delivered));
             }
-            Switch::Record => HandoffTo::Recording(match &self.window {
+            Switch::Record => HandoffTo::Recording(match annotator.window() {
                 Some(window) => RecordTarget::Window(window.clone()),
                 None => RecordTarget::Region(region),
             }),
             Switch::LongScreenshot => HandoffTo::LongScreenshot(
-                self.window
-                    .as_ref()
+                annotator
+                    .window()
                     .and_then(|window| {
                         virtual_desktop_bounds(&self.displays)?.intersection(window.bounds)
                     })
@@ -337,7 +431,7 @@ impl RegionCapture {
             &self.request,
             &Origin {
                 captured_at: self.captured_at,
-                window_title: self.window.as_ref().map(|w| w.title.clone()),
+                window_title: annotator.window().map(|w| w.title.clone()),
             },
             finish,
             self.texts,
@@ -365,11 +459,11 @@ impl RegionCapture {
     }
 
     fn redraw(&mut self, platform: &mut Platform) -> Result<(), PlatformError> {
-        // 开始标注后区域锁定，选区不能再调整：不再画手柄和放大镜。
+        // 开始标注后隐藏放大镜和选区内部移动指针；边框手柄继续参与调整。
         if self
             .annotator
             .as_ref()
-            .is_some_and(|a| a.locked_region().is_some())
+            .is_some_and(|a| a.locked_region().is_some() && !a.selection_editable())
         {
             self.selection.lock();
         }
@@ -377,7 +471,17 @@ impl RegionCapture {
         let mut canvas_changed = false;
         if let Some(annotator) = self.annotator.as_mut() {
             canvas_changed = annotator.sync_canvas(platform.overlay.as_mut())?;
+            let cursor = scene.cursor;
             annotator.decorate(&mut scene, self.selection.selected());
+            if matches!(
+                cursor,
+                bps_platform::OverlayCursor::ResizeEw
+                    | bps_platform::OverlayCursor::ResizeNs
+                    | bps_platform::OverlayCursor::ResizeNwse
+                    | bps_platform::OverlayCursor::ResizeNesw
+            ) {
+                scene.cursor = cursor;
+            }
         }
         if let Some(focus) = self.selection.magnifier_focus() {
             let magnifier = self.magnifier.items(platform.overlay.as_ref(), focus)?;

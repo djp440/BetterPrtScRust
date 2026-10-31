@@ -302,6 +302,42 @@ pub fn copy_recognized_text(
     }
 }
 
+/// 识别并翻译后只复制译文；任何失败都不改写剪贴板、不打开面板。
+/// 仅在用户明确触发翻译时调用，网络请求只发送识别文字。
+pub fn copy_translated_text(
+    screenshot: Image,
+    recognizer: &dyn TextRecognizer,
+    clipboard: &mut dyn Clipboard,
+    config: Option<&TranslationConfig>,
+    locale: Locale,
+    transport: &dyn HttpTransport,
+) -> OcrCopy {
+    let texts = Texts::of(locale);
+    let Some(config) = config else {
+        return OcrCopy::Failed(texts.get("result-panel-translation-unconfigured"));
+    };
+    let (mut panel, recognition) = ResultPanel::open(screenshot, recognizer);
+    if let Some(recognition) = recognition {
+        panel.finish(recognition.run(recognizer));
+    }
+    match panel.status() {
+        RecognitionStatus::NoLanguagePack => return OcrCopy::NoLanguagePack,
+        RecognitionStatus::Failed(reason) => return OcrCopy::Failed(reason.clone()),
+        RecognitionStatus::Recognized if !panel.text().trim().is_empty() => {}
+        _ => return OcrCopy::Empty,
+    }
+    let translated = match translation::translate(config, locale, panel.text(), transport) {
+        Ok(text) if !text.trim().is_empty() => text,
+        Ok(_) => return OcrCopy::Failed(texts.get("translation-error-reply")),
+        Err(error) => return OcrCopy::Failed(error.localized(texts)),
+    };
+    let characters = translated.chars().filter(|c| !c.is_whitespace()).count();
+    match clipboard.write(vec![ClipboardItem::Text(translated)]) {
+        Ok(()) => OcrCopy::Copied { characters },
+        Err(error) => OcrCopy::Failed(error.message().to_owned()),
+    }
+}
+
 /// 把识别出的各行拼成文字：行之间换行；词之间加空格，但与中文、日文相邻处不加
 /// （这些文字的词之间本来就没有空格，OCR 却把它们识别成一个个独立的词）。
 fn compose_text(lines: &[RecognizedLine]) -> String {

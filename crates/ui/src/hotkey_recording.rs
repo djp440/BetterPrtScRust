@@ -72,10 +72,17 @@ impl Drop for PauseLease {
     }
 }
 
+/// 正在录制哪个设置项；所有入口共用同一键盘采集和热键暂停租约。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingTarget {
+    Binding(usize),
+    Ocr,
+    Translate,
+}
+
 /// 正在进行的一次录制。
 pub struct RecordingSession {
-    /// 录的是第几条绑定。
-    pub binding: usize,
+    pub target: RecordingTarget,
     stream: KeyStream,
     recorder: HotkeyRecorder,
     started: Instant,
@@ -107,13 +114,13 @@ pub enum Conclusion {
 impl RecordingSession {
     /// 开始录制第 `binding` 条绑定的热键。
     pub fn start(
-        binding: usize,
+        target: RecordingTarget,
         start_capture: &StartKeyCapture,
         pause: PauseHotkeys,
     ) -> Result<Self, String> {
         let stream = start_capture()?;
         Ok(Self {
-            binding,
+            target,
             stream,
             recorder: HotkeyRecorder::new(),
             started: Instant::now(),

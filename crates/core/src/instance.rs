@@ -114,6 +114,7 @@ impl ResidentInstance {
         // 配置出错时的通知用系统语言（`new` 已按系统语言选好）。
         instance.config = instance.load_config_at_startup();
         instance.apply_language();
+        instance.notify_disabled_shortcuts();
         if instance.config.run_as_admin && !instance.platform.elevation.is_elevated() {
             if options.restarted_as_administrator {
                 let reason = instance.texts().get("not-elevated-after-restart");
@@ -544,8 +545,16 @@ impl ResidentInstance {
             return Ok(Progress::AwaitingUser);
         }
         if request.mode == CaptureMode::Region || request.awaits_confirmation() {
-            let capture = RegionCapture::start(&mut self.platform, request.clone(), texts)
-                .map_err(CaptureFailure::before_actions)?;
+            let capture = RegionCapture::start(
+                &mut self.platform,
+                request.clone(),
+                texts,
+                crate::config::UiShortcuts {
+                    ocr: self.config.ocr_shortcut,
+                    translate: self.config.translate_shortcut,
+                },
+            )
+            .map_err(CaptureFailure::before_actions)?;
             self.active = Some(ActiveCapture::Region(Box::new(capture)));
             return Ok(Progress::AwaitingUser);
         }
@@ -694,6 +703,21 @@ impl ResidentInstance {
         Ok(())
     }
 
+    fn notify_disabled_shortcuts(&self) {
+        for (key, value) in [
+            ("Ctrl+O", self.config.ocr_shortcut),
+            ("Ctrl+T", self.config.translate_shortcut),
+        ] {
+            if value.is_none() {
+                self.notify_with_config_link(
+                    self.texts().get("notification-shortcut-disabled-title"),
+                    self.texts()
+                        .format("notification-shortcut-disabled", &[("hotkey", &key)]),
+                );
+            }
+        }
+    }
+
     /// 启动时读取配置文件；文件不存在时写入默认配置。出错时通知用户并使用默认配置。
     fn load_config_at_startup(&mut self) -> Config {
         let texts = self.texts();
@@ -771,6 +795,7 @@ impl ResidentInstance {
             return Flow::Continue;
         }
         let old = std::mem::replace(&mut self.config, config);
+        self.notify_disabled_shortcuts();
         if old.language != self.config.language {
             self.apply_language();
         }

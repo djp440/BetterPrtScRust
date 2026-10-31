@@ -128,7 +128,7 @@ fn run(
 
 /// 用户在工具条上点了 OCR（`translate` 为假）或翻译：取得合成了标注的截图（`region` 是标注所在的
 /// 区域），关闭遮罩，交给结果面板。OCR 在开了“识别后自动复制”（`auto_copy`）时只复制文字、
-/// 不显示面板；翻译总是显示面板。
+/// 不显示面板；翻译在同一选项开启时只复制译文。
 pub(crate) fn recognize(
     platform: &mut Platform,
     annotator: &Annotator,
@@ -141,7 +141,8 @@ pub(crate) fn recognize(
     platform.overlay.close();
     let image = image.map_err(CaptureFailure::before_actions)?;
     let then = match (translate, auto_copy) {
-        (true, _) => AfterRecognition::Translate,
+        (true, true) => AfterRecognition::TranslateCopy,
+        (true, false) => AfterRecognition::Translate,
         (false, true) => AfterRecognition::Copy,
         (false, false) => AfterRecognition::Show,
     };

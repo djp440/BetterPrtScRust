@@ -50,6 +50,7 @@ pub(crate) enum AfterRecognition {
     /// “识别后自动复制”：子进程不显示界面，识别后把文字复制到剪贴板，再把结果
     /// （[`crate::OcrCopy`]）转交回常驻实例，由常驻实例通知用户。
     Copy,
+    TranslateCopy,
 }
 
 /// OCR：把截图交给一个新的结果面板子进程，由它在本机识别文字，再按 `then` 处理。
@@ -64,8 +65,14 @@ pub(crate) fn open_result_panel(
 ) -> Result<(), CoreError> {
     let opened = platform.windows.open(StandaloneWindow::ResultPanel {
         screenshot,
-        translate: then == AfterRecognition::Translate,
-        auto_copy: then == AfterRecognition::Copy,
+        translate: matches!(
+            then,
+            AfterRecognition::Translate | AfterRecognition::TranslateCopy
+        ),
+        auto_copy: matches!(
+            then,
+            AfterRecognition::Copy | AfterRecognition::TranslateCopy
+        ),
     });
     if let Err(e) = &opened {
         platform.notifier.notify(Notification {

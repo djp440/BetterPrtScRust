@@ -20,7 +20,7 @@ use eframe::egui::{self, RichText};
 
 use crate::autosave::{AutoSave, Decision};
 use crate::hotkey_recording::{
-    Conclusion, PauseHotkeys, Progress, RecordingSession, StartKeyCapture,
+    Conclusion, PauseHotkeys, Progress, RecordingSession, RecordingTarget, StartKeyCapture,
 };
 use crate::store::{self, LoadProblem, Loaded, SaveError};
 use crate::{UiEnvironment, WindowSpec, run_window};
@@ -289,14 +289,29 @@ impl SettingsApp {
         } else if clicked_away {
             self.recording = None;
         } else if let Progress::Concluded(conclusion) = session.poll() {
-            let index = session.binding;
-            if let Page::Editing(editor) = &mut self.page
-                && let Some(binding) = editor.settings.bindings.get_mut(index)
-            {
-                match conclusion {
-                    Conclusion::Recorded(hotkey) => binding.hotkey = Some(hotkey),
-                    Conclusion::Cleared => binding.hotkey = None,
-                    Conclusion::Cancelled => {}
+            let target = session.target;
+            if let Page::Editing(editor) = &mut self.page {
+                let value = match target {
+                    RecordingTarget::Ocr => Some(&mut editor.settings.ocr_shortcut),
+                    RecordingTarget::Translate => Some(&mut editor.settings.translate_shortcut),
+                    RecordingTarget::Binding(index) => editor
+                        .settings
+                        .bindings
+                        .get_mut(index)
+                        .map(|b| &mut b.hotkey),
+                };
+                if let Some(value) = value {
+                    match conclusion {
+                        Conclusion::Recorded(hotkey) => *value = Some(hotkey),
+                        Conclusion::Cleared if target == RecordingTarget::Ocr => {
+                            *value = Some("Ctrl+O".parse().unwrap())
+                        }
+                        Conclusion::Cleared if target == RecordingTarget::Translate => {
+                            *value = Some("Ctrl+T".parse().unwrap())
+                        }
+                        Conclusion::Cleared => *value = None,
+                        Conclusion::Cancelled => {}
+                    }
                 }
             }
         }
@@ -306,9 +321,9 @@ impl SettingsApp {
         }
     }
 
-    fn start_recording(&mut self, binding: usize) {
+    fn start_recording(&mut self, target: RecordingTarget) {
         self.record_error = None;
-        match RecordingSession::start(binding, &self.key_capture, self.pause_hotkeys.clone()) {
+        match RecordingSession::start(target, &self.key_capture, self.pause_hotkeys.clone()) {
             Ok(session) => self.recording = Some(session),
             Err(error) => self.record_error = Some(error),
         }
@@ -902,6 +917,59 @@ impl SettingsApp {
             texts.get("settings-ocr-auto-copy"),
         );
         hint(ui, texts.get("settings-ocr-auto-copy-hint"));
+        if let Some(message) = &self.record_error {
+            error(
+                ui,
+                texts.format("settings-record-unavailable", &[("error", message)]),
+            );
+        }
+        let mut start_shortcut = None;
+        for (index, label, key) in [
+            (
+                RecordingTarget::Ocr,
+                "settings-ocr-shortcut",
+                settings.ocr_shortcut,
+            ),
+            (
+                RecordingTarget::Translate,
+                "settings-translate-shortcut",
+                settings.translate_shortcut,
+            ),
+        ] {
+            let mine = self.recording.as_ref().filter(|s| s.target == index);
+            ui.horizontal(|ui| {
+                ui.label(texts.get(label));
+                let label = mine.map_or_else(
+                    || hotkey_text(key, texts),
+                    |s| recording_prompt(s.preview, texts),
+                );
+                let response = ui
+                    .add(egui::Button::new(label))
+                    .on_hover_text(texts.get("settings-hotkey-record-tooltip"));
+                if mine.is_some() {
+                    self.record_rect = Some(response.rect);
+                } else if response.clicked() {
+                    start_shortcut = Some(index);
+                }
+            });
+            if let Some(session) = mine {
+                if session.unsupported {
+                    error(ui, texts.get("settings-record-unsupported"));
+                } else {
+                    hint(ui, texts.get("settings-record-help"));
+                }
+            }
+        }
+        for problem in settings
+            .problems()
+            .iter()
+            .filter(|p| matches!(p, bps_core::SettingsProblem::ShortcutConflict(_)))
+        {
+            error(ui, problem.localized(texts));
+        }
+        if let Some(index) = start_shortcut {
+            self.start_recording(index);
+        }
         if let Some(url) = open_page {
             self.open(url.as_ref());
         }
@@ -1007,7 +1075,7 @@ impl SettingsApp {
             .as_ref()
             .filter(|r| !r.has_concluded())
             .map(|r| RecordingView {
-                binding: r.binding,
+                target: r.target,
                 preview: r.preview,
                 unsupported: r.unsupported,
             });
@@ -1076,7 +1144,7 @@ impl SettingsApp {
         }
         self.record_rect = record_rect;
         if let Some(index) = start_recording {
-            self.start_recording(index);
+            self.start_recording(RecordingTarget::Binding(index));
         }
     }
 
@@ -1197,7 +1265,7 @@ enum CloseChoice {
 /// 正在进行的热键录制中界面要显示的部分。
 #[derive(Clone, Copy)]
 struct RecordingView {
-    binding: usize,
+    target: RecordingTarget,
     preview: Modifiers,
     unsupported: bool,
 }
@@ -1236,7 +1304,7 @@ fn binding_editor(
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(texts.get("settings-binding-hotkey"));
-            let mine = recording.filter(|r| r.binding == index);
+            let mine = recording.filter(|r| r.target == RecordingTarget::Binding(index));
             let label = match mine {
                 Some(view) => recording_prompt(view.preview, texts),
                 None => hotkey_text(binding.hotkey, texts),
