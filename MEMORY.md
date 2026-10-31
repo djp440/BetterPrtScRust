@@ -1,5 +1,7 @@
 # 开发记忆
 
+- 2026-10-31 20:59 #33 / #34：用户确认人工验收通过，四项体验清单已勾选。release 版调整选区的视觉流畅度明显优于 debug；这是用户对比反馈，尚未量化各环节耗时，不据此断定唯一性能根因。正式验收及后续复测使用 target/release/BetterPrtSc.exe，切换版本前退出旧实例。
+
 - 2026-10-31 20:43 #33 / #34：界面快捷键配置为 ocr_shortcut / translate_shortcut，旧配置默认键与全局键冲突时只禁用冲突默认键；普通区域撤销历史只存范围、从同一冻结帧重裁，窗口来源保留共享原图和身份。已有常驻 exe 占用 target/debug 时，用独立 target/agent-validation 构建验证；切换验收版本须先退出旧托盘实例，否则会转交给旧进程。人工体验清单见 docs/checklist/33-34-界面快捷键与标注后调整.md。
 
 - 2026-10-31 19:33 AV1 / Windows 10 MP4：NVIDIA MFT 与 sink 已有序列头仍可在 Finalize 报 `0xC00D4A45`；需按自定义格式约定设置完整 stsd / av01 / av1C。av01 必须用序列最大尺寸，实际 render 尺寸不同时按 AV1 ISOBMFF 添加 pasp，不能写成实际小帧尺寸。系统解码测试还需 D3D 管理器和高级视频处理，保留原像素比例，处理 CURRENTMEDIATYPECHANGED，并优先用 IMF2DBuffer 的真实 pitch；基础软件转换的 `0xC00D36B1` 不能直接归因于视频或显卡驱动。对齐缓冲区尺寸也不等于显示尺寸（如 H.264 34×34 返回 48×48），读取后需裁去填充。小尺寸至 4K 已通过 Windows 和 FFmpeg 解码；独立元数据解析和正负行跨度测试进入默认回归，见 `docs/diagnostics/31-av1-mp4.md`。
