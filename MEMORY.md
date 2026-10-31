@@ -1,5 +1,6 @@
 # 开发记忆
 
+- 2026-10-31 19:33 AV1 / Windows 10 MP4：NVIDIA MFT 与 sink 已有序列头仍可在 Finalize 报 `0xC00D4A45`；需按自定义格式约定设置完整 stsd / av01 / av1C。av01 必须用序列最大尺寸，实际 render 尺寸不同时按 AV1 ISOBMFF 添加 pasp，不能写成实际小帧尺寸。系统解码测试还需 D3D 管理器和高级视频处理，保留原像素比例，处理 CURRENTMEDIATYPECHANGED，并优先用 IMF2DBuffer 的真实 pitch；基础软件转换的 `0xC00D36B1` 不能直接归因于视频或显卡驱动。对齐缓冲区尺寸也不等于显示尺寸（如 H.264 34×34 返回 48×48），读取后需裁去填充。小尺寸至 4K 已通过 Windows 和 FFmpeg 解码；独立元数据解析和正负行跨度测试进入默认回归，见 `docs/diagnostics/31-av1-mp4.md`。
 - 2026-10-24 16:43 冒烟脚本启动 BetterPrtSc.exe / bps.exe 前要把子进程的 `APPDATA` 指向临时目录（或用便携模式），否则常驻实例首次运行会在真实的 `%APPDATA%\BetterPrtSc` 写入 config.toml；`finally` 里恢复剪贴板可能因剪贴板被占用而抛异常，要 try/catch，否则会跳过后面删除截图等清理。
 - 2026-10-24 16:42 发布脚本（`scripts/release/`）：本机只有 Pester 3.4、CI 上是 5.x，断言语法互不兼容，所以 `test-release.ps1` 自带极简断言、不依赖 Pester。常驻内存判定看私有工作集（ADR 0005），用 `K32GetProcessMemoryInfo` + `PROCESS_MEMORY_COUNTERS_EX2` 读取（`Get-Process` 没有这个值，性能计数器名称又是本地化的）。
 - 2026-10-24 16:23 PowerShell 把中文弯引号 `“` `”` 也当作双引号：双引号字符串里写 `“$x”` 会直接解析失败，含弯引号的文本放进单引号字符串或改用「」等其他标点。

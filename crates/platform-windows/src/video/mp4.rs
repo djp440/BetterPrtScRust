@@ -17,12 +17,13 @@ use bps_platform::{
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncMPVGOPSize, IMF2DBuffer, IMFActivate,
-    IMFAttributes, IMFByteStream, IMFDXGIDeviceManager, IMFMediaType, IMFSinkWriter,
+    IMFAttributes, IMFByteStream, IMFDXGIDeviceManager, IMFMediaSink, IMFMediaType, IMFSinkWriter,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-    MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
-    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_D3D_MANAGER,
+    MF_MT_MAJOR_TYPE, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_MPEG2_PROFILE,
+    MF_MT_MPEG4_SAMPLE_DESCRIPTION, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SINK_WRITER_D3D_MANAGER, MF_SINK_WRITER_MEDIASINK,
     MF_TRANSCODE_CONTAINERTYPE, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_PCM,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
     MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Audio,
@@ -53,6 +54,7 @@ pub(super) struct Mp4Writer {
     stream: u32,
     width: u32,
     height: u32,
+    codec: VideoCodec,
     /// 每帧的时长（100 纳秒单位）。
     frame_duration: i64,
     /// 音轨；没有声音时没有。
@@ -96,6 +98,7 @@ impl Mp4Writer {
                 stream,
                 width: settings.width,
                 height: settings.height,
+                codec: settings.codec,
                 frame_duration: hundred_nanos(Duration::from_secs(1) / settings.frame_rate),
                 audio: audio
                     .zip(settings.audio)
@@ -163,7 +166,52 @@ impl VideoWriter for Mp4Writer {
             let silence = vec![0.0; AAC_FRAME * usize::from(audio.format.channels)];
             audio.write(&self.writer, &silence)?;
         }
+        if self.codec == VideoCodec::Av1 {
+            set_av1_sample_description(&self.writer, self.stream, self.width, self.height)?;
+        }
         unsafe { self.writer.Finalize() }.map_err(|e| win_error("写完视频文件失败", e))
+    }
+}
+
+/// Windows 10 的 MP4 sink 已拿到 AV1 OBU 序列头，却不会据此生成 av01 / av1C。
+/// 按 MPEG-4 File Sink 的自定义格式约定，在 Finalize 前补完整 stsd；仍由系统封装音视频。
+/// https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-sink#sample-description-box
+fn set_av1_sample_description(
+    writer: &IMFSinkWriter,
+    stream: u32,
+    width: u32,
+    height: u32,
+) -> Result<(), PlatformError> {
+    unsafe {
+        let mut raw = std::ptr::null_mut();
+        writer
+            .GetServiceForStream(
+                MF_SINK_WRITER_MEDIASINK.0,
+                &GUID::zeroed(),
+                &IMFMediaSink::IID,
+                &mut raw,
+            )
+            .map_err(|e| win_error("读取 MP4 封装器失败", e))?;
+        let sink = IMFMediaSink::from_raw(raw);
+        let handler = sink
+            .GetStreamSinkByIndex(stream)
+            .and_then(|stream| stream.GetMediaTypeHandler())
+            .map_err(|e| win_error("读取 AV1 视频流失败", e))?;
+        let media_type = handler
+            .GetCurrentMediaType()
+            .map_err(|e| win_error("读取 AV1 输出格式失败", e))?;
+        let size = media_type
+            .GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)
+            .map_err(|e| win_error("读取 AV1 序列头失败", e))?;
+        let mut header = vec![0; size as usize];
+        media_type
+            .GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut header, None)
+            .map_err(|e| win_error("读取 AV1 序列头失败", e))?;
+        let description = super::av1::sample_description(&header, width, height)?;
+        media_type
+            .SetBlob(&MF_MT_MPEG4_SAMPLE_DESCRIPTION, &description)
+            .and_then(|()| handler.SetCurrentMediaType(&media_type))
+            .map_err(|e| win_error("设置 AV1 MP4 格式描述失败", e))
     }
 }
 
