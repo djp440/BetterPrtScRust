@@ -9,6 +9,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '重试发布已有标签（留空仅构建，不发布）'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -30,6 +36,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: 安装 Rust 工具链
         run: |
@@ -45,14 +53,14 @@ jobs:
           "CARGO_BUILD_JOBS=$jobs" >> $env:GITHUB_ENV
 
       - name: 发布脚本自测
-        run: ./scripts/release/test-release.ps1
+        run: pwsh -NoProfile -File ./scripts/release/test-release.ps1
 
       - name: 测试
         run: cargo test --workspace --locked
 
       - name: 打包（便携 zip、安装包、Scoop manifest）
         env:
-          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          RELEASE_TAG: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name || '') }}
         run: ./scripts/release/package.ps1 -Tag "$env:RELEASE_TAG"
 
       - name: 安装包体积检查（< 15 MB）
@@ -69,7 +77,8 @@ jobs:
           if-no-files-found: error
 
       - name: 发布到 GitHub Releases
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/release/publish.ps1 -Tag "$env:GITHUB_REF_NAME"
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: ./scripts/release/publish.ps1 -Tag "$env:RELEASE_TAG"
