@@ -17,7 +17,7 @@ param(
     [AllowEmptyString()]
     [string]$Tag = '',
     [string]$OutDir = (Join-Path $PSScriptRoot '..\..\dist'),
-    [string]$Repository = $(if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'djp440/BetterPrtScRust' }),
+    [string]$Repository = $(if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'rt-game-440/BetterPrtScRust' }),
     [switch]$SkipBuild,
     [switch]$SkipInstaller
 )

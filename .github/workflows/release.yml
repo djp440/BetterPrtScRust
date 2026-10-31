@@ -39,6 +39,11 @@ jobs:
       - name: 安装 Inno Setup
         run: choco upgrade innosetup --yes --no-progress
 
+      - name: 限制编译并行度
+        run: |
+          $jobs = [Math]::Max(1, [Math]::Floor([Environment]::ProcessorCount / 2))
+          "CARGO_BUILD_JOBS=$jobs" >> $env:GITHUB_ENV
+
       - name: 发布脚本自测
         run: ./scripts/release/test-release.ps1
 

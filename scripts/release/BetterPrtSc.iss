@@ -11,7 +11,7 @@
 
 #define AppName "BetterPrtSc"
 #define AppExeName "BetterPrtSc.exe"
-#define AppUrl "https://github.com/djp440/BetterPrtScRust"
+#define AppUrl "https://github.com/rt-game-440/BetterPrtScRust"
 
 [Setup]
 ; AppId 发布后不能再改：升级与卸载都靠它识别同一个程序。
@@ -19,7 +19,7 @@ AppId={{9766FF1D-3D2A-4139-9B47-BDDCDD572D08}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=djp440
+AppPublisher=rt-game-440
 AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases

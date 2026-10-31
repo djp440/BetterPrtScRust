@@ -13,7 +13,7 @@ param(
     [Parameter(Mandatory)]
     [string]$Tag,
     [string]$DistDir = (Join-Path $PSScriptRoot '..\..\dist'),
-    [string]$Repository = $(if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'djp440/BetterPrtScRust' }),
+    [string]$Repository = $(if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'rt-game-440/BetterPrtScRust' }),
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -42,6 +42,10 @@ $packages = foreach ($path in $files[0..1]) {
 }
 $notesPath = Join-Path $DistDir 'release-notes.md'
 $notes = New-ReleaseNotes -Version $version -Repository $Repository -Assets $packages -Memory $memory
+$changesPath = Join-Path $repoRoot "docs/releases/$Tag.md"
+if (Test-Path -LiteralPath $changesPath) {
+    $notes = [IO.File]::ReadAllText($changesPath).TrimEnd() + "`n`n" + $notes
+}
 [IO.File]::WriteAllText($notesPath, $notes + "`n", [Text.UTF8Encoding]::new($false))
 
 $ghArgs = @('release', 'create', $Tag) + $files + @(
