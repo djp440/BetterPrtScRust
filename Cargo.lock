@@ -278,6 +278,7 @@ dependencies = [
 name = "bps-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "avif-parse",
  "bps-platform",
  "gif",
  "serde",

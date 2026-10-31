@@ -5,17 +5,22 @@
 //!
 //! 不启动常驻实例、不碰剪贴板、不注册热键。会显示窗口，运行前要拿真机桌面锁：
 //! `cargo test -p bps-platform-windows --test video_smoke -- --ignored --nocapture --test-threads=1`
+//! AV1 的逐帧校验还需要 PATH 中有 ffmpeg / ffprobe；它们只用于测试，不是程序运行依赖。
 #![cfg(windows)]
 
+#[path = "support/mp4_metadata.rs"]
+mod mp4_metadata;
+
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use bps_platform::{
-    Backdrop, Color, Display, FileSystem, FrameSource, Image, NewFile, OverlayInput, OverlayItem,
-    OverlayKey, OverlayScene, PlatformEvent, Rect, SelectionOverlay, StreamFrame, StreamOptions,
-    Ticker, VideoCodec, VideoEncoder, VideoFormat, VideoFrame, VideoSettings, VideoSource,
-    VideoTarget,
+    AudioFormat, Backdrop, Color, Display, FileSystem, FrameSource, Image, NewFile, OverlayInput,
+    OverlayItem, OverlayKey, OverlayScene, PlatformEvent, Rect, SelectionOverlay, StreamFrame,
+    StreamOptions, Ticker, VideoCodec, VideoEncoder, VideoFormat, VideoFrame, VideoSettings,
+    VideoSource, VideoTarget,
 };
 use bps_platform_windows::{
     DxgiFrameSource, EventLoop, MfVideoEncoder, WgcVideoSource, WindowsFileSystem, dpi,
@@ -153,6 +158,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
             fps: 30,
             duration: Duration::from_secs(1),
             codec: VideoCodec::H264,
+            audio: None,
         },
     );
     let capture_diff = mean_difference(&recorded.first_image, &recorded.screenshot);
@@ -204,6 +210,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
             fps: 10,
             duration: Duration::from_millis(500),
             codec: VideoCodec::H264,
+            audio: None,
         },
     );
     let video = decode(&recorded.path);
@@ -218,6 +225,7 @@ fn records_region_to_mp4_with_constant_frame_rate() {
     assert_eq!((video.width, video.height), (34, 34));
     assert_eq!(video.frame_rate, (10, 1));
     assert_eq!(video.timestamps.len() as u64, recorded.written);
+    assert!(mean_difference(&video.first_image, &recorded.first_image) < 16.0);
     drop(cleanup);
     assert!(!dir.exists(), "应已删除录出的文件");
 }
@@ -260,6 +268,7 @@ fn records_with_every_supported_codec() {
                 fps: 30,
                 duration: Duration::from_secs(1),
                 codec,
+                audio: None,
             },
         );
         let size = std::fs::metadata(&recorded.path).unwrap().len();
@@ -268,6 +277,10 @@ fn records_with_every_supported_codec() {
             VideoCodec::H265 => MFVideoFormat_HEVC,
             VideoCodec::Av1 => MFVideoFormat_AV1,
         };
+        if codec == VideoCodec::Av1 {
+            assert_av1_decodes(&recorded, None);
+            continue;
+        }
         if undecodable.contains(&codec) {
             // 没有解码器时只能确认文件里是这种编码（Source Reader 读容器不需要解码器）。
             assert_eq!(native_subtype(&recorded.path), expected, "{codec:?}");
@@ -289,9 +302,97 @@ fn records_with_every_supported_codec() {
     }
 }
 
+/// #31 的目标机回归：AV1 不可用必须失败，不能被通用编码冒烟的跳过逻辑掩盖。
+#[test]
+#[ignore = "目标机 AV1 回归：要求 AV1 可用，实际录制并检查容器和可用的解码器"]
+fn records_av1_without_skipping_unavailable_encoder() {
+    let unsupported = unsupported_video_codecs();
+    assert!(
+        !unsupported
+            .iter()
+            .any(|(codec, _)| *codec == VideoCodec::Av1),
+        "#31：目标机必须能完成 AV1 编码自检，不能以不支持跳过：{unsupported:?}"
+    );
+    assert!(dpi::ensure_per_monitor_v2());
+    let event_loop = EventLoop::new().unwrap();
+    let primary = DxgiFrameSource::new()
+        .displays()
+        .unwrap()
+        .into_iter()
+        .find(|display| display.is_primary)
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("bps-av1-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = RemoveDirOnDrop(dir.clone());
+    for (width, height, fps, audio) in [
+        (384, 256, 30, None),
+        (
+            1280,
+            720,
+            60,
+            Some(AudioFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }),
+        ),
+        (1920, 1088, 30, None),
+        (
+            primary.bounds.width & !1,
+            primary.bounds.height & !1,
+            30,
+            Some(AudioFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }),
+        ),
+    ] {
+        let recorded = record(
+            &event_loop,
+            &primary,
+            &dir,
+            &format!("av1-{width}x{height}-{fps}"),
+            Take {
+                region: Rect::new(
+                    primary.bounds.x + if width == primary.bounds.width { 0 } else { 64 },
+                    primary.bounds.y
+                        + if height == primary.bounds.height {
+                            0
+                        } else {
+                            64
+                        },
+                    width,
+                    height,
+                ),
+                show_cursor: false,
+                fps,
+                duration: Duration::from_secs(1),
+                codec: VideoCodec::Av1,
+                audio,
+            },
+        );
+        assert_eq!(native_subtype(&recorded.path), MFVideoFormat_AV1);
+        assert_av1_decodes(&recorded, audio);
+        if !undecodable_video_codecs().contains(&VideoCodec::Av1) {
+            let decoded = decode_with_output_size(&recorded.path, Some((width, height)));
+            assert_eq!((decoded.width, decoded.height), (width, height));
+            assert_eq!(decoded.timestamps.len() as u64, recorded.written);
+            let difference = mean_difference(&decoded.first_image, &recorded.first_image);
+            eprintln!(
+                "Windows 系统解码 {width}×{height}：{} 帧，首帧平均差 {difference:.2}",
+                decoded.timestamps.len()
+            );
+            assert!(
+                difference < 16.0,
+                "系统解码画面应与捕获画面一致：{difference}"
+            );
+        }
+    }
+}
+
 struct Recorded {
     path: PathBuf,
     written: u64,
+    frame_rate: u32,
     elapsed: Duration,
     first_image: Image,
     /// 拿到第一帧的同时用 Desktop Duplication 截下的同一块区域。
@@ -305,6 +406,7 @@ struct Take {
     fps: u32,
     duration: Duration,
     codec: VideoCodec,
+    audio: Option<AudioFormat>,
 }
 
 /// 像 `core` 一样录一段视频：节拍到时按单调时间补齐帧，写进 `.part` 临时文件，最后改名。
@@ -321,6 +423,7 @@ fn record(
         fps,
         duration,
         codec,
+        audio,
     } = take;
     let mut file_system = WindowsFileSystem::new();
     let temp = dir.join(format!("{name}.mp4.part"));
@@ -341,7 +444,7 @@ fn record(
                 frame_rate: fps,
                 codec,
                 bitrate: 4_000_000,
-                audio: None,
+                audio,
             },
         )
         .unwrap();
@@ -371,6 +474,18 @@ fn record(
         while written < target {
             let timestamp = Duration::from_nanos(written * 1_000_000_000 / u64::from(fps));
             writer.write(frame.as_ref(), timestamp).unwrap();
+            if let Some(format) = audio {
+                let start = written * u64::from(format.sample_rate) / u64::from(fps);
+                let end = (written + 1) * u64::from(format.sample_rate) / u64::from(fps);
+                let samples: Vec<f32> = (start..end)
+                    .flat_map(|index| {
+                        let phase = index as f32 * std::f32::consts::TAU * 440.0
+                            / format.sample_rate as f32;
+                        std::iter::repeat_n(phase.sin() * 0.1, usize::from(format.channels))
+                    })
+                    .collect();
+                writer.write_audio(&samples).unwrap();
+            }
             written += 1;
         }
     };
@@ -394,10 +509,122 @@ fn record(
     Recorded {
         path,
         written,
+        frame_rate: fps,
         elapsed,
         first_image: first_image.unwrap(),
         screenshot: screenshot.unwrap(),
     }
+}
+
+/// 独立检查 AV1 容器、每帧尺寸 / 时间戳、音轨和画面，不把“有解码器”当作解码成功。
+fn assert_av1_decodes(recorded: &Recorded, audio: Option<AudioFormat>) {
+    let probe = Command::new("ffprobe")
+        .args(["-v", "error", "-show_frames", "-show_streams", "-show_entries",
+            "frame=media_type,width,height,best_effort_timestamp_time,nb_samples:stream=codec_type,codec_name,codec_tag_string,sample_rate,channels",
+            "-of", "json"])
+        .arg(&recorded.path)
+        .output()
+        .expect("AV1 真机冒烟需要 PATH 中的 ffprobe");
+    assert!(
+        probe.status.success() && probe.stderr.is_empty(),
+        "ffprobe：{}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    let streams = metadata["streams"].as_array().unwrap();
+    let video = streams
+        .iter()
+        .find(|stream| stream["codec_type"] == "video")
+        .unwrap();
+    assert_eq!(video["codec_name"], "av1");
+    assert_eq!(video["codec_tag_string"], "av01");
+    let frames = metadata["frames"].as_array().unwrap();
+    let video_frames: Vec<_> = frames
+        .iter()
+        .filter(|frame| frame["media_type"] == "video")
+        .collect();
+    assert_eq!(video_frames.len() as u64, recorded.written);
+    let (width, height) = (recorded.first_image.width(), recorded.first_image.height());
+    mp4_metadata::assert_av1_metadata(&recorded.path, width, height);
+    for (index, frame) in video_frames.iter().enumerate() {
+        assert_eq!(frame["width"], width);
+        assert_eq!(frame["height"], height);
+        let time: f64 = frame["best_effort_timestamp_time"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let expected = index as f64 / f64::from(recorded.frame_rate);
+        assert!(
+            (time - expected).abs() < 0.000_002,
+            "第 {index} 帧时间戳：{time}，预期 {expected}"
+        );
+    }
+    let audio_stream = streams
+        .iter()
+        .find(|stream| stream["codec_type"] == "audio");
+    if let Some(format) = audio {
+        let stream = audio_stream.expect("应有音轨");
+        assert_eq!(stream["codec_name"], "aac");
+        assert_eq!(
+            stream["sample_rate"]
+                .as_str()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap(),
+            format.sample_rate
+        );
+        assert_eq!(stream["channels"], format.channels);
+        let audio_samples: u64 = frames
+            .iter()
+            .filter(|frame| frame["media_type"] == "audio")
+            .map(|frame| frame["nb_samples"].as_u64().unwrap())
+            .sum();
+        let audio_duration = audio_samples as f64 / f64::from(format.sample_rate);
+        let video_duration = recorded.written as f64 / f64::from(recorded.frame_rate);
+        assert!(
+            (audio_duration - video_duration).abs() < 0.075,
+            "音轨 {audio_duration}s，视频 {video_duration}s"
+        );
+    } else {
+        assert!(audio_stream.is_none());
+    }
+
+    // 让 FFmpeg 解码整段，只输出第一帧，既验证后续帧也避免把整段 RGBA 留在内存。
+    let decoded = Command::new("ffmpeg")
+        .args(["-v", "error", "-xerror", "-i"])
+        .arg(&recorded.path)
+        .args([
+            "-map",
+            "0:v:0",
+            "-vf",
+            "select=eq(n\\,0)",
+            "-fps_mode",
+            "passthrough",
+            "-pix_fmt",
+            "rgba",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ])
+        .output()
+        .expect("AV1 真机冒烟需要 PATH 中的 ffmpeg");
+    assert!(
+        decoded.status.success(),
+        "AV1 解码：{}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
+    assert_eq!(decoded.stdout.len(), (width * height * 4) as usize);
+    let first = Image::from_rgba(width, height, decoded.stdout);
+    let difference = mean_difference(&first, &recorded.first_image);
+    assert!(
+        difference < 16.0,
+        "AV1 首帧与捕获画面的平均差：{difference}"
+    );
+    eprintln!(
+        "AV1 {width}×{height} @ {} fps：{} 帧，首帧平均差 {difference:.2}，音轨 {audio:?}",
+        recorded.frame_rate, recorded.written
+    );
 }
 
 struct Decoded {
@@ -431,23 +658,30 @@ fn native_subtype(path: &Path) -> GUID {
 
 /// 用 Media Foundation 的 Source Reader 解码 MP4，输出 RGB32。
 fn decode(path: &Path) -> Decoded {
+    decode_with_output_size(path, None)
+}
+
+fn decode_with_output_size(path: &Path, output_size: Option<(u32, u32)>) -> Decoded {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_LITE).unwrap();
+        let _runtime = TestMediaFoundation;
         let mut attributes: Option<IMFAttributes> = None;
         MFCreateAttributes(&mut attributes, 1).unwrap();
         let attributes = attributes.unwrap();
         attributes
             .SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
             .unwrap();
+        let _device = output_size.map(|_| configure_reader_device(&attributes));
         let reader =
             MFCreateSourceReaderFromURL(&HSTRING::from(path.to_str().unwrap()), &attributes)
                 .unwrap();
         let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         let native = reader.GetNativeMediaType(stream, 0).unwrap();
         let subtype = native.GetGUID(&MF_MT_SUBTYPE).unwrap();
-        let size = native.GetUINT64(&MF_MT_FRAME_SIZE).unwrap();
         let rate = native.GetUINT64(&MF_MT_FRAME_RATE).unwrap();
+        let native_size = native.GetUINT64(&MF_MT_FRAME_SIZE).unwrap();
+        let render_size = output_size.unwrap_or(((native_size >> 32) as u32, native_size as u32));
         let output = MFCreateMediaType().unwrap();
         output
             .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -455,17 +689,23 @@ fn decode(path: &Path) -> Decoded {
         output
             .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
             .unwrap();
+        if let Some((width, height)) = output_size {
+            output
+                .SetUINT64(
+                    &MF_MT_FRAME_SIZE,
+                    (u64::from(width) << 32) | u64::from(height),
+                )
+                .unwrap();
+            use windows::Win32::Media::MediaFoundation::MF_MT_PIXEL_ASPECT_RATIO;
+            let aspect = native
+                .GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO)
+                .unwrap_or((1u64 << 32) | 1);
+            output.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, aspect).unwrap();
+        }
         reader
             .SetCurrentMediaType(stream, None, &output)
             .expect("系统应能解码这种视频（系统播放器同样用它）");
-        // RGB 的行跨度为负表示自下而上；没有这个属性时按 RGB 的默认（自下而上）处理。
-        let stride = reader
-            .GetCurrentMediaType(stream)
-            .unwrap()
-            .GetUINT32(&MF_MT_DEFAULT_STRIDE)
-            .map_or(-(((size >> 32) as i32) * 4), |s| s as i32);
-        eprintln!("解码输出的行跨度 {stride}");
-        let (width, height) = ((size >> 32) as u32, size as u32);
+        let mut layout = None;
         let mut timestamps = Vec::new();
         let mut first_image = None;
         loop {
@@ -482,38 +722,144 @@ fn decode(path: &Path) -> Decoded {
                     Some(&mut sample),
                 )
                 .unwrap();
+            if layout.is_none() || flags & windows::Win32::Media::MediaFoundation::MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+                let current = reader.GetCurrentMediaType(stream).unwrap();
+                let size = current.GetUINT64(&MF_MT_FRAME_SIZE).unwrap();
+                let width = (size >> 32) as u32;
+                let height = size as u32;
+                let stride = current.GetUINT32(&MF_MT_DEFAULT_STRIDE).map_or(-(width as i32 * 4), |s| s as i32);
+                layout = Some((width, height, stride));
+            }
+            if let Some(sample) = sample {
+                timestamps.push(timestamp);
+                if first_image.is_none() {
+                    let (width, height, stride) = layout.unwrap();
+                    let image = read_rgb32(&sample, width, height, stride);
+                    // H.264 的 34×34 显示画面可能返回 48×48 对齐缓冲区。
+                    // 先按真实布局读取，再裁去右侧和底部填充，不能把填充当成显示尺寸。
+                    assert!(render_size.0 <= width && render_size.1 <= height);
+                    first_image = Some(if render_size == (width, height) {
+                        image
+                    } else {
+                        crop(
+                            &image,
+                            Rect::new(0, 0, render_size.0, render_size.1),
+                            Rect::new(0, 0, width, height),
+                        )
+                    });
+                }
+            }
             if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                 break;
             }
-            let Some(sample) = sample else {
-                continue;
-            };
-            timestamps.push(timestamp);
-            if first_image.is_none() {
-                first_image = Some(read_rgb32(&sample, width, height, stride));
-            }
         }
-        drop(reader);
-        MFShutdown().unwrap();
+        let first_image = first_image.expect("视频里应至少有一帧");
         Decoded {
             subtype,
-            width,
-            height,
+            width: first_image.width(),
+            height: first_image.height(),
             frame_rate: ((rate >> 32) as u32, rate as u32),
             timestamps,
-            first_image: first_image.expect("视频里应至少有一帧"),
+            first_image,
         }
     }
 }
 
-unsafe fn read_rgb32(sample: &IMFSample, width: u32, height: u32, stride: i32) -> Image {
+/// 基础软件转换无法覆盖 AV1 的可变帧尺寸；按播放器路径配置 D3D 与高级视频处理。
+unsafe fn configure_reader_device(
+    attributes: &IMFAttributes,
+) -> windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
+        D3D11CreateDevice, ID3D11Multithread,
+    };
+    use windows::Win32::Media::MediaFoundation::{
+        MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_D3D_MANAGER,
+        MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MFCreateDXGIDeviceManager,
+    };
+    use windows::core::Interface;
     unsafe {
+        let mut device = None;
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            None,
+        )
+        .unwrap();
+        let device = device.unwrap();
+        if let Ok(multithread) = device.cast::<ID3D11Multithread>() {
+            let _ = multithread.SetMultithreadProtected(true);
+        }
+        let mut token = 0;
+        let mut manager = None;
+        MFCreateDXGIDeviceManager(&mut token, &mut manager).unwrap();
+        let manager = manager.unwrap();
+        manager.ResetDevice(&device, token).unwrap();
+        attributes
+            .SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &manager)
+            .unwrap();
+        attributes
+            .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
+            .unwrap();
+        attributes
+            .SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 0)
+            .unwrap();
+        attributes
+            .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
+            .unwrap();
+        manager
+    }
+}
+
+struct TestMediaFoundation;
+
+impl Drop for TestMediaFoundation {
+    fn drop(&mut self) {
+        let _ = unsafe { MFShutdown() };
+    }
+}
+
+unsafe fn read_rgb32(sample: &IMFSample, width: u32, height: u32, stride: i32) -> Image {
+    use windows::core::Interface;
+    unsafe {
+        assert!(width > 0 && height > 0);
         let buffer = sample.ConvertToContiguousBuffer().unwrap();
+        if let Ok(two_dimensional) =
+            buffer.cast::<windows::Win32::Media::MediaFoundation::IMF2DBuffer>()
+        {
+            assert!(two_dimensional.GetContiguousLength().unwrap() >= width * height * 4);
+            let mut scanline = std::ptr::null_mut();
+            let mut pitch = 0;
+            two_dimensional.Lock2D(&mut scanline, &mut pitch).unwrap();
+            assert!(pitch.unsigned_abs() >= width * 4);
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height {
+                let row = std::slice::from_raw_parts(
+                    scanline.offset(y as isize * pitch as isize),
+                    width as usize * 4,
+                );
+                for p in row.chunks_exact(4) {
+                    rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+                }
+            }
+            two_dimensional.Unlock2D().unwrap();
+            return Image::from_rgba(width, height, rgba);
+        }
         let mut data = std::ptr::null_mut();
         let mut length = 0;
         buffer.Lock(&mut data, None, Some(&mut length)).unwrap();
         let bytes = std::slice::from_raw_parts(data, length as usize);
         let pitch = stride.unsigned_abs() as usize;
+        assert!(pitch >= width as usize * 4);
+        assert!(bytes.len() >= pitch * (height as usize - 1) + width as usize * 4);
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for y in 0..height as usize {
             let row = if stride < 0 {
@@ -528,6 +874,76 @@ unsafe fn read_rgb32(sample: &IMFSample, width: u32, height: u32, stride: i32) -
         }
         buffer.Unlock().unwrap();
         Image::from_rgba(width, height, rgba)
+    }
+}
+
+#[test]
+fn rgb_memory_samples_preserve_rows_padding_and_orientation() {
+    use windows::Win32::Media::MediaFoundation::{MFCreateMemoryBuffer, MFCreateSample};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).unwrap();
+        let _runtime = TestMediaFoundation;
+        let top = [0, 0, 255, 0, 0, 255, 0, 0, 99, 99, 99, 99];
+        let bottom = [255, 0, 0, 0, 255, 255, 255, 0, 88, 88, 88, 88];
+        let expected = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        for stride in [12, -12] {
+            let pixels = if stride > 0 {
+                [top, bottom].concat()
+            } else {
+                [bottom, top].concat()
+            };
+            let buffer = MFCreateMemoryBuffer(pixels.len() as u32).unwrap();
+            let mut data = std::ptr::null_mut();
+            buffer.Lock(&mut data, None, None).unwrap();
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), data, pixels.len());
+            buffer.Unlock().unwrap();
+            buffer.SetCurrentLength(pixels.len() as u32).unwrap();
+            let sample = MFCreateSample().unwrap();
+            sample.AddBuffer(&buffer).unwrap();
+            assert_eq!(read_rgb32(&sample, 2, 2, stride).rgba(), expected);
+        }
+    }
+}
+
+#[test]
+fn rgb_2d_samples_use_the_buffer_pitch_in_both_orientations() {
+    use windows::Win32::Media::MediaFoundation::{
+        IMF2DBuffer, MFCreate2DMediaBuffer, MFCreateSample,
+    };
+    use windows::core::Interface;
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).unwrap();
+        let _runtime = TestMediaFoundation;
+        let rows = [
+            [0u8, 0, 255, 0, 0, 255, 0, 0],
+            [255, 0, 0, 0, 255, 255, 255, 0],
+        ];
+        let expected = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        for bottom_up in [false, true] {
+            let buffer = MFCreate2DMediaBuffer(2, 2, MFVideoFormat_RGB32.data1, bottom_up).unwrap();
+            let two_dimensional: IMF2DBuffer = buffer.cast().unwrap();
+            let mut start = std::ptr::null_mut();
+            let mut pitch = 0;
+            two_dimensional.Lock2D(&mut start, &mut pitch).unwrap();
+            for (index, row) in rows.iter().enumerate() {
+                std::ptr::copy_nonoverlapping(
+                    row.as_ptr(),
+                    start.offset(index as isize * pitch as isize),
+                    row.len(),
+                );
+            }
+            two_dimensional.Unlock2D().unwrap();
+            let sample = MFCreateSample().unwrap();
+            sample.AddBuffer(&buffer).unwrap();
+            // 故意给错的格式行跨度，二维缓冲区的真实 pitch 必须优先。
+            assert_eq!(read_rgb32(&sample, 2, 2, -999).rgba(), expected);
+        }
     }
 }
 

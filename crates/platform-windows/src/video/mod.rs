@@ -4,6 +4,7 @@
 //! 纹理，编码器直接把纹理交给 Media Foundation（颜色转换和 H.264 编码优先走 GPU），画面不经过 CPU。
 //! 设备只在录屏期间存在：视频流和编码器都释放后，设备随之释放，常驻进程不长期占用显存。
 
+mod av1;
 mod capture;
 mod gif;
 mod mp4;

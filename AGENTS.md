@@ -13,6 +13,7 @@ Cargo workspace（ADR 0002），所有触发方式都先转换成 `bps_core::Com
 ## 常用命令
 
 - 构建与测试：`cargo build --workspace`、`cargo test --workspace`（不碰真实桌面）
+- 自动回归：`.github/workflows/checks.yml` 在 main 推送及 PR 上运行 Windows workspace 测试；真实桌面冒烟仍需本机显式执行。
 - 真机冒烟：`cargo test -p bps-platform-windows -- --ignored`（真实截屏、注册热键 Ctrl+F24 并模拟按下）
 - 常驻实例端到端冒烟：`powershell -NoProfile -STA -File scripts\smoke-resident.ps1 [-Exe <路径>] [-ExitVia Tray]`
 - 运行常驻实例：`cargo run -p bps-app`（debug 版带控制台输出；托盘菜单“退出”结束）
